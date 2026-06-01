@@ -111,7 +111,7 @@ struct PortRefConfig {
     int      bit      = -1;             // -1 = unset
     QString  wordOrder;                 // empty = default
     int      shift    = 0;
-    quint32  mask     = 0xFFFFFFFFu;
+    quint64  mask     = 0xFFFFFFFFFFFFFFFFull;
     double   scale    = 1.0;
     double   offset   = 0.0;
     QString  codec;

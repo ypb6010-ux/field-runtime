@@ -16,12 +16,17 @@ add_executable(CoreTests
     SmokeTest.cpp
     unit/EventBusTests.cpp
     unit/SerialSchedulerTests.cpp
+    unit/CodecTests.cpp
+    unit/DatapointTests.cpp
 )
+
+find_package(Qt6 REQUIRED COMPONENTS Test)
 
 target_link_libraries(CoreTests
     PRIVATE
         Core::Core
         Catch2::Catch2WithMain
+        Qt6::Test
 )
 
 target_include_directories(CoreTests

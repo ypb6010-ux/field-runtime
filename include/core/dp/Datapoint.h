@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <QDateTime>
 #include <QObject>
@@ -25,18 +26,39 @@ enum class DpState {
     Missing,
 };
 
+// Static configuration captured at construction or via setSpec(). Once a
+// datapoint is wired into the runtime the spec does not change; mutable
+// runtime state is `value`, `state`, `timestamp`.
+struct DatapointSpec {
+    QString                id;
+    Kind                   kind = Kind::Status;
+    ScalarType             type = ScalarType::U16;
+    std::optional<PortRef> source;
+    std::optional<PortRef> sink;
+    QString                uiBinding;
+    QString                persistTag;
+};
+
 // Datapoint is exposed to QML as a QObject with the `value` Q_PROPERTY and
-// NOTIFY signal, so QML can bind directly and update on change without manual
-// Connections blocks. See design 6.1.
+// NOTIFY signal, so QML can bind directly and update on change without
+// manual Connections blocks. See design 6.1.
 class CORE_EXPORT Datapoint : public QObject {
     Q_OBJECT
-    Q_PROPERTY(QString  id      READ id       CONSTANT)
-    Q_PROPERTY(QVariant value   READ value    NOTIFY valueChanged)
-    Q_PROPERTY(bool     valid   READ valid    NOTIFY valueChanged)
-    Q_PROPERTY(QDateTime ts     READ timestamp NOTIFY valueChanged)
-    Q_PROPERTY(QString  state   READ stateText NOTIFY stateChanged)
+    Q_PROPERTY(QString    id        READ id        CONSTANT)
+    Q_PROPERTY(QVariant   value     READ value     NOTIFY valueChanged)
+    Q_PROPERTY(bool       valid     READ valid     NOTIFY valueChanged)
+    Q_PROPERTY(QDateTime  ts        READ timestamp NOTIFY valueChanged)
+    Q_PROPERTY(QString    state     READ stateText NOTIFY stateChanged)
 public:
+    using Writer = std::function<void(QVariant const&)>;
+
     explicit Datapoint(QObject* parent = nullptr);
+    explicit Datapoint(DatapointSpec spec, QObject* parent = nullptr);
+    ~Datapoint() override;
+
+    CORE_DISABLE_COPY_MOVE(Datapoint)
+
+    void setSpec(DatapointSpec spec);
 
     QString    id()        const;
     QVariant   value()     const;
@@ -52,11 +74,19 @@ public:
     QString                       uiBinding()  const;
     QString                       persistTag() const;
 
-    // Called by codecs / router. Emits valueChanged on the main thread.
+    // Push a decoded value from a codec / router. valueChanged is emitted
+    // only if (a) state transitions to Ok or (b) the value differs from the
+    // current one. Thread-safe — emissions cross thread boundaries via Qt's
+    // signal/slot machinery.
     void setValue(QVariant v, QDateTime ts = QDateTime::currentDateTime());
     void setState(DpState s);
 
-    // For Command / Bidirectional datapoints — invoked from QML.
+    // Register a writer invoked by `write()`. The Core wires this to a
+    // SinkWindow stage operation; tests can supply a lambda directly.
+    void setWriter(Writer w);
+
+    // For Command / Bidirectional datapoints — invoked from QML or business
+    // code. Forwards to the registered writer; no-op if none.
     Q_INVOKABLE void write(QVariant v);
 
 signals:

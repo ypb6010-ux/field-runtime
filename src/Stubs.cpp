@@ -1,25 +1,21 @@
 // Minimum stubs to make Core link during the scaffold phase. Each subsystem
-// gets a real implementation file in Phase 1 onwards (see
-// doc/design/Core-Greenfield-Spec.md section 8).
+// gets a real implementation file as Phase 1 progresses; this file shrinks
+// every iteration. See doc/design/Core-Greenfield-Spec.md §8 for the order.
 //
-// Functions here either throw or return defaults; they exist solely so that
-// downstream code (and a smoke test) can link against the library while the
-// real implementations are written.
+// Stubs left here either return defaults or throw; calling into a stubbed
+// subsystem before its real implementation lands is a programmer error and
+// produces a clear runtime message rather than silent misbehaviour.
 
 #include <QObject>
 #include <stdexcept>
 
 #include "core/ICore.h"
-#include "core/codec/CodecRegistry.h"
 #include "core/config/ConfigLoader.h"
-#include "core/dp/Datapoint.h"
-#include "core/dp/DatapointRegistry.h"
 #include "core/dp/ScalarType.h"
 #include "core/dp/WordOrder.h"
 #include "core/module/ModuleRegistry.h"
 #include "core/plugin/PluginRegistry.h"
 #include "core/plugin/PortRegistry.h"
-#include "core/qml/DatapointQmlBridge.h"
 
 namespace {
 [[noreturn]] void notImplemented(const char* what) {
@@ -40,11 +36,11 @@ int registerCountFor(ScalarType type) noexcept {
         case ScalarType::EnumU16: return 1;
         case ScalarType::U32:
         case ScalarType::S32:
-        case ScalarType::F32:    return 2;
+        case ScalarType::F32:     return 2;
         case ScalarType::U64:
         case ScalarType::S64:
-        case ScalarType::F64:    return 4;
-        case ScalarType::String: return 0;   // variable
+        case ScalarType::F64:     return 4;
+        case ScalarType::String:  return 0;   // variable length
     }
     return 0;
 }
@@ -103,68 +99,37 @@ BytePermutation permutationFor(WordOrder w, int byteCount) noexcept {
     return p;
 }
 
-// ---------------------------------------------------------------------------
-// Datapoint — stub
-// ---------------------------------------------------------------------------
-class Datapoint::Impl {};
-
-Datapoint::Datapoint(QObject* parent)
-    : QObject(parent), m_impl(nullptr) {}
-
-QString   Datapoint::id() const                   { return {}; }
-QVariant  Datapoint::value() const                { return {}; }
-bool      Datapoint::valid() const                { return false; }
-QDateTime Datapoint::timestamp() const            { return {}; }
-DpState   Datapoint::state() const                { return DpState::Missing; }
-QString   Datapoint::stateText() const            { return QStringLiteral("Missing"); }
-Kind      Datapoint::kind() const                 { return Kind::Status; }
-ScalarType Datapoint::type() const                { return ScalarType::U16; }
-
-std::optional<PortRef> const& Datapoint::source() const {
-    static const std::optional<PortRef> none;
-    return none;
-}
-std::optional<PortRef> const& Datapoint::sink() const {
-    static const std::optional<PortRef> none;
-    return none;
-}
-QString Datapoint::uiBinding()  const { return {}; }
-QString Datapoint::persistTag() const { return {}; }
-
-void Datapoint::setValue(QVariant, QDateTime) { notImplemented("Datapoint::setValue"); }
-void Datapoint::setState(DpState)             { notImplemented("Datapoint::setState"); }
-void Datapoint::write(QVariant)               { notImplemented("Datapoint::write"); }
-
-// ---------------------------------------------------------------------------
-// DatapointRegistry — stub
-// ---------------------------------------------------------------------------
-DatapointRegistry::DatapointRegistry()  = default;
-DatapointRegistry::~DatapointRegistry() = default;
-
-void DatapointRegistry::registerDp(std::shared_ptr<Datapoint>) {}
-std::shared_ptr<Datapoint> DatapointRegistry::find(QString const&) const { return nullptr; }
-QList<std::shared_ptr<Datapoint>> DatapointRegistry::all() const { return {}; }
-
 } // namespace core::dp
 
-// EventBus & Subscription have real implementations in EventBus.cpp.
+// Datapoint / DatapointRegistry         live in Datapoint.cpp / DatapointRegistry.cpp
+// EventBus / Subscription               live in EventBus.cpp
+// BuiltinScalarCodec / EnumU16Codec     live in BuiltinCodecs.cpp
+// CodecRegistry                         lives in CodecRegistry.cpp
+// SerialScheduler / makeScheduler       live in SerialScheduler.cpp
 
 // ---------------------------------------------------------------------------
-// CodecRegistry — stub
+// DatapointQmlBridge — thin pass-through; could be promoted to its own file
+// once it grows beyond a single lookup.
 // ---------------------------------------------------------------------------
-namespace core::codec {
+#include "core/qml/DatapointQmlBridge.h"
+#include "core/dp/DatapointRegistry.h"
+#include "core/dp/Datapoint.h"
 
-CodecRegistry::CodecRegistry()  = default;
-CodecRegistry::~CodecRegistry() = default;
+namespace core::qml {
 
-void CodecRegistry::registerCodec(std::shared_ptr<Codec>) {}
-std::shared_ptr<Codec> CodecRegistry::find(QString const&) const { return nullptr; }
-void CodecRegistry::loadBuiltins() {}
+DatapointQmlBridge::DatapointQmlBridge(dp::DatapointRegistry& reg, QObject* parent)
+    : QObject(parent), m_registry(reg) {}
 
-} // namespace core::codec
+DatapointQmlBridge::~DatapointQmlBridge() = default;
+
+dp::Datapoint* DatapointQmlBridge::dp(QString const& id) const {
+    return m_registry.find(id).get();
+}
+
+} // namespace core::qml
 
 // ---------------------------------------------------------------------------
-// ModuleRegistry — stub
+// ModuleRegistry — stub (Phase 1 task #3 will replace this)
 // ---------------------------------------------------------------------------
 namespace core::module {
 
@@ -183,7 +148,7 @@ void ModuleRegistry::resumeAll() {}
 } // namespace core::module
 
 // ---------------------------------------------------------------------------
-// PluginRegistry — stub
+// PluginRegistry / PortRegistry — stubs (Phase 2)
 // ---------------------------------------------------------------------------
 namespace core::plugin {
 
@@ -197,7 +162,6 @@ void PluginRegistry::unloadAll() {}
 void PluginRegistry::registerAllPorts(PortRegistry&) {}
 QList<Plugin*> PluginRegistry::all() const { return {}; }
 
-// PortRegistry
 class PortRegistry::Impl {};
 
 PortRegistry::PortRegistry(dp::DatapointRegistry&, bus::EventBus&) : m_impl(nullptr) {}
@@ -206,26 +170,7 @@ PortRegistry::~PortRegistry() = default;
 } // namespace core::plugin
 
 // ---------------------------------------------------------------------------
-// DatapointQmlBridge — stub
-// ---------------------------------------------------------------------------
-namespace core::qml {
-
-DatapointQmlBridge::DatapointQmlBridge(dp::DatapointRegistry& reg, QObject* parent)
-    : QObject(parent), m_registry(reg) {}
-
-DatapointQmlBridge::~DatapointQmlBridge() = default;
-
-dp::Datapoint* DatapointQmlBridge::dp(QString const& id) const {
-    auto sp = m_registry.find(id);
-    return sp.get();
-}
-
-} // namespace core::qml
-
-// Scheduler factory lives in SerialScheduler.cpp.
-
-// ---------------------------------------------------------------------------
-// ConfigLoader — stub
+// ConfigLoader — stub (Phase 1 task #5)
 // ---------------------------------------------------------------------------
 namespace core::config {
 
@@ -244,7 +189,7 @@ ConfigLoader::validate(ConfigSchema const&) {
 } // namespace core::config
 
 // ---------------------------------------------------------------------------
-// ICore — stub
+// ICore — stub (Phase 1 task #5)
 // ---------------------------------------------------------------------------
 namespace core {
 
@@ -253,3 +198,6 @@ std::unique_ptr<ICore> ICore::create(QQmlContext*) {
 }
 
 } // namespace core
+
+// Suppress unused warning for notImplemented when nothing uses it yet.
+namespace { [[maybe_unused]] auto* dummy = &notImplemented; }

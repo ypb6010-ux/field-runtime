@@ -23,7 +23,7 @@ struct PortRef {
     std::optional<int>                 bit;
     WordOrder                          wordOrder = WordOrder::ABCD;
     int                                shift = 0;
-    quint32                            mask = 0xFFFFFFFFu;
+    quint64                            mask = 0xFFFFFFFFFFFFFFFFull;
     double                             scale = 1.0;
     double                             offset = 0.0;
     std::shared_ptr<core::codec::Codec> codec;
