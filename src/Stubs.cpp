@@ -10,8 +10,6 @@
 #include <stdexcept>
 
 #include "core/ICore.h"
-#include "core/bus/EventBus.h"
-#include "core/bus/Subscription.h"
 #include "core/codec/CodecRegistry.h"
 #include "core/config/ConfigLoader.h"
 #include "core/dp/Datapoint.h"
@@ -150,27 +148,7 @@ QList<std::shared_ptr<Datapoint>> DatapointRegistry::all() const { return {}; }
 
 } // namespace core::dp
 
-// ---------------------------------------------------------------------------
-// EventBus — stub
-// ---------------------------------------------------------------------------
-namespace core::bus {
-
-class EventBus::Impl {};
-
-EventBus::EventBus(QObject* parent) : QObject(parent), m_impl(nullptr) {}
-EventBus::~EventBus() = default;
-
-BusStats EventBus::stats() const { return {}; }
-
-// Subscription
-Subscription::~Subscription() = default;
-Subscription::Subscription(Subscription&&) noexcept = default;
-Subscription& Subscription::operator=(Subscription&&) noexcept = default;
-Subscription::Subscription(std::shared_ptr<void> h) noexcept : m_handle(std::move(h)) {}
-void Subscription::cancel() noexcept { m_handle.reset(); }
-bool Subscription::active() const noexcept { return static_cast<bool>(m_handle); }
-
-} // namespace core::bus
+// EventBus & Subscription have real implementations in EventBus.cpp.
 
 // ---------------------------------------------------------------------------
 // CodecRegistry — stub

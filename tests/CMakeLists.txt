@@ -1,10 +1,35 @@
-add_executable(CoreSmokeTest
-    SmokeTest.cpp
-)
-target_link_libraries(CoreSmokeTest PRIVATE Core::Core)
-add_test(NAME CoreSmokeTest COMMAND CoreSmokeTest)
+find_package(Catch2 3 QUIET)
+if(NOT Catch2_FOUND)
+    include(FetchContent)
+    FetchContent_Declare(Catch2
+        GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+        GIT_TAG        v3.5.4
+    )
+    FetchContent_MakeAvailable(Catch2)
+    list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
+endif()
+include(Catch)
 
-# Future test layout placeholders (each will become its own executable):
-#   unit/       — fine-grained unit tests per subsystem
-#   integration/— end-to-end scenarios from design doc §9
-#   mocks/      — shared MockTransport / MockScheduler / MockEventBus
+# Single test binary aggregating every *.cpp under tests/. Catch2's main
+# discovery registers each TEST_CASE as a separate ctest entry.
+add_executable(CoreTests
+    SmokeTest.cpp
+    unit/EventBusTests.cpp
+)
+
+target_link_libraries(CoreTests
+    PRIVATE
+        Core::Core
+        Catch2::Catch2WithMain
+)
+
+target_include_directories(CoreTests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+catch_discover_tests(CoreTests
+    DL_PATHS
+        $<TARGET_FILE_DIR:Core>
+        $<TARGET_FILE_DIR:Qt6::Core>
+)
