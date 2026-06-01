@@ -1,0 +1,108 @@
+#include "core/module/PollRange.h"
+
+#include <utility>
+
+#include "core/codec/Codec.h"
+#include "core/dp/Datapoint.h"
+#include "core/dp/PortRef.h"
+#include "core/dp/ScalarType.h"
+#include "core/transport/Transport.h"
+
+namespace core::module {
+
+PollRange::PollRange(QString                     moduleId,
+                     transport::Transport&       transport,
+                     transport::ReadRequest      request,
+                     int                         periodMs,
+                     sched::Priority             priority)
+    : m_transport(&transport)
+    , m_req(std::move(request))
+    , m_periodMs(periodMs) {
+    m_id          = std::move(moduleId);
+    m_transportId = transport.id();
+    m_priority    = priority;
+}
+
+PollRange::~PollRange() = default;
+
+void PollRange::bind(std::shared_ptr<dp::Datapoint> datapoint,
+                     std::shared_ptr<codec::Codec>  codec,
+                     int                             registerOffset) {
+    if (!datapoint || !codec) return;
+    m_bindings.push_back(Binding{std::move(datapoint),
+                                  std::move(codec),
+                                  registerOffset});
+}
+
+int PollRange::periodMs()    const noexcept { return m_periodMs; }
+int PollRange::bindingCount() const noexcept { return m_bindings.size(); }
+
+transport::ReadRequest const& PollRange::request() const noexcept {
+    return m_req;
+}
+
+sched::SubmitResult PollRange::pollOnce() {
+    if (m_paused) {
+        return {sched::ResultKind::Cancelled,
+                QStringLiteral("module paused"), 0};
+    }
+
+    sched::RequestTag tag;
+    tag.moduleId = m_id;
+    tag.priority = m_priority;
+
+    transport::ReadResult result{};
+    auto submission = m_transport->scheduler().submit(tag, [&] {
+        result = m_transport->read(m_req);
+    });
+
+    // Even if the scheduler accepted the work, the underlying I/O may have
+    // failed. We translate both layers into datapoint state below so QML and
+    // database consumers see a consistent picture.
+    if (submission.kind != sched::ResultKind::Ok) {
+        for (auto& b : m_bindings) {
+            b.dp->setState(dp::DpState::Stale);
+        }
+        return submission;
+    }
+    if (!result.ok) {
+        for (auto& b : m_bindings) {
+            b.dp->setState(dp::DpState::Error);
+        }
+        submission.kind         = sched::ResultKind::Error;
+        submission.errorMessage = result.errorMessage;
+        return submission;
+    }
+
+    // Successful read: dispatch slices to each bound datapoint.
+    for (auto& b : m_bindings) {
+        int const rc = dp::registerCountFor(b.dp->type());
+        if (rc <= 0 || b.offset < 0 || b.offset + rc > result.values.size()) {
+            b.dp->setState(dp::DpState::Error);
+            continue;
+        }
+        auto const sub = result.values.mid(b.offset, rc);
+        // The codec needs a PortRef for word-order / mask / scale / bit
+        // metadata. We expect the datapoint's `source` to carry it; if a
+        // datapoint somehow ended up here without a source the binding is
+        // mis-wired — mark Error rather than silently producing garbage.
+        if (!b.dp->source().has_value()) {
+            b.dp->setState(dp::DpState::Error);
+            continue;
+        }
+        QVariant decoded = b.codec->decode(sub, b.dp->source().value());
+        if (!decoded.isValid()) {
+            b.dp->setState(dp::DpState::Error);
+            continue;
+        }
+        b.dp->setValue(std::move(decoded));
+    }
+    return submission;
+}
+
+void PollRange::start()  { m_paused = false; }
+void PollRange::stop()   { m_paused = true; }
+void PollRange::pause()  { m_paused = true; }
+void PollRange::resume() { m_paused = false; }
+
+} // namespace core::module

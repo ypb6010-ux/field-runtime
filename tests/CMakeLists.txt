@@ -18,6 +18,7 @@ add_executable(CoreTests
     unit/SerialSchedulerTests.cpp
     unit/CodecTests.cpp
     unit/DatapointTests.cpp
+    unit/PollRangeTests.cpp
 )
 
 find_package(Qt6 REQUIRED COMPONENTS Test)
