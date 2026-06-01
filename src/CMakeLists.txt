@@ -11,6 +11,7 @@ target_sources(Core PRIVATE
     Datapoint.cpp
     DatapointRegistry.cpp
     PollRange.cpp
+    ModbusTcpClientTransport.cpp
     # Headers carrying Q_OBJECT must be listed for AUTOMOC to pick them up
     # when they live outside the .cpp's directory.
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/core/bus/EventBus.h

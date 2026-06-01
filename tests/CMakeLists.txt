@@ -13,12 +13,14 @@ include(Catch)
 # Single test binary aggregating every *.cpp under tests/. Catch2's main
 # discovery registers each TEST_CASE as a separate ctest entry.
 add_executable(CoreTests
+    TestMain.cpp
     SmokeTest.cpp
     unit/EventBusTests.cpp
     unit/SerialSchedulerTests.cpp
     unit/CodecTests.cpp
     unit/DatapointTests.cpp
     unit/PollRangeTests.cpp
+    unit/ModbusTcpClientTransportTests.cpp
 )
 
 find_package(Qt6 REQUIRED COMPONENTS Test)
@@ -26,8 +28,9 @@ find_package(Qt6 REQUIRED COMPONENTS Test)
 target_link_libraries(CoreTests
     PRIVATE
         Core::Core
-        Catch2::Catch2WithMain
+        Catch2::Catch2
         Qt6::Test
+        Qt6::SerialBus
 )
 
 target_include_directories(CoreTests
