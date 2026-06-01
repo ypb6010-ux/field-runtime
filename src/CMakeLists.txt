@@ -12,6 +12,9 @@ target_sources(Core PRIVATE
     DatapointRegistry.cpp
     PollRange.cpp
     SinkWindow.cpp
+    Heartbeat.cpp
+    Command.cpp
+    AckWatch.cpp
     ModuleRegistry.cpp
     ModbusTcpClientTransport.cpp
     ConfigLoader.cpp

@@ -21,6 +21,9 @@ add_executable(CoreTests
     unit/DatapointTests.cpp
     unit/PollRangeTests.cpp
     unit/SinkWindowTests.cpp
+    unit/HeartbeatTests.cpp
+    unit/CommandTests.cpp
+    unit/AckWatchTests.cpp
     unit/ModbusTcpClientTransportTests.cpp
     unit/ConfigLoaderTests.cpp
     unit/CoreEndToEndTests.cpp
