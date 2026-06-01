@@ -76,13 +76,19 @@ public:
     }
 
     ~Impl() {
-        // Tear down on the client's own thread.
-        QMetaObject::invokeMethod(client, [this] {
-            client->disconnectDevice();
-            client->deleteLater();
-            client = nullptr;
-        }, Qt::BlockingQueuedConnection);
-
+        // Tear down the QObject that lives on the worker thread *while that
+        // thread is still spinning its event loop*, so any in-flight Modbus
+        // replies disconnect cleanly. Destroying the client from the test
+        // thread after the worker has stopped is a known segfault source —
+        // pending QModbusReply::finished callbacks would fire into freed
+        // memory.
+        if (client) {
+            QMetaObject::invokeMethod(client, [this] {
+                client->disconnectDevice();
+                delete client;
+                client = nullptr;
+            }, Qt::BlockingQueuedConnection);
+        }
         thread->quit();
         thread->wait();
         delete thread;

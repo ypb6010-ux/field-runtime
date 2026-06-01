@@ -9,11 +9,8 @@
 #include <QObject>
 #include <stdexcept>
 
-#include "core/ICore.h"
-#include "core/config/ConfigLoader.h"
 #include "core/dp/ScalarType.h"
 #include "core/dp/WordOrder.h"
-#include "core/module/ModuleRegistry.h"
 #include "core/plugin/PluginRegistry.h"
 #include "core/plugin/PortRegistry.h"
 
@@ -128,24 +125,7 @@ dp::Datapoint* DatapointQmlBridge::dp(QString const& id) const {
 
 } // namespace core::qml
 
-// ---------------------------------------------------------------------------
-// ModuleRegistry — stub (Phase 1 task #3 will replace this)
-// ---------------------------------------------------------------------------
-namespace core::module {
-
-ModuleRegistry::ModuleRegistry()  = default;
-ModuleRegistry::~ModuleRegistry() = default;
-
-void ModuleRegistry::registerModule(std::unique_ptr<FunctionalModule>) {}
-FunctionalModule* ModuleRegistry::find(QString const&) const { return nullptr; }
-QList<FunctionalModule*> ModuleRegistry::byTransport(QString const&) const { return {}; }
-QList<FunctionalModule*> ModuleRegistry::all() const { return {}; }
-void ModuleRegistry::startAll()  {}
-void ModuleRegistry::stopAll()   {}
-void ModuleRegistry::pauseAll()  {}
-void ModuleRegistry::resumeAll() {}
-
-} // namespace core::module
+// ModuleRegistry lives in ModuleRegistry.cpp.
 
 // ---------------------------------------------------------------------------
 // PluginRegistry / PortRegistry — stubs (Phase 2)
@@ -169,35 +149,7 @@ PortRegistry::~PortRegistry() = default;
 
 } // namespace core::plugin
 
-// ---------------------------------------------------------------------------
-// ConfigLoader — stub (Phase 1 task #5)
-// ---------------------------------------------------------------------------
-namespace core::config {
-
-std::expected<ConfigSchema, ValidationErrors>
-ConfigLoader::loadFromToml(QString const&) {
-    ValidationErrors errs;
-    errs.push_back({"meta", "toml", "ConfigLoader not yet implemented", -1});
-    return std::unexpected(std::move(errs));
-}
-
-std::expected<void, ValidationErrors>
-ConfigLoader::validate(ConfigSchema const&) {
-    return {};
-}
-
-} // namespace core::config
-
-// ---------------------------------------------------------------------------
-// ICore — stub (Phase 1 task #5)
-// ---------------------------------------------------------------------------
-namespace core {
-
-std::unique_ptr<ICore> ICore::create(QQmlContext*) {
-    return nullptr;
-}
-
-} // namespace core
+// ConfigLoader lives in ConfigLoader.cpp, ICore in Core.cpp.
 
 // Suppress unused warning for notImplemented when nothing uses it yet.
 namespace { [[maybe_unused]] auto* dummy = &notImplemented; }

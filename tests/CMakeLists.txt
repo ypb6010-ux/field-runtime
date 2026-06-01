@@ -21,6 +21,8 @@ add_executable(CoreTests
     unit/DatapointTests.cpp
     unit/PollRangeTests.cpp
     unit/ModbusTcpClientTransportTests.cpp
+    unit/ConfigLoaderTests.cpp
+    unit/CoreEndToEndTests.cpp
 )
 
 find_package(Qt6 REQUIRED COMPONENTS Test)

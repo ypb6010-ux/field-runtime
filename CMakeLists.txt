@@ -26,6 +26,16 @@ endif()
 find_package(Qt6 6.8 REQUIRED COMPONENTS ${CORE_QT_COMPONENTS})
 find_package(async_simple CONFIG REQUIRED)
 
+find_package(tomlplusplus 3.4 QUIET)
+if(NOT tomlplusplus_FOUND)
+    include(FetchContent)
+    FetchContent_Declare(tomlplusplus
+        GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+        GIT_TAG        v3.4.0
+    )
+    FetchContent_MakeAvailable(tomlplusplus)
+endif()
+
 # ---------------------------------------------------------------------------
 # Library target
 # ---------------------------------------------------------------------------
@@ -48,6 +58,8 @@ target_link_libraries(Core
         Qt6::SerialBus
         Qt6::Sql
         async_simple::async_simple_static
+    PRIVATE
+        tomlplusplus::tomlplusplus
 )
 
 if(CORE_BUILD_QML)
