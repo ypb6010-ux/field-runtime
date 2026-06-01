@@ -25,6 +25,7 @@ add_executable(CoreTests
     unit/CommandTests.cpp
     unit/AckWatchTests.cpp
     unit/ModbusTcpClientTransportTests.cpp
+    unit/ModbusTcpServerTransportTests.cpp
     unit/ConfigLoaderTests.cpp
     unit/CoreEndToEndTests.cpp
 )

@@ -17,6 +17,7 @@ target_sources(Core PRIVATE
     AckWatch.cpp
     ModuleRegistry.cpp
     ModbusTcpClientTransport.cpp
+    ModbusTcpServerTransport.cpp
     ConfigLoader.cpp
     Core.cpp
     # Headers carrying Q_OBJECT must be listed for AUTOMOC to pick them up

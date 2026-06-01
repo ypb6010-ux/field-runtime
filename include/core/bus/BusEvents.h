@@ -1,8 +1,10 @@
 #pragma once
 
 #include <QDateTime>
+#include <QList>
 #include <QString>
 #include <QVariant>
+#include <QtSerialBus/QModbusDataUnit>
 
 #include "core/core_global.h"
 
@@ -37,5 +39,15 @@ struct TransportEvent {
 
 struct CoreReady {};
 struct CoreStopping {};
+
+// Published by ModbusTcpServerTransport when an operator-box client writes
+// to one of its watched register ranges. Subscribers (router / sink window
+// staging) use it to mirror operator intent into PLC-bound Transports.
+struct ServerWriteEvent {
+    QString                            transportId;   // the server's id
+    QModbusDataUnit::RegisterType      table;
+    int                                startAddress;
+    QList<quint16>                     values;
+};
 
 } // namespace core::bus
