@@ -11,11 +11,33 @@ A C++20 / Qt6 library for building SCADA-style upper-computer software that brid
 
 ## Status
 
-Pre-alpha. Public APIs are sketched per the design specification; implementations land in phases.
+**Phase 2 in progress** — 109 unit tests passing (Phase 1 complete + most Phase 2 modules).
 
-See:
+| Subsystem | State | Notes |
+|-----------|-------|-------|
+| EventBus | ✅ shipped | publish / subscribe / RAII Subscription; `waitFor` deferred to Phase 3 |
+| SerialScheduler | ✅ shipped | priority lanes, round-robin, gap, circuit breaker |
+| ModbusTcpClientTransport | ✅ shipped | wraps `QModbusTcpClient`, real TCP integration tests |
+| ModbusTcpServerTransport | ✅ shipped | publishes `ServerWriteEvent` on dataWritten |
+| Datapoint / DatapointRegistry | ✅ shipped | QObject + `Q_PROPERTY(value)` for direct QML binding |
+| BuiltinScalarCodec | ✅ shipped | all 11 ScalarTypes × 4 WordOrders, scale/offset/mask/shift |
+| EnumU16Codec / CodecRegistry | ✅ shipped | |
+| PollRange | ✅ shipped | per-tick algorithm + datapoint bindings (`pollOnce()`) |
+| SinkWindow | ✅ shipped | debounce / keepAlive / forceFlush / coalesce |
+| Heartbeat / Command / AckWatch | ✅ shipped | synchronous AckWatch; coroutine variant Phase 3 |
+| ConfigLoader (TOML) | 🟡 partial | 5 of 18 validation rules; sink_window / heartbeat / ack_watch / command sections pending |
+| ICore facade | ✅ shipped | wires Transport / Codec / Datapoint / PollRange from TOML, real end-to-end against `QModbusTcpServer` |
+| QTimer autopilot | ⏳ pending | `ModuleRegistry.startAll()` currently no-op; modules driven via test hooks |
+| Transport reconnect | ⏳ pending | manual `connect()` only |
+| CreditScheduler / PriorityScheduler | ⏳ pending | Phase 3 |
+| LuaCodec | ⏳ pending | Phase 3 (sol2 sandbox) |
+| Plugin / Database integration | ⏳ pending | Phase 3+ |
+
+See the [implementation specification](../doc/design/Core-Greenfield-Spec.md) for the full progress table and ~150-item checklist.
+
+References:
 - [`doc/design/Core-Greenfield.md`](../doc/design/Core-Greenfield.md) — concept
-- [`doc/design/Core-Greenfield-Spec.md`](../doc/design/Core-Greenfield-Spec.md) — full implementation specification
+- [`doc/design/Core-Greenfield-Spec.md`](../doc/design/Core-Greenfield-Spec.md) — full implementation specification + live progress table
 - [`doc/design/Core-Routing.md`](../doc/design/Core-Routing.md) — alternative incremental-compatible design (not used here)
 
 ## Build
