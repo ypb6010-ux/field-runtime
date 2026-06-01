@@ -20,7 +20,6 @@
 #include "core/plugin/PluginRegistry.h"
 #include "core/plugin/PortRegistry.h"
 #include "core/qml/DatapointQmlBridge.h"
-#include "core/sched/RequestScheduler.h"
 
 namespace {
 [[noreturn]] void notImplemented(const char* what) {
@@ -223,16 +222,7 @@ dp::Datapoint* DatapointQmlBridge::dp(QString const& id) const {
 
 } // namespace core::qml
 
-// ---------------------------------------------------------------------------
-// Scheduler factory — stub
-// ---------------------------------------------------------------------------
-namespace core::sched {
-
-std::unique_ptr<RequestScheduler> makeScheduler(SchedulerConfig const&) {
-    return nullptr;
-}
-
-} // namespace core::sched
+// Scheduler factory lives in SerialScheduler.cpp.
 
 // ---------------------------------------------------------------------------
 // ConfigLoader — stub

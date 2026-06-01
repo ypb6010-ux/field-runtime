@@ -15,6 +15,7 @@ include(Catch)
 add_executable(CoreTests
     SmokeTest.cpp
     unit/EventBusTests.cpp
+    unit/SerialSchedulerTests.cpp
 )
 
 target_link_libraries(CoreTests
