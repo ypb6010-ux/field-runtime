@@ -11,6 +11,7 @@ target_sources(Core PRIVATE
     Datapoint.cpp
     DatapointRegistry.cpp
     PollRange.cpp
+    SinkWindow.cpp
     ModuleRegistry.cpp
     ModbusTcpClientTransport.cpp
     ConfigLoader.cpp

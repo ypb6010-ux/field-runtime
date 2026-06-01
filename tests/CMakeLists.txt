@@ -20,6 +20,7 @@ add_executable(CoreTests
     unit/CodecTests.cpp
     unit/DatapointTests.cpp
     unit/PollRangeTests.cpp
+    unit/SinkWindowTests.cpp
     unit/ModbusTcpClientTransportTests.cpp
     unit/ConfigLoaderTests.cpp
     unit/CoreEndToEndTests.cpp
