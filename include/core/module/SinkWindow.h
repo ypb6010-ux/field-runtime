@@ -70,6 +70,8 @@ public:
     void stop()   override;
     void pause()  override;
     void resume() override;
+    int  tickPeriodMs() const override;
+    void driveTick()         override { (void)onTick(); }
 
 private:
     transport::Transport*              m_transport;

@@ -10,9 +10,12 @@
 #include <QMetaObject>
 #include <QSemaphore>
 #include <QThread>
+#include <QTimer>
 #include <QtSerialBus/QModbusReply>
 #include <QtSerialBus/QModbusTcpClient>
 
+#include "core/bus/BusEvents.h"
+#include "core/bus/EventBus.h"
 #include "core/sched/SerialScheduler.h"
 
 namespace core::transport {
@@ -48,8 +51,9 @@ ConnectionState stateFromQt(QModbusDevice::State s) {
 
 class ModbusTcpClientTransport::Impl {
 public:
-    explicit Impl(Config c)
+    Impl(Config c, bus::EventBus* b)
         : cfg(std::move(c))
+        , busPtr(b)
         , scheduler(std::make_unique<sched::SerialScheduler>(cfg.scheduler))
         , thread(new QThread)
         , client(new QModbusTcpClient) {
@@ -62,20 +66,46 @@ public:
         // current view without locking.
         QObject::connect(client, &QModbusDevice::stateChanged,
                          client, [this](QModbusDevice::State s) {
-            state.store(stateFromQt(s), std::memory_order_release);
+            auto const prev = state.exchange(stateFromQt(s),
+                                             std::memory_order_acq_rel);
+            auto const cur = stateFromQt(s);
+            if (busPtr) {
+                if (cur == ConnectionState::Connected
+                    && prev != ConnectionState::Connected) {
+                    busPtr->publish(bus::TransportEvent{
+                        cfg.id, bus::TransportEventKind::Connected, {}});
+                } else if (cur == ConnectionState::Disconnected
+                           && prev == ConnectionState::Connected) {
+                    busPtr->publish(bus::TransportEvent{
+                        cfg.id, bus::TransportEventKind::Disconnected, {}});
+                }
+            }
         });
         QObject::connect(client, &QModbusDevice::errorOccurred,
                          client, [this](QModbusDevice::Error e) {
             if (e != QModbusDevice::NoError) {
-                state.store(ConnectionState::Error, std::memory_order_release);
+                auto const prev = state.exchange(ConnectionState::Error,
+                                                  std::memory_order_acq_rel);
                 QString msg = client->errorString();
                 if (msg.isEmpty()) msg = errorStringFor(e);
                 lastError = msg;
+                if (busPtr && prev == ConnectionState::Connected) {
+                    busPtr->publish(bus::TransportEvent{
+                        cfg.id, bus::TransportEventKind::Disconnected, msg});
+                }
             }
         });
     }
 
     ~Impl() {
+        autoReconnect.store(false, std::memory_order_release);
+        if (reconnectTimer) {
+            QMetaObject::invokeMethod(reconnectTimer, [this] {
+                reconnectTimer->stop();
+                delete reconnectTimer;
+                reconnectTimer = nullptr;
+            }, Qt::BlockingQueuedConnection);
+        }
         // Tear down the QObject that lives on the worker thread *while that
         // thread is still spinning its event loop*, so any in-flight Modbus
         // replies disconnect cleanly. Destroying the client from the test
@@ -95,15 +125,18 @@ public:
     }
 
     Config                                            cfg;
+    bus::EventBus*                                    busPtr = nullptr;
     std::unique_ptr<sched::SerialScheduler>            scheduler;
     QThread*                                           thread = nullptr;
     QModbusTcpClient*                                  client = nullptr;
+    QTimer*                                            reconnectTimer = nullptr;
+    std::atomic<bool>                                  autoReconnect{false};
     std::atomic<ConnectionState>                       state{ConnectionState::Disconnected};
     QString                                            lastError;
 };
 
-ModbusTcpClientTransport::ModbusTcpClientTransport(Config cfg)
-    : m_impl(std::make_unique<Impl>(std::move(cfg))) {}
+ModbusTcpClientTransport::ModbusTcpClientTransport(Config cfg, bus::EventBus* bus)
+    : m_impl(std::make_unique<Impl>(std::move(cfg), bus)) {}
 
 ModbusTcpClientTransport::~ModbusTcpClientTransport() = default;
 
@@ -115,7 +148,10 @@ sched::RequestScheduler& ModbusTcpClientTransport::scheduler() { return *m_impl-
 
 std::expected<void, QString>
 ModbusTcpClientTransport::connect() {
-    if (state() == ConnectionState::Connected) return {};
+    if (state() == ConnectionState::Connected) {
+        armReconnectIfConfigured();
+        return {};
+    }
 
     bool kicked = false;
     QMetaObject::invokeMethod(m_impl->client, [this, &kicked] {
@@ -129,6 +165,7 @@ ModbusTcpClientTransport::connect() {
     }, Qt::BlockingQueuedConnection);
 
     if (!kicked) {
+        armReconnectIfConfigured();
         return std::unexpected(m_impl->lastError.isEmpty()
             ? QStringLiteral("connectDevice() returned false")
             : m_impl->lastError);
@@ -141,16 +178,58 @@ ModbusTcpClientTransport::connect() {
                         + std::chrono::milliseconds(m_impl->cfg.connectTimeoutMs);
     while (std::chrono::steady_clock::now() < deadline) {
         auto s = state();
-        if (s == ConnectionState::Connected) return {};
-        if (s == ConnectionState::Error)
+        if (s == ConnectionState::Connected) {
+            armReconnectIfConfigured();
+            return {};
+        }
+        if (s == ConnectionState::Error) {
+            armReconnectIfConfigured();
             return std::unexpected(m_impl->lastError);
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    armReconnectIfConfigured();
     return std::unexpected(QStringLiteral("connect timeout"));
 }
 
+void ModbusTcpClientTransport::armReconnectIfConfigured() {
+    if (m_impl->cfg.reconnectIntervalMs <= 0) return;
+    if (m_impl->autoReconnect.load(std::memory_order_acquire)) return;
+    m_impl->autoReconnect.store(true, std::memory_order_release);
+
+    auto* impl = m_impl.get();
+    QString const id = m_impl->cfg.id;
+    int const intervalMs = m_impl->cfg.reconnectIntervalMs;
+
+    QMetaObject::invokeMethod(m_impl->client, [impl, id, intervalMs] {
+        if (impl->reconnectTimer) return;
+        impl->reconnectTimer = new QTimer(impl->client);
+        impl->reconnectTimer->setInterval(intervalMs);
+        impl->reconnectTimer->setSingleShot(false);
+        QObject::connect(impl->reconnectTimer, &QTimer::timeout, impl->client,
+            [impl] {
+                if (!impl->autoReconnect.load(std::memory_order_acquire)) return;
+                auto const s = impl->state.load(std::memory_order_acquire);
+                if (s == ConnectionState::Connected) return;
+                if (s == ConnectionState::Connecting) return;
+                // Re-issue connectDevice on the client's own thread.
+                impl->client->disconnectDevice();
+                impl->client->setConnectionParameter(
+                    QModbusDevice::NetworkAddressParameter, impl->cfg.host);
+                impl->client->setConnectionParameter(
+                    QModbusDevice::NetworkPortParameter, impl->cfg.port);
+                impl->client->setTimeout(impl->cfg.requestTimeoutMs);
+                impl->client->setNumberOfRetries(0);
+                impl->client->connectDevice();
+            });
+        impl->reconnectTimer->start();
+    }, Qt::BlockingQueuedConnection);
+}
+
 void ModbusTcpClientTransport::disconnect() {
+    m_impl->autoReconnect.store(false, std::memory_order_release);
     QMetaObject::invokeMethod(m_impl->client, [this] {
+        if (m_impl->reconnectTimer) m_impl->reconnectTimer->stop();
         m_impl->client->disconnectDevice();
     }, Qt::BlockingQueuedConnection);
 

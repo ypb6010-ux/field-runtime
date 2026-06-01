@@ -28,6 +28,9 @@ public:
         quint16  listenPort      = 502;
         int      slaveId         = 1;
         int      maxClients      = 1;
+        // > 0 = re-listen after this many ms once state drops to
+        // Disconnected/Error.
+        int      reconnectIntervalMs = 0;
         QList<WatchRange> listenRanges;
         sched::SchedulerConfig scheduler = sched::SchedulerConfig{};
     };
@@ -50,6 +53,8 @@ public:
     WriteResult writeBatch(WriteBatch  const& batch)       override;
 
 private:
+    void armReconnectIfConfigured();
+
     class Impl;
     std::unique_ptr<Impl> m_impl;
 };

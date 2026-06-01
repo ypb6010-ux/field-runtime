@@ -11,24 +11,23 @@ A C++20 / Qt6 library for building SCADA-style upper-computer software that brid
 
 ## Status
 
-**Phase 2 in progress** — 109 unit tests passing (Phase 1 complete + most Phase 2 modules).
+**Phase 2 complete** — 119 unit tests passing (Phase 1 + Phase 2 modules).
 
 | Subsystem | State | Notes |
 |-----------|-------|-------|
 | EventBus | ✅ shipped | publish / subscribe / RAII Subscription; `waitFor` deferred to Phase 3 |
 | SerialScheduler | ✅ shipped | priority lanes, round-robin, gap, circuit breaker |
-| ModbusTcpClientTransport | ✅ shipped | wraps `QModbusTcpClient`, real TCP integration tests |
-| ModbusTcpServerTransport | ✅ shipped | publishes `ServerWriteEvent` on dataWritten |
+| ModbusTcpClientTransport | ✅ shipped | wraps `QModbusTcpClient`, real TCP integration tests, auto-reconnect timer + `TransportEvent` |
+| ModbusTcpServerTransport | ✅ shipped | publishes `ServerWriteEvent` on dataWritten, auto re-listen on drop |
 | Datapoint / DatapointRegistry | ✅ shipped | QObject + `Q_PROPERTY(value)` for direct QML binding |
 | BuiltinScalarCodec | ✅ shipped | all 11 ScalarTypes × 4 WordOrders, scale/offset/mask/shift |
 | EnumU16Codec / CodecRegistry | ✅ shipped | |
 | PollRange | ✅ shipped | per-tick algorithm + datapoint bindings (`pollOnce()`) |
-| SinkWindow | ✅ shipped | debounce / keepAlive / forceFlush / coalesce |
+| SinkWindow | ✅ shipped | debounce / keepAlive / forceFlush / coalesce; auto force-flush on reconnect |
 | Heartbeat / Command / AckWatch | ✅ shipped | synchronous AckWatch; coroutine variant Phase 3 |
-| ConfigLoader (TOML) | 🟡 partial | 5 of 18 validation rules; sink_window / heartbeat / ack_watch / command sections pending |
-| ICore facade | ✅ shipped | wires Transport / Codec / Datapoint / PollRange from TOML, real end-to-end against `QModbusTcpServer` |
-| QTimer autopilot | ⏳ pending | `ModuleRegistry.startAll()` currently no-op; modules driven via test hooks |
-| Transport reconnect | ⏳ pending | manual `connect()` only |
+| ConfigLoader (TOML) | ✅ shipped | full schema: transport / poll_range / sink_window / heartbeat / ack_watch / command / datapoint / route / codec; cross-section ref + uniqueness validation |
+| ICore facade | ✅ shipped | wires every section from TOML; operator-box → ServerWriteEvent → SinkWindow → PLC routed end-to-end |
+| ModuleRegistry QTimer autopilot | ✅ shipped | `startAll()` arms a `QTimer` per module whose `tickPeriodMs() > 0`; test hook to disable |
 | CreditScheduler / PriorityScheduler | ⏳ pending | Phase 3 |
 | LuaCodec | ⏳ pending | Phase 3 (sol2 sandbox) |
 | Plugin / Database integration | ⏳ pending | Phase 3+ |

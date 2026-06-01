@@ -12,16 +12,22 @@
 
 #include "core/bus/EventBus.h"
 #include "core/bus/BusEvents.h"
+#include "core/bus/Subscription.h"
 #include "core/codec/BuiltinCodecs.h"
 #include "core/codec/CodecRegistry.h"
 #include "core/config/ConfigLoader.h"
 #include "core/dp/Datapoint.h"
 #include "core/dp/DatapointRegistry.h"
 #include "core/dp/PortRef.h"
+#include "core/module/AckWatch.h"
+#include "core/module/Command.h"
+#include "core/module/Heartbeat.h"
 #include "core/module/ModuleRegistry.h"
 #include "core/module/PollRange.h"
+#include "core/module/SinkWindow.h"
 #include "core/plugin/PluginRegistry.h"
 #include "core/transport/ModbusTcpClientTransport.h"
+#include "core/transport/ModbusTcpServerTransport.h"
 #include "core/transport/Transport.h"
 
 namespace core {
@@ -68,6 +74,7 @@ dp::PortRef makePortRef(config::PortRefConfig const& pc,
     p.scale     = pc.scale;
     p.offset    = pc.offset;
     p.codec     = std::move(codec);
+    p.window    = pc.window;
     return p;
 }
 
@@ -91,8 +98,11 @@ public:
         // then datapoints / codecs / bus. Letting the default destructor
         // run member-by-member in reverse declaration order would tear
         // down transports while PollRange* are still alive.
+        m_transportEventSub.reset();
+        m_serverWriteSub.reset();
         m_modules.reset();
         m_pollRangePtrs.clear();
+        m_sinkWindowPtrs.clear();
         m_transports.clear();
         m_plugins.reset();
         m_dps.reset();
@@ -122,6 +132,7 @@ public:
     }
 
     void start() override {
+        installEventWiring();
         for (auto& [id, t] : m_transports) {
             (void)t->connect();
         }
@@ -139,12 +150,91 @@ public:
         for (auto* poll : m_pollRangePtrs) poll->pollOnce();
     }
 
+    void tickSinkWindowsOnce() {
+        for (auto* sw : m_sinkWindowPtrs) sw->onTick();
+    }
+
 private:
     void wireFromSchema(config::ConfigSchema const& schema) {
         registerCustomCodecs(schema);
         buildTransports(schema);
         auto byId = buildDatapoints(schema);
         buildPollRanges(schema, byId);
+        buildSinkWindows(schema);
+        buildHeartbeats(schema);
+        buildAckWatches(schema);
+        buildCommands(schema);
+        m_routes = schema.routes;
+    }
+
+    void installEventWiring() {
+        // On Transport reconnect (Connected after Disconnected), force every
+        // SinkWindow attached to that transport to flush its whole snapshot
+        // so PLCs come back with a fresh full picture rather than waiting on
+        // sporadic stages.
+        m_transportEventSub = std::make_unique<bus::Subscription>(
+            m_bus->subscribe<bus::TransportEvent>(
+                [this](bus::TransportEvent const& e) {
+                    if (e.kind != bus::TransportEventKind::Connected) return;
+                    for (auto* sw : m_sinkWindowPtrs) {
+                        if (sw->transportId() == e.transportId) sw->forceFlush();
+                    }
+                }));
+        // On operator-box write into a server transport, fan out into a
+        // SinkWindow on the PLC-side transport via the configured routes.
+        m_serverWriteSub = std::make_unique<bus::Subscription>(
+            m_bus->subscribe<bus::ServerWriteEvent>(
+                [this](bus::ServerWriteEvent const& e) { routeServerWrite(e); }));
+    }
+
+    void routeServerWrite(bus::ServerWriteEvent const& e) {
+        // Routes operate on datapoint IDs; for the server→PLC path, we look
+        // at each `from` datapoint whose source is the server transport and
+        // whose source address falls within the written range, then call
+        // stageRegister on the SinkWindow associated with the `to` datapoint.
+        for (auto const& r : m_routes) {
+            auto fromIt = m_datapointById.find(r.from);
+            auto toIt   = m_datapointById.find(r.to);
+            if (fromIt == m_datapointById.end() || toIt == m_datapointById.end()) continue;
+            auto const& fromDp = fromIt->second;
+            auto const& toDp   = toIt->second;
+            if (!fromDp->source().has_value()) continue;
+            auto const& fromSrc = *fromDp->source();
+            if (fromSrc.transport != e.transportId) continue;
+            if (fromSrc.table     != e.table)       continue;
+            int const offset = fromSrc.address - e.startAddress;
+            if (offset < 0 || offset >= e.values.size()) continue;
+            quint16 const raw = e.values.at(offset);
+
+            // Resolve which SinkWindow owns the sink-side register.
+            if (!toDp->sink().has_value()) continue;
+            auto const& sink = *toDp->sink();
+            module::SinkWindow* target = nullptr;
+            // Look up by named window first, fall back to address-based match.
+            for (auto* sw : m_sinkWindowPtrs) {
+                if (!sink.window.isEmpty() && sw->id() == sink.window) {
+                    target = sw;
+                    break;
+                }
+            }
+            if (!target && !sink.transport.isEmpty()) {
+                for (auto* sw : m_sinkWindowPtrs) {
+                    if (sw->transportId() != sink.transport) continue;
+                    int const addr = sink.address;
+                    if (addr < sw->startAddress()
+                     || addr >= sw->startAddress() + sw->size()) continue;
+                    target = sw;
+                    break;
+                }
+            }
+            if (!target) continue;
+            int const addr = sink.address;
+            if (addr < target->startAddress()
+             || addr >= target->startAddress() + target->size()) continue;
+            quint16 mask = quint16(sink.mask & 0xFFFFu);
+            if (mask == 0) mask = 0xFFFFu;
+            target->stageRegister(addr, raw, mask);
+        }
     }
 
     void registerCustomCodecs(config::ConfigSchema const& schema) {
@@ -165,21 +255,107 @@ private:
 
     void buildTransports(config::ConfigSchema const& schema) {
         for (auto const& tc : schema.transports) {
-            if (tc.kind != transport::TransportKind::ModbusTcpClient) continue;
-            transport::ModbusTcpClientTransport::Config cfg;
-            cfg.id               = tc.id;
-            cfg.host             = tc.host;
-            cfg.port             = tc.port;
-            cfg.slaveId          = tc.slaveId;
-            cfg.connectTimeoutMs = tc.connectTimeoutMs;
-            cfg.scheduler        = tc.scheduler;
-            m_transports.emplace(
-                tc.id,
-                std::make_unique<transport::ModbusTcpClientTransport>(std::move(cfg)));
+            if (tc.kind == transport::TransportKind::ModbusTcpClient) {
+                transport::ModbusTcpClientTransport::Config cfg;
+                cfg.id                   = tc.id;
+                cfg.host                 = tc.host;
+                cfg.port                 = quint16(tc.port);
+                cfg.slaveId              = tc.slaveId;
+                cfg.connectTimeoutMs     = tc.connectTimeoutMs;
+                cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
+                cfg.scheduler            = tc.scheduler;
+                m_transports.emplace(
+                    tc.id,
+                    std::make_unique<transport::ModbusTcpClientTransport>(
+                        std::move(cfg), m_bus.get()));
+            } else if (tc.kind == transport::TransportKind::ModbusTcpServer) {
+                transport::ModbusTcpServerTransport::Config cfg;
+                cfg.id                   = tc.id;
+                cfg.listenAddress        = tc.listenAddress;
+                cfg.listenPort           = quint16(tc.listenPort);
+                cfg.slaveId              = tc.slaveId;
+                cfg.maxClients           = tc.maxClients;
+                cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
+                cfg.listenRanges         = tc.listenRanges;
+                cfg.scheduler            = tc.scheduler;
+                m_transports.emplace(
+                    tc.id,
+                    std::make_unique<transport::ModbusTcpServerTransport>(
+                        std::move(cfg), *m_bus));
+            }
         }
     }
 
     using DpById = std::map<QString, std::shared_ptr<dp::Datapoint>>;
+
+    void buildSinkWindows(config::ConfigSchema const& schema) {
+        for (auto const& sc : schema.sinkWindows) {
+            auto* t = transport(sc.transport);
+            if (!t) continue;
+            module::SinkWindow::Config cfg;
+            cfg.moduleId          = sc.moduleId;
+            cfg.table             = tableFromString(sc.table);
+            cfg.startAddress      = sc.startAddress;
+            cfg.size              = sc.size;
+            cfg.priority          = sc.priority;
+            cfg.debounceMs        = sc.flush.debounceMs;
+            cfg.keepAlivePeriodMs = sc.flush.keepaliveMs;
+            cfg.coalesceWrites    = sc.flush.coalesceWrites;
+            cfg.initial           = sc.initial;
+            auto sw = std::make_unique<module::SinkWindow>(std::move(cfg), *t);
+            auto* raw = sw.get();
+            m_modules->registerModule(std::move(sw));
+            m_sinkWindowPtrs.push_back(raw);
+        }
+    }
+
+    void buildHeartbeats(config::ConfigSchema const& schema) {
+        for (auto const& hc : schema.heartbeats) {
+            auto* t = transport(hc.transport);
+            if (!t) continue;
+            module::Heartbeat::Config cfg;
+            cfg.moduleId = hc.moduleId;
+            cfg.table    = tableFromString(hc.table);
+            cfg.address  = hc.address;
+            cfg.values   = hc.values;
+            cfg.periodMs = hc.periodMs;
+            cfg.priority = hc.priority;
+            m_modules->registerModule(
+                std::make_unique<module::Heartbeat>(std::move(cfg), *t));
+        }
+    }
+
+    void buildAckWatches(config::ConfigSchema const& schema) {
+        for (auto const& ac : schema.ackWatches) {
+            module::AckWatch::Config cfg;
+            cfg.moduleId  = ac.moduleId;
+            cfg.dpId      = ac.dp;
+            cfg.expected  = ac.expected;
+            cfg.timeoutMs = ac.timeoutMs;
+            m_modules->registerModule(
+                std::make_unique<module::AckWatch>(std::move(cfg), *m_bus));
+        }
+    }
+
+    void buildCommands(config::ConfigSchema const& schema) {
+        for (auto const& cc : schema.commands) {
+            auto* t = transport(cc.transport);
+            if (!t) continue;
+            module::Command::Config cfg;
+            cfg.moduleId      = cc.moduleId;
+            cfg.priority      = cc.priority;
+            cfg.interruptable = cc.interruptable;
+            for (auto const& w : cc.writes) {
+                module::Command::Entry e;
+                e.table   = tableFromString(w.table);
+                e.address = w.address;
+                e.value   = w.value;
+                cfg.writes.append(e);
+            }
+            m_modules->registerModule(
+                std::make_unique<module::Command>(std::move(cfg), *t));
+        }
+    }
 
     DpById buildDatapoints(config::ConfigSchema const& schema) {
         DpById out;
@@ -210,6 +386,7 @@ private:
             auto datapoint = std::make_shared<dp::Datapoint>(std::move(spec));
             m_dps->registerDp(datapoint);
             out.emplace(dc.id, datapoint);
+            m_datapointById.emplace(dc.id, datapoint);
         }
         return out;
     }
@@ -266,6 +443,11 @@ private:
     std::unique_ptr<plugin::PluginRegistry>                     m_plugins;
     std::map<QString, std::unique_ptr<transport::Transport>>    m_transports;
     std::vector<module::PollRange*>                             m_pollRangePtrs;
+    std::vector<module::SinkWindow*>                            m_sinkWindowPtrs;
+    std::map<QString, std::shared_ptr<dp::Datapoint>>           m_datapointById;
+    QList<config::RouteConfig>                                  m_routes;
+    std::unique_ptr<bus::Subscription>                          m_transportEventSub;
+    std::unique_ptr<bus::Subscription>                          m_serverWriteSub;
 };
 
 std::unique_ptr<ICore> ICore::create(QQmlContext* qml) {
@@ -275,6 +457,9 @@ std::unique_ptr<ICore> ICore::create(QQmlContext* qml) {
 namespace internal {
 void pollAllOnce(ICore& core) {
     static_cast<CoreImpl&>(core).pollAllOnce();
+}
+void tickSinkWindowsOnce(ICore& core) {
+    static_cast<CoreImpl&>(core).tickSinkWindowsOnce();
 }
 } // namespace internal
 

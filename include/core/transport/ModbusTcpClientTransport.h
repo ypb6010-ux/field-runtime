@@ -6,6 +6,8 @@
 #include "core/core_global.h"
 #include "core/transport/Transport.h"
 
+namespace core::bus { class EventBus; }
+
 namespace core::transport {
 
 // ModbusTcpClientTransport — concrete Transport backed by Qt's
@@ -32,11 +34,14 @@ public:
         int      slaveId       = 1;
         int      connectTimeoutMs = 3000;
         int      requestTimeoutMs = 1000;
+        // > 0 = auto-reconnect after this many ms once state drops to
+        // Disconnected/Error. 0 disables auto-reconnect.
+        int      reconnectIntervalMs = 0;
         // Scheduler configuration passed to the internal SerialScheduler.
         sched::SchedulerConfig scheduler = sched::SchedulerConfig{};
     };
 
-    explicit ModbusTcpClientTransport(Config cfg);
+    explicit ModbusTcpClientTransport(Config cfg, bus::EventBus* bus = nullptr);
     ~ModbusTcpClientTransport() override;
 
     CORE_DISABLE_COPY_MOVE(ModbusTcpClientTransport)
@@ -54,6 +59,8 @@ public:
     WriteResult writeBatch(WriteBatch  const& batch)       override;
 
 private:
+    void armReconnectIfConfigured();
+
     class Impl;
     std::unique_ptr<Impl> m_impl;
 };

@@ -29,6 +29,17 @@ SinkWindow::~SinkWindow() = default;
 int            SinkWindow::size()         const noexcept { return m_cfg.size; }
 int            SinkWindow::startAddress() const noexcept { return m_cfg.startAddress; }
 
+int SinkWindow::tickPeriodMs() const {
+    // Tick at the debounce cadence so a stage's debounce window closes within
+    // one tick. A floor of 10 ms keeps us from monopolising the timer thread
+    // when debounceMs is 0 or pathologically small.
+    int const d = std::max(10, m_cfg.debounceMs);
+    if (m_cfg.keepAlivePeriodMs > 0 && m_cfg.keepAlivePeriodMs < d) {
+        return std::max(10, m_cfg.keepAlivePeriodMs);
+    }
+    return d;
+}
+
 QList<quint16> SinkWindow::snapshot() const {
     std::lock_guard lk(m_mtx);
     return m_snapshot;

@@ -216,6 +216,213 @@ project = "demo
     REQUIRE(result.error().first().field == "toml");
 }
 
+TEST_CASE("ConfigLoader parses the full schema (sink_window / heartbeat / "
+          "ack_watch / command / route)",
+          "[config][schema-full]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id    = "tcp1"
+kind  = "modbus_tcp_client"
+host  = "127.0.0.1"
+port  = 502
+reconnect_interval_ms = 4000
+
+[[transport]]
+id   = "box1"
+kind = "modbus_tcp_server"
+listen_address = "0.0.0.0"
+listen_port    = 5020
+slave_id       = 1
+[[transport.listen_ranges]]
+table = "HR"
+range = [0, 64]
+
+[[poll_range]]
+module_id = "poll.tcp1.hr"
+transport = "tcp1"
+table     = "HR"
+range     = [0, 8]
+period_ms = 100
+
+[[sink_window]]
+module_id = "sink.tcp1.hr"
+transport = "tcp1"
+table     = "HR"
+range     = [100, 4]
+priority  = "High"
+initial   = [0, 0, 0, 0]
+[sink_window.flush]
+debounce_ms  = 30
+keepalive_ms = 5000
+coalesce     = true
+max_retries  = 1
+
+[[heartbeat]]
+module_id = "hb.tcp1"
+transport = "tcp1"
+table     = "HR"
+address   = 999
+value     = 1
+period_ms = 1000
+
+[[ack_watch]]
+module_id  = "ack.start"
+dp         = "feedback"
+expected   = 1
+timeout_ms = 2000
+
+[[command]]
+module_id     = "cmd.start"
+transport     = "tcp1"
+priority      = "High"
+interruptable = false
+[[command.writes]]
+table   = "HR"
+address = 200
+value   = 1
+
+[[datapoint]]
+id   = "feedback"
+kind = "Status"
+type = "U16"
+source = { port="tcp1", table="HR", addr=0 }
+
+[[route]]
+name   = "fwd"
+from   = "feedback"
+to     = "feedback"
+policy = "ContinuousMirror"
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE(result.has_value());
+
+    auto const& s = result.value();
+    REQUIRE(s.transports.size() == 2);
+    REQUIRE(s.transports[0].reconnectIntervalMs == 4000);
+    REQUIRE(s.transports[1].listenRanges.size() == 1);
+    REQUIRE(s.transports[1].listenRanges.first().size == 64);
+
+    REQUIRE(s.sinkWindows.size() == 1);
+    REQUIRE(s.sinkWindows.first().moduleId == "sink.tcp1.hr");
+    REQUIRE(s.sinkWindows.first().startAddress == 100);
+    REQUIRE(s.sinkWindows.first().size == 4);
+    REQUIRE(s.sinkWindows.first().flush.debounceMs == 30);
+    REQUIRE(s.sinkWindows.first().flush.keepaliveMs == 5000);
+    REQUIRE(s.sinkWindows.first().initial.size() == 4);
+
+    REQUIRE(s.heartbeats.size() == 1);
+    REQUIRE(s.heartbeats.first().address == 999);
+    REQUIRE(s.heartbeats.first().values.size() == 1);
+    REQUIRE(s.heartbeats.first().values.first() == 1);
+
+    REQUIRE(s.ackWatches.size() == 1);
+    REQUIRE(s.ackWatches.first().dp == "feedback");
+    REQUIRE(s.ackWatches.first().expected.toLongLong() == 1);
+
+    REQUIRE(s.commands.size() == 1);
+    REQUIRE(s.commands.first().writes.size() == 1);
+    REQUIRE(s.commands.first().writes.first().address == 200);
+
+    REQUIRE(s.routes.size() == 1);
+    REQUIRE(s.routes.first().from == "feedback");
+    REQUIRE(s.routes.first().to   == "feedback");
+}
+
+TEST_CASE("ConfigLoader rejects module_id collisions across sections",
+          "[config][validate]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[[poll_range]]
+module_id = "same"
+transport = "tcp1"
+table     = "HR"
+range     = [0, 4]
+period_ms = 100
+
+[[heartbeat]]
+module_id = "same"
+transport = "tcp1"
+address   = 50
+value     = 1
+period_ms = 1000
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+    bool found = false;
+    for (auto const& e : result.error()) {
+        if (e.field == "module_id" && e.message.contains("duplicate")) {
+            found = true; break;
+        }
+    }
+    REQUIRE(found);
+}
+
+TEST_CASE("ConfigLoader rejects route referencing unknown datapoint",
+          "[config][validate]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[[datapoint]]
+id   = "real"
+kind = "Status"
+type = "U16"
+source = { port="tcp1", table="HR", addr=0 }
+
+[[route]]
+from   = "ghost"
+to     = "real"
+policy = "ContinuousMirror"
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+    bool found = false;
+    for (auto const& e : result.error()) {
+        if (e.section.startsWith("route") && e.field == "from"
+         && e.message.contains("ghost")) {
+            found = true; break;
+        }
+    }
+    REQUIRE(found);
+}
+
+TEST_CASE("ConfigLoader rejects ack_watch referencing unknown datapoint",
+          "[config][validate]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[ack_watch]]
+module_id = "ack.x"
+dp        = "ghost"
+expected  = 1
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+    bool found = false;
+    for (auto const& e : result.error()) {
+        if (e.section.startsWith("ack_watch") && e.field == "dp") {
+            found = true; break;
+        }
+    }
+    REQUIRE(found);
+}
+
 TEST_CASE("ConfigLoader parses enum_u16 codec map", "[config][codec]") {
     QTemporaryFile temp;
     auto path = writeTomlFile(R"toml(

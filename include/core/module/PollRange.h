@@ -50,12 +50,13 @@ public:
     // state machine.
     sched::SubmitResult pollOnce();
 
-    // FunctionalModule — Phase 1 leaves periodic execution to the caller.
-    // Phase 2 hooks a QTimer here driven by ModuleRegistry::startAll().
+    // FunctionalModule
     void start()  override;
     void stop()   override;
     void pause()  override;
     void resume() override;
+    int  tickPeriodMs() const override { return m_periodMs; }
+    void driveTick()         override { (void)pollOnce(); }
 
 private:
     struct Binding {

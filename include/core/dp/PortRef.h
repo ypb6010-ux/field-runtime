@@ -27,6 +27,10 @@ struct PortRef {
     double                             scale = 1.0;
     double                             offset = 0.0;
     std::shared_ptr<core::codec::Codec> codec;
+    // Sink-only — names the SinkWindow module-id that owns this register.
+    // When set, router code stages into that SinkWindow rather than the
+    // raw transport at `address`.
+    QString                             window;
 };
 
 } // namespace core::dp

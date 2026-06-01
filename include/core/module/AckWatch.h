@@ -46,6 +46,8 @@ public:
     void stop()   override;
     void pause()  override;
     void resume() override;
+    int  tickPeriodMs() const override { return 0; }
+    void driveTick()         override {}
 
 private:
     class Impl;

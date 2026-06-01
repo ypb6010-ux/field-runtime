@@ -3,6 +3,9 @@
 
 #include <QTemporaryFile>
 
+#include <chrono>
+#include <thread>
+
 #include "core/ICore.h"
 #include "core/bus/BusEvents.h"
 #include "core/bus/EventBus.h"
@@ -11,6 +14,9 @@
 #include "core/dp/Datapoint.h"
 #include "core/dp/DatapointRegistry.h"
 #include "core/internal/Testing.h"
+#include "core/module/ModuleRegistry.h"
+#include "core/module/SinkWindow.h"
+#include "core/transport/ModbusTcpClientTransport.h"
 #include "core/transport/Transport.h"
 #include "mocks/ModbusTestServer.h"
 
@@ -148,4 +154,125 @@ TEST_CASE("ICore registers builtin codecs at construction",
     REQUIRE(core->codecs().find("builtin.u16") != nullptr);
     REQUIRE(core->codecs().find("builtin.f32") != nullptr);
     REQUIRE(core->codecs().find("builtin.bool") != nullptr);
+}
+
+TEST_CASE("Operator-box write through server → SinkWindow → PLC client",
+          "[core][e2e][server-flow]") {
+    auto plcPort = nextE2EPort();
+    auto boxPort = nextE2EPort();
+
+    // PLC fixture — the destination for SinkWindow flushes. Need register
+    // count above the SinkWindow's write window (addresses 100..103).
+    core::test::ModbusTestServer plc(plcPort, /*slaveId=*/1, /*registers=*/256);
+    REQUIRE(plc.listening());
+
+    QTemporaryFile cfg;
+    auto path = writeToml(QString(R"toml(
+[meta]
+project = "server-flow"
+
+[[transport]]
+id    = "tcp1"
+kind  = "modbus_tcp_client"
+host  = "127.0.0.1"
+port  = %1
+slave_id = 1
+connect_timeout_ms = 500
+
+[[transport]]
+id   = "box1"
+kind = "modbus_tcp_server"
+listen_address = "127.0.0.1"
+listen_port    = %2
+slave_id       = 1
+[[transport.listen_ranges]]
+table = "HR"
+range = [0, 32]
+
+[[sink_window]]
+module_id = "sink.tcp1.hr"
+transport = "tcp1"
+table     = "HR"
+range     = [100, 4]
+priority  = "High"
+[sink_window.flush]
+debounce_ms  = 10
+keepalive_ms = 0
+coalesce     = true
+
+[[datapoint]]
+id   = "cmd_in"
+kind = "Command"
+type = "U16"
+source = { port="box1", table="HR", addr=0 }
+sink   = { port="tcp1", table="HR", addr=100, window="sink.tcp1.hr" }
+
+[[route]]
+name   = "box-to-plc"
+from   = "cmd_in"
+to     = "cmd_in"
+policy = "ContinuousMirror"
+)toml").arg(plcPort).arg(boxPort), cfg);
+
+    auto core = ICore::create(nullptr);
+    auto loaded = core->loadConfig(path);
+    REQUIRE(loaded.has_value());
+
+    // Sanity probe — verify the SinkWindow router actually receives writes.
+    std::atomic<int> serverWriteEvents{0};
+    auto probe = core->bus().subscribe<bus::ServerWriteEvent>(
+        [&](bus::ServerWriteEvent const& e) {
+            if (e.transportId == "box1") serverWriteEvents.fetch_add(1);
+        });
+
+    core->start();
+    REQUIRE(core->transport("tcp1")->state() == transport::ConnectionState::Connected);
+    REQUIRE(core->transport("box1")->state() == transport::ConnectionState::Connected);
+
+    // Operator box (acts as a Modbus client against our server transport).
+    transport::ModbusTcpClientTransport::Config opCfg;
+    opCfg.id   = "opbox";
+    opCfg.host = "127.0.0.1";
+    opCfg.port = boxPort;
+    opCfg.slaveId = 1;
+    opCfg.connectTimeoutMs = 500;
+    opCfg.requestTimeoutMs = 500;
+    transport::ModbusTcpClientTransport opbox(opCfg);
+    REQUIRE(opbox.connect().has_value());
+
+    auto w = opbox.writeBatch({QModbusDataUnit::HoldingRegisters, 0,
+                                {0x1234}});
+    REQUIRE(w.ok);
+
+    // Give the server thread a beat to fire ServerWriteEvent → router → stage.
+    auto deadlineEvt = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (std::chrono::steady_clock::now() < deadlineEvt
+        && serverWriteEvents.load() < 1) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(serverWriteEvents.load() >= 1);
+
+    // Snapshot inspection — verify the route handler staged into the window.
+    auto* swMod = dynamic_cast<core::module::SinkWindow*>(
+        core->modules().find("sink.tcp1.hr"));
+    REQUIRE(swMod != nullptr);
+    auto snap = swMod->snapshot();
+    REQUIRE(snap.size() == 4);
+    REQUIRE(snap[0] == 0x1234);
+
+    // Trigger a sink-window tick so the staged value flushes to the PLC.
+    internal::tickSinkWindowsOnce(*core);
+
+    // Read back from the PLC fixture and verify.
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    quint16 raw = 0;
+    while (std::chrono::steady_clock::now() < deadline) {
+        raw = plc.getData(QModbusDataUnit::HoldingRegisters, 100);
+        if (raw == 0x1234) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE(raw == 0x1234);
+
+    opbox.disconnect();
+    core->stop();
 }

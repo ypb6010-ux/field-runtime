@@ -172,6 +172,29 @@ TransportConfig parseTransport(toml::table const& t,
         c.scheduler.circuitBreakerThreshold = getInt(*s, "circuit_breaker_threshold", 10);
         c.scheduler.circuitBreakerOpenMs    = getInt(*s, "circuit_breaker_open_ms", 5000);
     }
+    if (auto lr = t["listen_ranges"].as_array()) {
+        for (auto&& n : *lr) {
+            if (auto wt = n.as_table()) {
+                transport::WatchRange r;
+                QString const tbl = getStr(*wt, "table", QStringLiteral("HR"));
+                if (tbl == "HR" || tbl == "HoldingRegisters")
+                    r.table = QModbusDataUnit::HoldingRegisters;
+                else if (tbl == "IR" || tbl == "InputRegisters")
+                    r.table = QModbusDataUnit::InputRegisters;
+                else if (tbl == "Coil" || tbl == "Coils")
+                    r.table = QModbusDataUnit::Coils;
+                else if (tbl == "DI" || tbl == "DiscreteInputs")
+                    r.table = QModbusDataUnit::DiscreteInputs;
+                else
+                    r.table = QModbusDataUnit::HoldingRegisters;
+                if (auto arr = (*wt)["range"].as_array(); arr && arr->size() == 2) {
+                    r.startAddress = int(arr->at(0).value<int64_t>().value_or(0));
+                    r.size         = int(arr->at(1).value<int64_t>().value_or(0));
+                }
+                c.listenRanges.append(r);
+            }
+        }
+    }
     return c;
 }
 
@@ -219,6 +242,138 @@ PollRangeConfig parsePollRange(toml::table const& t,
                         int(t.source().begin.line)});
     }
     c.priority = parsePriority(getStr(t, "priority", "Normal"));
+    return c;
+}
+
+QList<quint16> parseU16Array(toml::array const& arr) {
+    QList<quint16> out;
+    for (auto&& n : arr) {
+        if (auto i = n.value<int64_t>()) out.append(quint16(*i));
+    }
+    return out;
+}
+
+SinkWindowConfig parseSinkWindow(toml::table const& t,
+                                   int                index,
+                                   ValidationErrors&   errs) {
+    auto const section = QStringLiteral("sink_window[%1]").arg(index);
+    SinkWindowConfig c;
+    requireStr(t, "module_id", section, c.moduleId,  errs);
+    requireStr(t, "transport", section, c.transport, errs);
+    requireStr(t, "table",     section, c.table,     errs);
+    if (auto arr = t["range"].as_array(); arr && arr->size() == 2) {
+        c.startAddress = int(arr->at(0).value<int64_t>().value_or(0));
+        c.size         = int(arr->at(1).value<int64_t>().value_or(0));
+    } else {
+        errs.push_back({section, "range",
+                        QStringLiteral("expected [start, size] array"),
+                        int(t.source().begin.line)});
+    }
+    if (c.size <= 0) {
+        errs.push_back({section, "range",
+                        QStringLiteral("size must be > 0"),
+                        int(t.source().begin.line)});
+    }
+    c.priority = parsePriority(getStr(t, "priority", "High"));
+    if (auto f = t["flush"].as_table()) {
+        c.flush.debounceMs     = getInt(*f, "debounce_ms", 20);
+        c.flush.keepaliveMs    = getInt(*f, "keepalive_ms", 0);
+        c.flush.coalesceWrites = getBool(*f, "coalesce").value_or(true);
+        c.flush.maxRetries     = getInt(*f, "max_retries", 2);
+    }
+    if (auto arr = t["initial"].as_array()) {
+        c.initial = parseU16Array(*arr);
+    }
+    return c;
+}
+
+HeartbeatConfig parseHeartbeat(toml::table const& t,
+                                 int                index,
+                                 ValidationErrors&   errs) {
+    auto const section = QStringLiteral("heartbeat[%1]").arg(index);
+    HeartbeatConfig c;
+    requireStr(t, "module_id", section, c.moduleId,  errs);
+    requireStr(t, "transport", section, c.transport, errs);
+    c.table       = getStr(t, "table", QStringLiteral("HR"));
+    c.address     = getInt(t, "address", 0);
+    if (auto arr = t["values"].as_array()) {
+        c.values = parseU16Array(*arr);
+    } else if (auto v = getInt(t, "value")) {
+        c.values.append(quint16(*v));
+    }
+    if (c.values.isEmpty()) {
+        errs.push_back({section, "values",
+                        QStringLiteral("heartbeat requires non-empty values"),
+                        int(t.source().begin.line)});
+    }
+    c.periodMs    = getInt(t, "period_ms", 0);
+    if (c.periodMs <= 0) {
+        errs.push_back({section, "period_ms",
+                        QStringLiteral("period_ms must be > 0"),
+                        int(t.source().begin.line)});
+    }
+    c.priority    = parsePriority(getStr(t, "priority", "Low"));
+    c.incrementer = getStr(t, "incrementer", QStringLiteral("none"));
+    return c;
+}
+
+AckWatchConfig parseAckWatch(toml::table const& t,
+                               int                index,
+                               ValidationErrors&   errs) {
+    auto const section = QStringLiteral("ack_watch[%1]").arg(index);
+    AckWatchConfig c;
+    requireStr(t, "module_id", section, c.moduleId, errs);
+    requireStr(t, "dp",        section, c.dp,       errs);
+    c.timeoutMs = getInt(t, "timeout_ms", 3000);
+    if (auto v = t["expected"]; v) {
+        if (auto i = v.value<int64_t>())          c.expected = qint64(*i);
+        else if (auto b = v.value<bool>())        c.expected = *b;
+        else if (auto s = v.value<std::string>()) c.expected = qstr(*s);
+        else if (auto d = v.value<double>())      c.expected = *d;
+    }
+    return c;
+}
+
+CommandConfig parseCommand(toml::table const& t,
+                             int                index,
+                             ValidationErrors&   errs) {
+    auto const section = QStringLiteral("command[%1]").arg(index);
+    CommandConfig c;
+    requireStr(t, "module_id", section, c.moduleId,  errs);
+    requireStr(t, "transport", section, c.transport, errs);
+    c.priority      = parsePriority(getStr(t, "priority", "High"));
+    c.interruptable = getBool(t, "interruptable").value_or(false);
+    c.trigger       = getStr(t, "trigger", {});
+    if (auto arr = t["writes"].as_array()) {
+        int wi = 0;
+        for (auto&& n : *arr) {
+            if (auto wt = n.as_table()) {
+                CommandWriteEntry e;
+                e.table   = getStr(*wt, "table", QStringLiteral("HR"));
+                e.address = getInt(*wt, "address", 0);
+                e.value   = quint16(getInt(*wt, "value", 0));
+                c.writes.append(e);
+            }
+            ++wi;
+        }
+    }
+    if (c.writes.isEmpty()) {
+        errs.push_back({section, "writes",
+                        QStringLiteral("command requires non-empty writes"),
+                        int(t.source().begin.line)});
+    }
+    return c;
+}
+
+RouteConfig parseRoute(toml::table const& t,
+                        int                index,
+                        ValidationErrors&   errs) {
+    auto const section = QStringLiteral("route[%1]").arg(index);
+    RouteConfig c;
+    c.name   = getStr(t, "name", {});
+    requireStr(t, "from", section, c.from, errs);
+    requireStr(t, "to",   section, c.to,   errs);
+    c.policy = getStr(t, "policy", QStringLiteral("ContinuousMirror"));
     return c;
 }
 
@@ -316,8 +471,22 @@ void checkUnique(QList<QString> const& ids, QString const& section,
 void validateRefs(ConfigSchema const& s, ValidationErrors& errs) {
     std::set<QString> transports;
     for (auto const& t : s.transports) transports.insert(t.id);
-    std::set<QString> modules;
-    for (auto const& m : s.pollRanges)  modules.insert(m.moduleId);
+
+    std::set<QString> sinkWindowIds;
+    for (auto const& sw : s.sinkWindows) sinkWindowIds.insert(sw.moduleId);
+
+    std::set<QString> datapointIds;
+    for (auto const& d : s.datapoints) datapointIds.insert(d.id);
+
+    auto checkTransportRef = [&](QString const& tid,
+                                  QString const& section,
+                                  QString const& field) {
+        if (!tid.isEmpty() && !transports.count(tid)) {
+            errs.push_back({section, field,
+                            QStringLiteral("references unknown transport '%1'").arg(tid),
+                            -1});
+        }
+    };
 
     auto checkPortRef = [&](PortRefConfig const& p, QString const& section) {
         if (!p.port.isEmpty() && !transports.count(p.port)) {
@@ -328,28 +497,39 @@ void validateRefs(ConfigSchema const& s, ValidationErrors& errs) {
     };
 
     for (int i = 0; i < s.pollRanges.size(); ++i) {
-        auto const& pr = s.pollRanges[i];
-        if (!pr.transport.isEmpty() && !transports.count(pr.transport)) {
-            errs.push_back({QStringLiteral("poll_range[%1]").arg(i), "transport",
-                            QStringLiteral("references unknown transport '%1'")
-                                .arg(pr.transport),
-                            -1});
-        }
+        checkTransportRef(s.pollRanges[i].transport,
+                          QStringLiteral("poll_range[%1]").arg(i), "transport");
+    }
+    for (int i = 0; i < s.sinkWindows.size(); ++i) {
+        checkTransportRef(s.sinkWindows[i].transport,
+                          QStringLiteral("sink_window[%1]").arg(i), "transport");
+    }
+    for (int i = 0; i < s.heartbeats.size(); ++i) {
+        checkTransportRef(s.heartbeats[i].transport,
+                          QStringLiteral("heartbeat[%1]").arg(i), "transport");
+    }
+    for (int i = 0; i < s.commands.size(); ++i) {
+        checkTransportRef(s.commands[i].transport,
+                          QStringLiteral("command[%1]").arg(i), "transport");
     }
 
     for (int i = 0; i < s.datapoints.size(); ++i) {
         auto const& d  = s.datapoints[i];
         auto const sec = QStringLiteral("datapoint[%1]").arg(i);
         if (d.hasSource) checkPortRef(d.source, sec + ".source");
-        if (d.hasSink && !d.sink.window.isEmpty()) {
-            // sink.window points to a sink_window.module_id. Phase 1 has no
-            // sink_window section yet, so just check module_id existence.
-            if (!modules.count(d.sink.window)) {
+        if (d.hasSink) {
+            // Sink either references a SinkWindow by id (preferred for
+            // staged batch writes) and / or names a transport `port` for
+            // direct writes. When both are set, `window` wins; `port` is
+            // expected to match the SinkWindow's underlying transport and
+            // is purely informational.
+            if (!d.sink.window.isEmpty() && !sinkWindowIds.count(d.sink.window)) {
                 errs.push_back({sec + ".sink", "window",
                                 QStringLiteral("references unknown sink_window '%1'")
                                     .arg(d.sink.window),
                                 -1});
             }
+            checkPortRef(d.sink, sec + ".sink");
         }
         if (dp::isMultiRegister(d.type) && d.hasSource && d.source.wordOrder.isEmpty()) {
             errs.push_back({sec + ".source", "wordOrder",
@@ -362,6 +542,28 @@ void validateRefs(ConfigSchema const& s, ValidationErrors& errs) {
             errs.push_back({sec + ".source", "bit",
                             QStringLiteral("type=Bool requires bit (0..15)"),
                             -1});
+        }
+    }
+
+    for (int i = 0; i < s.ackWatches.size(); ++i) {
+        auto const& a   = s.ackWatches[i];
+        auto const sec  = QStringLiteral("ack_watch[%1]").arg(i);
+        if (!a.dp.isEmpty() && !datapointIds.count(a.dp)) {
+            errs.push_back({sec, "dp",
+                QStringLiteral("references unknown datapoint '%1'").arg(a.dp), -1});
+        }
+    }
+
+    for (int i = 0; i < s.routes.size(); ++i) {
+        auto const& r   = s.routes[i];
+        auto const sec  = QStringLiteral("route[%1]").arg(i);
+        if (!r.from.isEmpty() && !datapointIds.count(r.from)) {
+            errs.push_back({sec, "from",
+                QStringLiteral("references unknown datapoint '%1'").arg(r.from), -1});
+        }
+        if (!r.to.isEmpty() && !datapointIds.count(r.to)) {
+            errs.push_back({sec, "to",
+                QStringLiteral("references unknown datapoint '%1'").arg(r.to), -1});
         }
     }
 }
@@ -395,10 +597,15 @@ ConfigLoader::loadFromToml(QString const& path) {
     }
 
     schema.meta = parseMeta(root, errs);
-    parseArray(root, "transport",  schema.transports, parseTransport, errs);
-    parseArray(root, "codec",      schema.codecs,     parseCodec,     errs);
-    parseArray(root, "poll_range", schema.pollRanges, parsePollRange, errs);
-    parseArray(root, "datapoint",  schema.datapoints, parseDatapoint, errs);
+    parseArray(root, "transport",   schema.transports,  parseTransport,  errs);
+    parseArray(root, "codec",       schema.codecs,      parseCodec,      errs);
+    parseArray(root, "poll_range",  schema.pollRanges,  parsePollRange,  errs);
+    parseArray(root, "sink_window", schema.sinkWindows, parseSinkWindow, errs);
+    parseArray(root, "heartbeat",   schema.heartbeats,  parseHeartbeat,  errs);
+    parseArray(root, "ack_watch",   schema.ackWatches,  parseAckWatch,   errs);
+    parseArray(root, "command",     schema.commands,    parseCommand,    errs);
+    parseArray(root, "datapoint",   schema.datapoints,  parseDatapoint,  errs);
+    parseArray(root, "route",       schema.routes,      parseRoute,      errs);
 
     auto vErrs = validate(schema);
     if (vErrs.has_value()) {
@@ -419,9 +626,14 @@ ConfigLoader::validate(ConfigSchema const& schema) {
     for (auto const& t : schema.transports) tIds.append(t.id);
     checkUnique(tIds, "transport", "id", errs);
 
+    // Module IDs are unique across all module-bearing sections.
     QList<QString> mIds;
-    for (auto const& m : schema.pollRanges) mIds.append(m.moduleId);
-    checkUnique(mIds, "poll_range", "module_id", errs);
+    for (auto const& m : schema.pollRanges)  mIds.append(m.moduleId);
+    for (auto const& m : schema.sinkWindows) mIds.append(m.moduleId);
+    for (auto const& m : schema.heartbeats)  mIds.append(m.moduleId);
+    for (auto const& m : schema.ackWatches)  mIds.append(m.moduleId);
+    for (auto const& m : schema.commands)    mIds.append(m.moduleId);
+    checkUnique(mIds, "module", "module_id", errs);
 
     QList<QString> dIds;
     for (auto const& d : schema.datapoints) dIds.append(d.id);

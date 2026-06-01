@@ -28,6 +28,8 @@ add_executable(CoreTests
     unit/ModbusTcpServerTransportTests.cpp
     unit/ConfigLoaderTests.cpp
     unit/CoreEndToEndTests.cpp
+    unit/ModuleRegistryTickTests.cpp
+    unit/TransportReconnectTests.cpp
 )
 
 find_package(Qt6 REQUIRED COMPONENTS Test)

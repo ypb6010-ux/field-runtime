@@ -27,6 +27,12 @@ public:
     virtual void pause()  = 0;
     virtual void resume() = 0;
 
+    // Tick interface — ModuleRegistry's QTimer driver calls `driveTick()` at
+    // the module's preferred cadence. `tickPeriodMs() == 0` disables auto
+    // driving (Command and AckWatch are invoked imperatively).
+    virtual int  tickPeriodMs() const = 0;
+    virtual void driveTick()          = 0;
+
 protected:
     QString             m_id;
     QString             m_transportId;

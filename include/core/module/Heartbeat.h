@@ -47,6 +47,8 @@ public:
     void stop()   override;
     void pause()  override;
     void resume() override;
+    int  tickPeriodMs() const override { return m_cfg.periodMs; }
+    void driveTick()         override { (void)onTick(); }
 
 private:
     transport::Transport*                  m_transport;
