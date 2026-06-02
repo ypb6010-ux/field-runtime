@@ -17,6 +17,7 @@ option(CORE_BUILD_LUA      "Enable Lua codec support"                OFF)
 option(CORE_BUILD_OPCUA    "Enable OPC UA Transport (Qt6::OpcUa)"    ON)
 option(CORE_BUILD_MQTT_QT  "Enable MQTT Transport (Qt6::Mqtt)"       ON)
 option(CORE_BUILD_MQTT_PAHO "Enable MQTT Transport (paho.mqtt.cpp)"  ON)
+option(CORE_BUILD_PERSISTENCE "Build CorePersistence module (QxOrm)" OFF)
 
 # ---------------------------------------------------------------------------
 # Dependencies
@@ -126,4 +127,8 @@ endif()
 
 if(CORE_BUILD_EXAMPLES)
     add_subdirectory(examples)
+endif()
+
+if(CORE_BUILD_PERSISTENCE)
+    add_subdirectory(persistence)
 endif()
