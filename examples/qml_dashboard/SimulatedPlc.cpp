@@ -41,6 +41,7 @@ bool SimulatedPlc::start() {
             {QModbusDataUnit::HoldingRegisters,
              {QModbusDataUnit::HoldingRegisters, 0, 16}},
         });
+        m_server->setServerAddress(1);   // respond to unit id 1 (the client's slave_id)
         m_server->setConnectionParameter(QModbusDevice::NetworkPortParameter, m_port);
         m_server->setConnectionParameter(QModbusDevice::NetworkAddressParameter,
                                          QStringLiteral("127.0.0.1"));

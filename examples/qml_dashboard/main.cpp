@@ -15,6 +15,7 @@
 
 #include "core/ICore.h"
 #include "core/log/Logger.h"
+#include "core/transport/Transport.h"
 
 #include "DemoController.h"
 #include "SimulatedPlc.h"
@@ -77,6 +78,12 @@ int main(int argc, char* argv[]) {
     // (flushing logger + persistence), then count what landed and quit.
     if (qEnvironmentVariableIsSet("DASHBOARD_SELFTEST")) {
         QTimer::singleShot(4000, &app, [&]() {
+            if (auto* t = core->transport(QStringLiteral("plc1"))) {
+                auto s = t->scheduler().stats();
+                qInfo("SELFTEST plc1 submitted=%llu completed=%llu p50=%dms p99=%dms",
+                      (unsigned long long)s.totalSubmitted,
+                      (unsigned long long)s.totalCompleted, s.p50LatencyMs, s.p99LatencyMs);
+            }
             controller.emitOperation(QStringLiteral("selftest"), QStringLiteral("line1"));
             core->stop();
             QThread::msleep(700);   // let the persistence writer drain

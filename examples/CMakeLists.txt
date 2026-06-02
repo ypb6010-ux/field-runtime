@@ -10,6 +10,9 @@ target_link_libraries(example_operator_box_to_plc PRIVATE Core::Core Qt6::Core)
 add_executable(example_stats_dashboard stats_dashboard/main.cpp)
 target_link_libraries(example_stats_dashboard PRIVATE Core::Core Qt6::Core)
 
+add_executable(diag_modbus_latency diag_modbus_latency/main.cpp)
+target_link_libraries(diag_modbus_latency PRIVATE Core::Core Qt6::Core Qt6::SerialBus)
+
 # ── qml_dashboard: QML showcase for the logging + persistence modules ──────
 if(CORE_BUILD_QML)
     find_package(Qt6 REQUIRED COMPONENTS Gui Qml Quick QuickControls2)
