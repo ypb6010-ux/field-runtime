@@ -1,75 +1,106 @@
 #include "core/module/ModuleRegistry.h"
 
+#include <map>
 #include <utility>
 #include <vector>
 
 #include <QObject>
-#include <QPointer>
+#include <QThread>
 #include <QTimer>
 
 #include "core/module/FunctionalModule.h"
 
 namespace core::module {
 
-// TickDriver — owns a QTimer per module with tickPeriodMs > 0. Lives on the
-// thread that called ModuleRegistry::startAll(); QTimer fires on that
-// thread's event loop. driveTick() implementations are non-blocking on the
-// timer thread because all blocking I/O is funneled through transport
-// worker threads via scheduler().submit(...).
-class ModuleRegistry::TickDriver : public QObject {
+// TickDriver — drives each auto-ticking module's driveTick() on a dedicated
+// worker thread, grouped by transport.
+//
+// driveTick() is NOT non-blocking: PollRange / SinkWindow / Heartbeat call
+// scheduler().submit(...), which runs the work on the calling thread and
+// blocks on the transport's synchronous read/write until the reply (or a
+// timeout) arrives. If the tick fired on the GUI thread it would freeze the UI
+// for the duration of every poll (and far longer when a PLC is slow or down).
+//
+// So we give each transport its own tick thread: the blocking happens there,
+// never on the GUI thread, and a slow/unreachable PLC on one transport cannot
+// stall ticks on another. The modules themselves are plain (non-QObject) and
+// internally synchronized, so calling driveTick() from a worker thread is safe.
+class ModuleRegistry::TickDriver {
 public:
     TickDriver() = default;
-    ~TickDriver() override { stopAll(); }
+    ~TickDriver() { stopAll(); }
 
     void start(FunctionalModule* mod) {
         if (!mod) return;
         int const period = mod->tickPeriodMs();
         if (period <= 0) return;
-        if (m_timers.count(mod) != 0) return;
-        auto* t = new QTimer(this);
-        t->setInterval(period);
-        t->setSingleShot(false);
-        QPointer<TickDriver> self(this);
-        QObject::connect(t, &QTimer::timeout, this, [self, mod]() {
-            if (!self) return;
-            mod->driveTick();
-        });
-        t->start();
-        m_timers.emplace(mod, t);
-    }
 
-    void stop(FunctionalModule* mod) {
-        auto it = m_timers.find(mod);
-        if (it == m_timers.end()) return;
-        it->second->stop();
-        it->second->deleteLater();
-        m_timers.erase(it);
+        QString key = mod->transportId();
+        if (key.isEmpty()) key = QStringLiteral("<none>");
+        QObject* anchor = ensureLane(key);
+
+        // Create + start the timer on the lane's worker thread so its timeout —
+        // and the blocking driveTick() it triggers — run off the caller thread.
+        QMetaObject::invokeMethod(anchor, [anchor, mod, period]() {
+            auto* t = new QTimer(anchor);              // child → lives on this thread
+            t->setInterval(period);
+            t->setSingleShot(false);
+            QObject::connect(t, &QTimer::timeout, t, [mod]() { mod->driveTick(); });
+            t->start();
+        }, Qt::BlockingQueuedConnection);
     }
 
     void stopAll() {
-        for (auto& [_, t] : m_timers) {
-            t->stop();
-            t->deleteLater();
-        }
-        m_timers.clear();
-    }
-
-    void pauseAll() {
-        for (auto& [_, t] : m_timers) t->stop();
-    }
-
-    void resumeAll() {
-        for (auto& [mod, t] : m_timers) {
-            int const p = mod->tickPeriodMs();
-            if (p > 0) {
-                t->setInterval(p);
-                t->start();
+        for (auto& [_, lane] : m_lanes) {
+            if (lane.anchor) {
+                QObject* a = lane.anchor;
+                // Delete the anchor (and its child timers) on its own thread —
+                // destroying a QObject from a foreign thread aborts the process.
+                QMetaObject::invokeMethod(a, [a]() { delete a; },
+                                          Qt::BlockingQueuedConnection);
+            }
+            if (lane.thread) {
+                lane.thread->quit();
+                lane.thread->wait();
+                delete lane.thread;
             }
         }
+        m_lanes.clear();
     }
 
+    void pauseAll()  { forEachLaneTimers([](QTimer* t) { t->stop(); }); }
+    void resumeAll() { forEachLaneTimers([](QTimer* t) { if (!t->isActive()) t->start(); }); }
+
 private:
-    std::map<FunctionalModule*, QTimer*> m_timers;
+    struct Lane {
+        QThread* thread = nullptr;
+        QObject* anchor = nullptr;   // parent of the lane's timers; lives on `thread`
+    };
+
+    QObject* ensureLane(QString const& key) {
+        auto it = m_lanes.find(key);
+        if (it != m_lanes.end()) return it->second.anchor;
+        Lane lane;
+        lane.thread = new QThread;
+        lane.anchor = new QObject;          // created here, then handed to the thread
+        lane.anchor->moveToThread(lane.thread);
+        lane.thread->start();
+        auto [ins, ok] = m_lanes.emplace(key, lane);
+        return ins->second.anchor;
+    }
+
+    template <class F>
+    void forEachLaneTimers(F fn) {
+        for (auto& [_, lane] : m_lanes) {
+            QObject* a = lane.anchor;
+            if (!a) continue;
+            QMetaObject::invokeMethod(a, [a, fn]() {
+                for (auto* t : a->findChildren<QTimer*>()) fn(t);
+            }, Qt::BlockingQueuedConnection);
+        }
+    }
+
+    std::map<QString, Lane> m_lanes;   // by transportId
 };
 
 ModuleRegistry::ModuleRegistry()
