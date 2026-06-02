@@ -138,6 +138,7 @@ MetaConfig parseMeta(toml::table const& root, ValidationErrors& /*errs*/) {
         m.project   = getStr(*t, "project",   {});
         m.version   = getStr(*t, "version",   {});
         m.generated = getStr(*t, "generated", {});
+        m.logLevel  = getStr(*t, "log_level", {});
     }
     return m;
 }

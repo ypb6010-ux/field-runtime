@@ -15,6 +15,7 @@ namespace core::codec    { class CodecRegistry; }
 namespace core::module   { class ModuleRegistry; }
 namespace core::plugin   { class PluginRegistry; }
 namespace core::transport{ class Transport; }
+namespace core::log      { class Logger; }
 
 namespace core {
 
@@ -33,6 +34,7 @@ public:
     virtual codec::CodecRegistry&     codecs()     = 0;
     virtual module::ModuleRegistry&   modules()    = 0;
     virtual plugin::PluginRegistry&   plugins()    = 0;
+    virtual log::Logger&              logger()     = 0;
 
     virtual transport::Transport*     transport(QString const& id) const = 0;
 

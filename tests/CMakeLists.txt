@@ -34,6 +34,7 @@ add_executable(CoreTests
     unit/ModbusRtuTransportTests.cpp
     unit/OpcUaTransportTests.cpp
     unit/MqttTransportTests.cpp
+    unit/LoggerTests.cpp
 )
 
 find_package(Qt6 REQUIRED COMPONENTS Test)

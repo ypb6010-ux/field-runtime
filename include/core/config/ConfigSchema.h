@@ -19,6 +19,7 @@ struct MetaConfig {
     QString project;
     QString version;
     QString generated;
+    QString logLevel;   // trace|debug|info|warn|error|critical; empty = default
 };
 
 struct TransportConfig {

@@ -20,6 +20,9 @@
 #include "core/dp/Datapoint.h"
 #include "core/dp/DatapointRegistry.h"
 #include "core/dp/PortRef.h"
+#include "core/log/Logger.h"
+#include "core/log/Sinks.h"
+#include "core/qml/LogBridge.h"
 #include "core/module/AckWatch.h"
 #include "core/module/Command.h"
 #include "core/module/Heartbeat.h"
@@ -90,12 +93,17 @@ class CoreImpl : public ICore {
 public:
     explicit CoreImpl(QQmlContext* qml)
         : m_qml(qml)
+        , m_logger(std::make_unique<log::Logger>())
         , m_bus(std::make_unique<bus::EventBus>())
         , m_codecs(std::make_unique<codec::CodecRegistry>())
         , m_dps(std::make_unique<dp::DatapointRegistry>())
         , m_modules(std::make_unique<module::ModuleRegistry>())
         , m_plugins(std::make_unique<plugin::PluginRegistry>()) {
         m_codecs->loadBuiltins();
+        // Built-in console sink so diagnostics surface out of the box; the app
+        // adds file / DB sinks via logger().addSink(...).
+        m_logger->addSink(std::make_shared<log::ConsoleSink>());
+        installLogBridge();
     }
 
     ~CoreImpl() override {
@@ -114,15 +122,35 @@ public:
         m_dps.reset();
         m_codecs.reset();
         m_bus.reset();
+        // Logger last — subsystems above may log during teardown.
+        m_logBridge.reset();
+        if (m_logger) m_logger->stop();
+        m_logger.reset();
     }
 
     std::expected<void, config::ValidationErrors>
     loadConfig(QString const& path) override {
         config::ConfigLoader loader;
         auto schema = loader.loadFromToml(path);
-        if (!schema.has_value()) return std::unexpected(schema.error());
+        if (!schema.has_value()) {
+            for (auto const& err : schema.error()) {
+                m_logger->logf(log::LogLevel::Error,
+                               QStringLiteral("config"), path,
+                               err.message);
+            }
+            return std::unexpected(schema.error());
+        }
 
+        if (!schema->meta.logLevel.isEmpty()) {
+            m_logger->setThreshold(log::levelFromString(schema->meta.logLevel));
+        }
         wireFromSchema(*schema);
+        m_logger->logf(log::LogLevel::Info, QStringLiteral("config"), path,
+                       QStringLiteral("loaded"),
+                       {{QStringLiteral("transports"),
+                         int(schema->transports.size())},
+                        {QStringLiteral("datapoints"),
+                         int(schema->datapoints.size())}});
         return {};
     }
 
@@ -131,6 +159,7 @@ public:
     codec::CodecRegistry&     codecs()     override { return *m_codecs; }
     module::ModuleRegistry&   modules()    override { return *m_modules; }
     plugin::PluginRegistry&   plugins()    override { return *m_plugins; }
+    log::Logger&              logger()     override { return *m_logger; }
 
     transport::Transport* transport(QString const& id) const override {
         auto it = m_transports.find(id);
@@ -145,13 +174,18 @@ public:
         m_modules->startAll();
         startStatsPump();
         m_bus->publish(bus::CoreReady{});
+        m_logger->logf(log::LogLevel::Info, QStringLiteral("core"),
+                       QStringLiteral("ICore"), QStringLiteral("started"));
     }
 
     void stop() override {
+        m_logger->logf(log::LogLevel::Info, QStringLiteral("core"),
+                       QStringLiteral("ICore"), QStringLiteral("stopping"));
         m_bus->publish(bus::CoreStopping{});
         stopStatsPump();
         m_modules->stopAll();
         for (auto& [id, t] : m_transports) t->disconnect();
+        m_logger->flush();
     }
 
     void pollAllOnce() {
@@ -201,6 +235,12 @@ private:
         m_statsTimer = nullptr;
     }
 
+    void installLogBridge() {
+        if (!m_qml) return;
+        m_logBridge = std::make_unique<qml::LogBridge>(*m_logger);
+        m_qml->setContextProperty(QStringLiteral("log"), m_logBridge.get());
+    }
+
     void installEventWiring() {
         // On Transport reconnect (Connected after Disconnected), force every
         // SinkWindow attached to that transport to flush its whole snapshot
@@ -209,6 +249,7 @@ private:
         m_transportEventSub = std::make_unique<bus::Subscription>(
             m_bus->subscribe<bus::TransportEvent>(
                 [this](bus::TransportEvent const& e) {
+                    logTransportEvent(e);
                     if (e.kind != bus::TransportEventKind::Connected) return;
                     for (auto* sw : m_sinkWindowPtrs) {
                         if (sw->transportId() == e.transportId) sw->forceFlush();
@@ -218,7 +259,32 @@ private:
         // SinkWindow on the PLC-side transport via the configured routes.
         m_serverWriteSub = std::make_unique<bus::Subscription>(
             m_bus->subscribe<bus::ServerWriteEvent>(
-                [this](bus::ServerWriteEvent const& e) { routeServerWrite(e); }));
+                [this](bus::ServerWriteEvent const& e) {
+                    m_logger->logOperation(log::OperationRecord{
+                        {}, QStringLiteral("operator-box"),
+                        QStringLiteral("server-write"), e.transportId,
+                        {}, QString::number(e.values.size()) + " regs @ "
+                            + QString::number(e.startAddress),
+                        QStringLiteral("ok"), {}});
+                    routeServerWrite(e);
+                }));
+    }
+
+    void logTransportEvent(bus::TransportEvent const& e) {
+        char const* what = nullptr;
+        auto level = log::LogLevel::Info;
+        switch (e.kind) {
+            case bus::TransportEventKind::Connected:       what = "connected"; break;
+            case bus::TransportEventKind::Disconnected:    what = "disconnected";
+                                                           level = log::LogLevel::Warn; break;
+            case bus::TransportEventKind::CircuitOpened:   what = "circuit opened";
+                                                           level = log::LogLevel::Error; break;
+            case bus::TransportEventKind::CircuitClosed:   what = "circuit closed"; break;
+            case bus::TransportEventKind::CircuitHalfOpen: what = "circuit half-open"; break;
+            default: return;   // Read/WriteCompleted are too noisy for the log
+        }
+        m_logger->logf(level, QStringLiteral("transport"), e.transportId,
+                       QString::fromLatin1(what));
     }
 
     void routeServerWrite(bus::ServerWriteEvent const& e) {
@@ -600,6 +666,8 @@ private:
 
 private:
     QQmlContext*                                                m_qml;
+    std::unique_ptr<log::Logger>                                m_logger;
+    std::unique_ptr<qml::LogBridge>                             m_logBridge;
     std::unique_ptr<bus::EventBus>                              m_bus;
     std::unique_ptr<codec::CodecRegistry>                       m_codecs;
     std::unique_ptr<dp::DatapointRegistry>                      m_dps;
