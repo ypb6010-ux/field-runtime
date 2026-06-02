@@ -1,13 +1,18 @@
 #pragma once
 
 #include <QObject>
-#include <QTimer>
 
+class QThread;
+class QTimer;
 class QModbusTcpServer;
 
 // In-process Modbus TCP server standing in for a real PLC, so the dashboard
-// has live data to poll without any external hardware or simulator. Holding
-// registers HR[0..7] are mutated every tick to mimic moving sensors.
+// has live data to poll without any external hardware.
+//
+// IMPORTANT: the server and its tick timer live on their OWN thread. The core
+// polls synchronously — a poll blocks the calling (GUI) thread until the read
+// reply arrives — so the responder must NOT share that thread, or it cannot
+// answer while the poll is waiting and every read times out.
 class SimulatedPlc : public QObject {
     Q_OBJECT
 public:
@@ -17,10 +22,11 @@ public:
     bool start();
 
 private:
-    void tick();
+    void tick();   // runs on the worker thread
 
     quint16           m_port;
-    QModbusTcpServer* m_server = nullptr;
-    QTimer            m_timer;
+    QThread*          m_thread = nullptr;
+    QModbusTcpServer* m_server = nullptr;   // lives on m_thread
+    QTimer*           m_timer  = nullptr;   // lives on m_thread
     int               m_n = 0;
 };
