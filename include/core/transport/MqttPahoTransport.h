@@ -10,28 +10,28 @@ namespace core::bus { class EventBus; }
 
 namespace core::transport {
 
-// MqttClientTransport — MQTT v3.1.1 client backed by `Qt6::Mqtt`. For
-// SCADA-to-cloud telemetry bridges or operator-box messaging.
+// MqttPahoTransport — MQTT client backed by Eclipse `paho.mqtt.cpp`. Has the
+// same surface as `MqttClientTransport` (Qt6::Mqtt); the only operational
+// differences:
+//   - LICENSE: EPL 2.0 (Eclipse) instead of LGPLv3 (Qt Mqtt). Friendlier
+//     for statically-linked closed-source industrial deployments.
+//   - THREADING: paho runs its own dispatcher thread (no Qt event loop
+//     dependency), so this transport works in non-GUI contexts more
+//     cleanly.
+//   - TLS: paho integrates with OpenSSL directly; Qt Mqtt rides on Qt's
+//     SSL stack.
 //
-// Each Modbus-style ReadRequest / WriteBatch maps to a deterministic topic
-// via `topicTemplate`, e.g. "factory/zone1/reg/%1". The transport keeps an
-// internal cache of payloads received on its `topicPrefix + #` wildcard
-// subscription; `read()` looks up the cache, `writeBatch()` publishes.
-//
-// A sister class `MqttPahoTransport` provides the same surface against
-// `paho.mqtt.cpp` (Eclipse Public License) for deployments where Qt Mqtt's
-// LGPLv3 terms are inconvenient.
-class CORE_EXPORT MqttClientTransport : public Transport {
+// Pick one or the other per transport via TOML `kind = mqtt_qt_client`
+// vs `kind = mqtt_paho_client`.
+class CORE_EXPORT MqttPahoTransport : public Transport {
 public:
     struct Config {
-        QString  id          = QStringLiteral("mqtt-1");
+        QString  id          = QStringLiteral("mqtt-paho-1");
         QString  brokerUri   = QStringLiteral("tcp://127.0.0.1:1883");
-        QString  clientId    = QStringLiteral("core-client");
+        QString  clientId    = QStringLiteral("core-paho-client");
         QString  username;
         QString  password;
-        QString  topicPrefix;             // optional namespace e.g. "factory/zone1/"
-        // Per-address topic template; the address is substituted into the
-        // QString::arg placeholder, e.g. "factory/zone1/reg/%1".
+        QString  topicPrefix;             // e.g. "factory/zone1/"
         QString  topicTemplate = QStringLiteral("reg/%1");
         int      qos          = 1;
         bool     cleanSession = true;
@@ -46,10 +46,10 @@ public:
         }();
     };
 
-    explicit MqttClientTransport(Config cfg, bus::EventBus* bus = nullptr);
-    ~MqttClientTransport() override;
+    explicit MqttPahoTransport(Config cfg, bus::EventBus* bus = nullptr);
+    ~MqttPahoTransport() override;
 
-    CORE_DISABLE_COPY_MOVE(MqttClientTransport)
+    CORE_DISABLE_COPY_MOVE(MqttPahoTransport)
 
     QString               id()    const override;
     TransportKind         kind()  const override;

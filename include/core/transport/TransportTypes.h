@@ -20,7 +20,8 @@ enum class TransportKind {
     ModbusTcpServer,
     ModbusRtu,
     OpcUaClient,
-    MqttClient,
+    MqttClient,       // Qt6::Mqtt backend
+    MqttPahoClient,   // paho.mqtt.cpp backend
     S7Client,
 };
 

@@ -44,10 +44,13 @@ struct TransportConfig {
     QString                    securityPolicy = QStringLiteral("None");
     QString                    username;
     QString                    password;
-    // ─── mqtt_client ────────────────────────────────────────────────
+    QString                    opcuaBackend  = QStringLiteral("open62541");
+    QString                    nodeIdTemplate = QStringLiteral("ns=2;s=Var_%1");
+    // ─── mqtt_qt_client / mqtt_paho_client ──────────────────────────
     QString                    clientId;
     QString                    brokerUri;           // tcp://host:port or ssl://...
     QString                    topicPrefix;
+    QString                    topicTemplate = QStringLiteral("reg/%1");
     int                        qos      = 1;
     bool                       cleanSession = true;
     // ─── s7_client ──────────────────────────────────────────────────

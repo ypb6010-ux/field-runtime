@@ -25,6 +25,13 @@ public:
         QString  securityPolicy  = QStringLiteral("None");   // None / Basic256Sha256
         QString  username;
         QString  password;
+        // Open62541 backend name; `open62541` is the open-source default
+        // bundled with Qt OPC UA.
+        QString  backend         = QStringLiteral("open62541");
+        // Substituted with the register address when mapping Modbus-style
+        // ReadRequest / WriteBatch into OPC UA nodes. Use Qt's QString::arg
+        // placeholder, e.g. "ns=2;s=Var_%1".
+        QString  nodeIdTemplate  = QStringLiteral("ns=2;s=Var_%1");
         int      connectTimeoutMs    = 5000;
         int      requestTimeoutMs    = 2000;
         int      reconnectIntervalMs = 0;

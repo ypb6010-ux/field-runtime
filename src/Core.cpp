@@ -31,6 +31,7 @@
 #include "core/transport/ModbusTcpClientTransport.h"
 #include "core/transport/ModbusTcpServerTransport.h"
 #include "core/transport/MqttClientTransport.h"
+#include "core/transport/MqttPahoTransport.h"
 #include "core/transport/OpcUaClientTransport.h"
 #include "core/transport/S7ClientTransport.h"
 #include "core/transport/Transport.h"
@@ -341,6 +342,8 @@ private:
                 cfg.securityPolicy       = tc.securityPolicy;
                 cfg.username             = tc.username;
                 cfg.password             = tc.password;
+                cfg.backend              = tc.opcuaBackend;
+                cfg.nodeIdTemplate       = tc.nodeIdTemplate;
                 cfg.connectTimeoutMs     = tc.connectTimeoutMs;
                 cfg.requestTimeoutMs     = tc.requestTimeoutMs;
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
@@ -357,6 +360,7 @@ private:
                 cfg.username             = tc.username;
                 cfg.password             = tc.password;
                 cfg.topicPrefix          = tc.topicPrefix;
+                cfg.topicTemplate        = tc.topicTemplate;
                 cfg.qos                  = tc.qos;
                 cfg.cleanSession         = tc.cleanSession;
                 cfg.connectTimeoutMs     = tc.connectTimeoutMs;
@@ -366,6 +370,25 @@ private:
                 m_transports.emplace(
                     tc.id,
                     std::make_unique<transport::MqttClientTransport>(
+                        std::move(cfg), m_bus.get()));
+            } else if (tc.kind == transport::TransportKind::MqttPahoClient) {
+                transport::MqttPahoTransport::Config cfg;
+                cfg.id                   = tc.id;
+                cfg.brokerUri            = tc.brokerUri;
+                cfg.clientId             = tc.clientId;
+                cfg.username             = tc.username;
+                cfg.password             = tc.password;
+                cfg.topicPrefix          = tc.topicPrefix;
+                cfg.topicTemplate        = tc.topicTemplate;
+                cfg.qos                  = tc.qos;
+                cfg.cleanSession         = tc.cleanSession;
+                cfg.connectTimeoutMs     = tc.connectTimeoutMs;
+                cfg.requestTimeoutMs     = tc.requestTimeoutMs;
+                cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
+                cfg.scheduler            = tc.scheduler;
+                m_transports.emplace(
+                    tc.id,
+                    std::make_unique<transport::MqttPahoTransport>(
                         std::move(cfg), m_bus.get()));
             } else if (tc.kind == transport::TransportKind::S7Client) {
                 transport::S7ClientTransport::Config cfg;

@@ -335,24 +335,66 @@ p50 / p99 / 熔断状态实时快照。
 
 ### 已完整实现
 
-| 协议 | 类名 | 依赖 |
+| 协议 | 类名 | 依赖 | TOML `kind` |
+|------|------|------|--------------|
+| Modbus TCP client | `ModbusTcpClientTransport` | Qt6::SerialBus | `modbus_tcp_client` |
+| Modbus TCP server | `ModbusTcpServerTransport` | Qt6::SerialBus | `modbus_tcp_server` |
+| Modbus RTU       | `ModbusRtuTransport`       | Qt6::SerialBus + Qt6::SerialPort | `modbus_rtu` |
+| OPC UA client    | `OpcUaClientTransport`     | **Qt6::OpcUa**（含 open62541） | `opc_ua_client` |
+| MQTT client (Qt) | `MqttClientTransport`      | **Qt6::Mqtt** | `mqtt_qt_client` 或 `mqtt_client`（别名） |
+| MQTT client (paho) | `MqttPahoTransport`      | **paho.mqtt.cpp**（vcpkg） | `mqtt_paho_client` |
+
+### Qt6::Mqtt vs paho.mqtt.cpp 选型
+
+两个 MQTT 后端**接口完全一致**，唯一区别在底层库的特性与许可：
+
+| 维度 | `mqtt_qt_client`（Qt6::Mqtt） | `mqtt_paho_client`（paho.mqtt.cpp） |
+|------|-------------------------------|-------------------------------------|
+| **License** | LGPLv3 / 商业（随 Qt） | EPL 2.0 + EDL 1.0 |
+| **静态链接** | LGPLv3 需开放重链能力 | EPL 商业友好，无传染 |
+| **维护方** | Qt Group | Eclipse Foundation |
+| **TLS** | 走 Qt 的 SSL 栈（与 QNetwork 一致） | OpenSSL 直集成 |
+| **线程模型** | Qt 事件循环 + QThread | paho 自带 dispatcher 线程，无 Qt 事件循环依赖 |
+| **非 GUI 场景** | 仍需 QCoreApplication | 可独立运行 |
+| **API 风格** | 原生 Qt 信号槽 | 回调（已包装） |
+| **vcpkg 需求** | 不需要 | `paho-mqttpp3` + `paho-mqtt` |
+
+**选型经验**：
+- 矿用上位机商业部署 → **paho**（License 干净）
+- 内部研发原型 / Qt-only 工具 → **Qt6::Mqtt**（包小，集成好）
+- 客户审计 LGPLv3 风险高 → **paho**
+
+两个后端在 `core/CMakeLists.txt` 通过 `CORE_BUILD_MQTT_QT` 和
+`CORE_BUILD_MQTT_PAHO` 两个独立选项控制，默认都开启；找不到时优雅降级
+为 stub（编译通过但 `connect()` 返回库未启用错误）。
+
+### OPC UA 节点映射
+
+`OpcUaClientTransport` 用 `node_id_template` 把 Modbus 风格的
+`ReadRequest`（`{table, addr, count}`）映射到 OPC UA 节点：
+
+```toml
+[[transport]]
+id   = "opc1"
+kind = "opc_ua_client"
+endpoint_url     = "opc.tcp://192.168.10.5:4840"
+node_id_template = "ns=2;s=Var_%1"   # %1 替换为 addr
+backend          = "open62541"        # Qt OpcUa 后端
+```
+
+- 默认 backend = `open62541`（Qt OpcUa 自带的开源后端，MIT）
+- 实际生产用 OPC UA 时建议把 PollRange/SinkWindow 包装一层 OPC UA 专用
+  schema（Phase 4 加），现在的 register→node 映射只是把 Core 现有抽象
+  跑通的最简方案
+
+### 待接入
+
+| 协议 | 类名 | 库 |
 |------|------|------|
-| Modbus TCP client | `ModbusTcpClientTransport` | Qt6::SerialBus |
-| Modbus TCP server | `ModbusTcpServerTransport` | Qt6::SerialBus |
-| Modbus RTU       | `ModbusRtuTransport`       | Qt6::SerialBus + Qt6::SerialPort |
+| Siemens S7 | `S7ClientTransport` | [snap7](http://snap7.sourceforge.net/) v1.4.2（LGPL） |
 
-### 骨架已就位，等编译外部库
-
-`connect()` 在外部库未提供时返回 `"library not vendored"`，但 TOML schema、
-Config 字段、生命周期接口已稳定，库编完后只需替换 `Impl`。
-
-| 协议 | 类名 | 库 | 推荐版本 |
-|------|------|------|---------|
-| OPC UA   | `OpcUaClientTransport` | [open62541](https://github.com/open62541/open62541) | v1.4.x（MIT） |
-| MQTT     | `MqttClientTransport`  | [paho.mqtt.cpp](https://github.com/eclipse/paho.mqtt.cpp) | v1.4.x（EPL） |
-| Siemens S7 | `S7ClientTransport`  | [snap7](http://snap7.sourceforge.net/) | v1.4.2（LGPL） |
-
-请把编译好的库连同 `find_package` 信息发我，我接入实现。
+S7 stub 在 `connect()` 时返回 `"snap7 library not yet vendored"`。如现场有
+西门子 S7 设备，请编译 snap7 并告知库安装路径。
 
 ### 其他可选协议（待评估）
 

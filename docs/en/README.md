@@ -341,26 +341,70 @@ with queue depth, inflight count, p50/p99 latency, and circuit state.
 
 ### Fully implemented
 
-| Protocol | Class | Dependency |
-|----------|-------|------------|
-| Modbus TCP client | `ModbusTcpClientTransport` | Qt6::SerialBus |
-| Modbus TCP server | `ModbusTcpServerTransport` | Qt6::SerialBus |
-| Modbus RTU       | `ModbusRtuTransport`       | Qt6::SerialBus + Qt6::SerialPort |
+| Protocol | Class | Dependency | TOML `kind` |
+|----------|-------|------------|-------------|
+| Modbus TCP client | `ModbusTcpClientTransport` | Qt6::SerialBus | `modbus_tcp_client` |
+| Modbus TCP server | `ModbusTcpServerTransport` | Qt6::SerialBus | `modbus_tcp_server` |
+| Modbus RTU       | `ModbusRtuTransport`       | Qt6::SerialBus + Qt6::SerialPort | `modbus_rtu` |
+| OPC UA client    | `OpcUaClientTransport`     | **Qt6::OpcUa** (open62541 backend) | `opc_ua_client` |
+| MQTT client (Qt) | `MqttClientTransport`      | **Qt6::Mqtt** | `mqtt_qt_client` or `mqtt_client` (alias) |
+| MQTT client (paho) | `MqttPahoTransport`      | **paho.mqtt.cpp** (vcpkg) | `mqtt_paho_client` |
 
-### Skeleton in place, awaiting external library
+### Qt6::Mqtt vs paho.mqtt.cpp — picking a backend
 
-`connect()` currently returns `"library not vendored"`. The TOML schema,
-Config fields, and lifecycle API are stable — only the `Impl` body needs
-to be filled in once the library is provisioned.
+Both MQTT backends expose **the same Transport interface**. They differ
+only in the underlying library and its licensing:
 
-| Protocol  | Class | Library | Recommended version |
-|-----------|-------|---------|---------------------|
-| OPC UA    | `OpcUaClientTransport` | [open62541](https://github.com/open62541/open62541) | v1.4.x (MIT) |
-| MQTT      | `MqttClientTransport`  | [paho.mqtt.cpp](https://github.com/eclipse/paho.mqtt.cpp) | v1.4.x (EPL) |
-| Siemens S7 | `S7ClientTransport`  | [snap7](http://snap7.sourceforge.net/) | v1.4.2 (LGPL) |
+| Dimension | `mqtt_qt_client` (Qt6::Mqtt) | `mqtt_paho_client` (paho.mqtt.cpp) |
+|-----------|------------------------------|------------------------------------|
+| **License** | LGPLv3 / Commercial (with Qt) | EPL 2.0 + EDL 1.0 |
+| **Static linking** | LGPLv3 requires relink freedom | EPL is commercial-friendly, non-viral |
+| **Maintainer** | Qt Group | Eclipse Foundation |
+| **TLS** | Qt's SSL stack (consistent with QNetwork) | Direct OpenSSL integration |
+| **Threading** | Qt event loop + QThread | paho-owned dispatcher thread, no Qt loop needed |
+| **Non-GUI** | Still needs QCoreApplication | Runs standalone |
+| **API style** | Native Qt signals/slots | Callbacks (already wrapped) |
+| **vcpkg requirement** | None | `paho-mqttpp3` + `paho-mqtt` |
 
-Build the library, point me at the `find_package` info, and I'll plug in
-the implementation.
+**Rules of thumb**:
+- Commercial closed-source industrial deployment → **paho** (clean license)
+- Internal Qt-only tooling / prototype → **Qt6::Mqtt** (smaller, tighter integration)
+- LGPLv3 audit risk is high → **paho**
+
+The two backends are gated by `CORE_BUILD_MQTT_QT` and
+`CORE_BUILD_MQTT_PAHO` in `core/CMakeLists.txt` (both default ON); each
+gracefully degrades to a stub when the library isn't found, so the
+project still compiles either way.
+
+### OPC UA node mapping
+
+`OpcUaClientTransport` maps Modbus-style `ReadRequest` (`{table, addr, count}`)
+to OPC UA nodes via `node_id_template`:
+
+```toml
+[[transport]]
+id   = "opc1"
+kind = "opc_ua_client"
+endpoint_url     = "opc.tcp://192.168.10.5:4840"
+node_id_template = "ns=2;s=Var_%1"   # %1 substituted with addr
+backend          = "open62541"        # Qt OpcUa backend
+```
+
+- Default backend = `open62541` (the open-source MIT backend bundled with
+  Qt OpcUa)
+- For production OPC UA usage, an OPC-UA-specific PollRange/SinkWindow
+  variant will land in Phase 4; the current register→node mapping is the
+  simplest path to fit OPC UA into Core's existing abstractions
+
+### Pending
+
+| Protocol | Class | Library |
+|----------|-------|---------|
+| Siemens S7 | `S7ClientTransport` | [snap7](http://snap7.sourceforge.net/) v1.4.2 (LGPL) |
+
+The S7 stub returns `"snap7 library not yet vendored"` from `connect()`.
+If your field deployment has Siemens S7 hardware, build snap7 and tell us
+where it lives.
 
 ### Other protocols on the radar
 

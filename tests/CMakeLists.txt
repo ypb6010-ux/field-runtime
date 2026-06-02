@@ -32,6 +32,8 @@ add_executable(CoreTests
     unit/TransportReconnectTests.cpp
     unit/CreditPrioritySchedulerTests.cpp
     unit/ModbusRtuTransportTests.cpp
+    unit/OpcUaTransportTests.cpp
+    unit/MqttTransportTests.cpp
 )
 
 find_package(Qt6 REQUIRED COMPONENTS Test)

@@ -23,6 +23,7 @@ target_sources(Core PRIVATE
     ModbusRtuTransport.cpp
     OpcUaClientTransport.cpp
     MqttClientTransport.cpp
+    MqttPahoTransport.cpp
     S7ClientTransport.cpp
     ConfigLoader.cpp
     Core.cpp

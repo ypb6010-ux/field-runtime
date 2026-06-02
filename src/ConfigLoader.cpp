@@ -121,7 +121,10 @@ transport::TransportKind parseTransportKind(QString const& s, bool& ok) {
     if (s == "modbus_tcp_server") return transport::TransportKind::ModbusTcpServer;
     if (s == "modbus_rtu")        return transport::TransportKind::ModbusRtu;
     if (s == "opc_ua_client")     return transport::TransportKind::OpcUaClient;
+    // `mqtt_client` is the back-compat alias for the Qt6::Mqtt backend.
     if (s == "mqtt_client")       return transport::TransportKind::MqttClient;
+    if (s == "mqtt_qt_client")    return transport::TransportKind::MqttClient;
+    if (s == "mqtt_paho_client")  return transport::TransportKind::MqttPahoClient;
     if (s == "s7_client")         return transport::TransportKind::S7Client;
     ok = false;
     return transport::TransportKind::ModbusTcpClient;
@@ -173,10 +176,13 @@ TransportConfig parseTransport(toml::table const& t,
     c.securityPolicy = getStr(t, "security_policy", QStringLiteral("None"));
     c.username       = getStr(t, "username",        {});
     c.password       = getStr(t, "password",        {});
+    c.opcuaBackend   = getStr(t, "backend",         QStringLiteral("open62541"));
+    c.nodeIdTemplate = getStr(t, "node_id_template", QStringLiteral("ns=2;s=Var_%1"));
     // MQTT
     c.clientId       = getStr(t, "client_id",     {});
     c.brokerUri      = getStr(t, "broker_uri",    {});
     c.topicPrefix    = getStr(t, "topic_prefix",  {});
+    c.topicTemplate  = getStr(t, "topic_template", QStringLiteral("reg/%1"));
     c.qos            = getInt(t, "qos",           1);
     c.cleanSession   = getBool(t, "clean_session").value_or(true);
     // S7
