@@ -125,10 +125,10 @@ if(CORE_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-if(CORE_BUILD_EXAMPLES)
-    add_subdirectory(examples)
-endif()
-
 if(CORE_BUILD_PERSISTENCE)
     add_subdirectory(persistence)
+endif()
+
+if(CORE_BUILD_EXAMPLES)
+    add_subdirectory(examples)
 endif()

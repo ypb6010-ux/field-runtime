@@ -1,0 +1,8 @@
+<RCC>
+    <qresource prefix="/">
+        <file>qml/Main.qml</file>
+        <file>qml/SourcesTab.qml</file>
+        <file>qml/LogsTab.qml</file>
+        <file>qml/HistoryTab.qml</file>
+    </qresource>
+</RCC>

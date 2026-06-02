@@ -3,6 +3,7 @@
 #include <expected>
 #include <memory>
 #include <QString>
+#include <QStringList>
 
 #include "core/core_global.h"
 #include "core/config/ValidationError.h"
@@ -37,6 +38,7 @@ public:
     virtual log::Logger&              logger()     = 0;
 
     virtual transport::Transport*     transport(QString const& id) const = 0;
+    virtual QStringList               transportIds() const = 0;
 
     virtual void start() = 0;
     virtual void stop()  = 0;

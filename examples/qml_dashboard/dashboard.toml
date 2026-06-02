@@ -1,0 +1,84 @@
+[meta]
+project   = "qml_dashboard"
+version   = "0.1"
+log_level = "info"
+
+# ── Live data source: in-process simulated PLC on 127.0.0.1:5502 ──────────
+[[transport]]
+id    = "plc1"
+kind  = "modbus_tcp_client"
+host  = "127.0.0.1"
+port  = 5502
+slave_id = 1
+connect_timeout_ms    = 500
+reconnect_interval_ms = 2000
+
+[transport.scheduler]
+kind                 = "serial"
+inter_request_gap_ms = 5
+
+# ── Extra source kinds, shown on the UI to demonstrate source labeling.
+#    They point at nothing, so the UI shows them as Disconnected and the
+#    log stream surfaces their connection failures (a logging showcase). ──
+[[transport]]
+id   = "mqtt1"
+kind = "mqtt_client"
+broker_uri = "tcp://127.0.0.1:1883"
+client_id  = "dashboard-demo"
+reconnect_interval_ms = 15000
+
+[[transport]]
+id   = "opc1"
+kind = "opc_ua_client"
+endpoint_url = "opc.tcp://127.0.0.1:4840"
+reconnect_interval_ms = 15000
+
+# ── Poll the simulated PLC's holding registers ───────────────────────────
+[[poll_range]]
+module_id = "poll.plc1.hr"
+transport = "plc1"
+table     = "HR"
+range     = [0, 8]
+period_ms = 500
+
+# ── run-state enum codec ─────────────────────────────────────────────────
+[[codec]]
+id   = "run_state_enum"
+kind = "enum_u16"
+map  = { "0" = "Idle", "1" = "Running", "2" = "Fault", "3" = "Maintenance" }
+
+# ── Datapoints (each persisted to telemetry by its `persist` tag) ─────────
+[[datapoint]]
+id      = "temperature"
+kind    = "Status"
+type    = "S16"
+persist = "plc1.temperature"
+source  = { port = "plc1", table = "HR", addr = 0, scale = 0.1 }
+
+[[datapoint]]
+id      = "belt_speed"
+kind    = "Status"
+type    = "U16"
+persist = "plc1.belt_speed"
+source  = { port = "plc1", table = "HR", addr = 1 }
+
+[[datapoint]]
+id      = "pressure"
+kind    = "Status"
+type    = "U16"
+persist = "plc1.pressure"
+source  = { port = "plc1", table = "HR", addr = 2, scale = 0.01 }
+
+[[datapoint]]
+id      = "run_state"
+kind    = "Status"
+type    = "EnumU16"
+persist = "plc1.run_state"
+source  = { port = "plc1", table = "HR", addr = 3, codec = "run_state_enum" }
+
+[[datapoint]]
+id      = "current"
+kind    = "Status"
+type    = "U16"
+persist = "plc1.current"
+source  = { port = "plc1", table = "HR", addr = 4, scale = 0.1 }

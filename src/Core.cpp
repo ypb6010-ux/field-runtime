@@ -166,6 +166,13 @@ public:
         return it == m_transports.end() ? nullptr : it->second.get();
     }
 
+    QStringList transportIds() const override {
+        QStringList ids;
+        ids.reserve(int(m_transports.size()));
+        for (auto const& [id, t] : m_transports) ids << id;
+        return ids;
+    }
+
     void start() override {
         installEventWiring();
         for (auto& [id, t] : m_transports) {
