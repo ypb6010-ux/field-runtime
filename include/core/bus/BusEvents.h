@@ -7,6 +7,7 @@
 #include <QtSerialBus/QModbusDataUnit>
 
 #include "core/core_global.h"
+#include "core/sched/SchedulerTypes.h"
 
 namespace core::bus {
 
@@ -48,6 +49,15 @@ struct ServerWriteEvent {
     QModbusDataUnit::RegisterType      table;
     int                                startAddress;
     QList<quint16>                     values;
+};
+
+// Periodic snapshot of a Transport's scheduler — published by Core's stats
+// pump on `scheduler_stats_publish_interval_ms` cadence (default 1000 ms).
+// QML / plugin dashboards subscribe to this to surface queue depth, inflight
+// count, p50/p99 latency and circuit-breaker state.
+struct SchedulerStatsEvent {
+    QString               transportId;
+    sched::SchedulerStats stats;
 };
 
 } // namespace core::bus

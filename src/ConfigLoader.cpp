@@ -119,6 +119,10 @@ transport::TransportKind parseTransportKind(QString const& s, bool& ok) {
     ok = true;
     if (s == "modbus_tcp_client") return transport::TransportKind::ModbusTcpClient;
     if (s == "modbus_tcp_server") return transport::TransportKind::ModbusTcpServer;
+    if (s == "modbus_rtu")        return transport::TransportKind::ModbusRtu;
+    if (s == "opc_ua_client")     return transport::TransportKind::OpcUaClient;
+    if (s == "mqtt_client")       return transport::TransportKind::MqttClient;
+    if (s == "s7_client")         return transport::TransportKind::S7Client;
     ok = false;
     return transport::TransportKind::ModbusTcpClient;
 }
@@ -158,8 +162,30 @@ TransportConfig parseTransport(toml::table const& t,
     c.listenAddress  = getStr(t, "listen_address", QStringLiteral("0.0.0.0"));
     c.listenPort     = getInt(t, "listen_port", 502);
     c.maxClients     = getInt(t, "max_clients", 1);
+    // Modbus RTU
+    c.portName       = getStr(t, "port_name",  {});
+    c.baudRate       = getInt(t, "baud_rate",  9600);
+    c.dataBits       = getInt(t, "data_bits",  8);
+    c.stopBits       = getInt(t, "stop_bits",  1);
+    c.parity         = getStr(t, "parity",     QStringLiteral("none"));
+    // OPC UA
+    c.endpointUrl    = getStr(t, "endpoint_url",    {});
+    c.securityPolicy = getStr(t, "security_policy", QStringLiteral("None"));
+    c.username       = getStr(t, "username",        {});
+    c.password       = getStr(t, "password",        {});
+    // MQTT
+    c.clientId       = getStr(t, "client_id",     {});
+    c.brokerUri      = getStr(t, "broker_uri",    {});
+    c.topicPrefix    = getStr(t, "topic_prefix",  {});
+    c.qos            = getInt(t, "qos",           1);
+    c.cleanSession   = getBool(t, "clean_session").value_or(true);
+    // S7
+    c.rack           = getInt(t, "rack", 0);
+    c.slot           = getInt(t, "slot", 1);
+    // Common
     c.reconnectIntervalMs = getInt(t, "reconnect_interval_ms", 15000);
     c.connectTimeoutMs    = getInt(t, "connect_timeout_ms",    3000);
+    c.requestTimeoutMs    = getInt(t, "request_timeout_ms",    1000);
 
     if (auto s = t["scheduler"].as_table()) {
         c.scheduler.kind                    = parseSchedulerKind(getStr(*s, "kind", "serial"));
@@ -468,12 +494,47 @@ void checkUnique(QList<QString> const& ids, QString const& section,
     }
 }
 
+// Built-in codec IDs that ConfigLoader::validate accepts without a [[codec]]
+// declaration — these are registered at CodecRegistry::loadBuiltins time.
+bool isBuiltinCodecId(QString const& id) {
+    if (id.startsWith(QStringLiteral("builtin."))) return true;
+    return false;
+}
+
+// Maximum register count for a single Modbus write-multiple-registers (FC16)
+// request — see Modbus spec.
+constexpr int kMaxSinkWindowSize = 123;
+
+int typeBitWidth(dp::ScalarType t) {
+    switch (t) {
+        case dp::ScalarType::Bool:    return 1;
+        case dp::ScalarType::U16:
+        case dp::ScalarType::S16:
+        case dp::ScalarType::EnumU16: return 16;
+        case dp::ScalarType::U32:
+        case dp::ScalarType::S32:
+        case dp::ScalarType::F32:     return 32;
+        case dp::ScalarType::U64:
+        case dp::ScalarType::S64:
+        case dp::ScalarType::F64:     return 64;
+        case dp::ScalarType::String:  return 64;  // mask check skipped
+    }
+    return 64;
+}
+
 void validateRefs(ConfigSchema const& s, ValidationErrors& errs) {
     std::set<QString> transports;
     for (auto const& t : s.transports) transports.insert(t.id);
 
     std::set<QString> sinkWindowIds;
-    for (auto const& sw : s.sinkWindows) sinkWindowIds.insert(sw.moduleId);
+    std::map<QString, SinkWindowConfig const*> sinkWindowById;
+    for (auto const& sw : s.sinkWindows) {
+        sinkWindowIds.insert(sw.moduleId);
+        sinkWindowById.emplace(sw.moduleId, &sw);
+    }
+
+    std::set<QString> codecIds;
+    for (auto const& c : s.codecs) codecIds.insert(c.id);
 
     std::set<QString> datapointIds;
     for (auto const& d : s.datapoints) datapointIds.insert(d.id);
@@ -501,8 +562,14 @@ void validateRefs(ConfigSchema const& s, ValidationErrors& errs) {
                           QStringLiteral("poll_range[%1]").arg(i), "transport");
     }
     for (int i = 0; i < s.sinkWindows.size(); ++i) {
-        checkTransportRef(s.sinkWindows[i].transport,
-                          QStringLiteral("sink_window[%1]").arg(i), "transport");
+        auto const& sw = s.sinkWindows[i];
+        auto const sec = QStringLiteral("sink_window[%1]").arg(i);
+        checkTransportRef(sw.transport, sec, "transport");
+        if (sw.size > kMaxSinkWindowSize) {
+            errs.push_back({sec, "range",
+                QStringLiteral("size %1 exceeds Modbus FC16 max (%2)")
+                    .arg(sw.size).arg(kMaxSinkWindowSize), -1});
+        }
     }
     for (int i = 0; i < s.heartbeats.size(); ++i) {
         checkTransportRef(s.heartbeats[i].transport,
@@ -513,16 +580,21 @@ void validateRefs(ConfigSchema const& s, ValidationErrors& errs) {
                           QStringLiteral("command[%1]").arg(i), "transport");
     }
 
+    // Codec ref + kind / sink / source consistency.
+    auto checkCodecRef = [&](QString const& id, QString const& section) {
+        if (id.isEmpty() || codecIds.count(id) || isBuiltinCodecId(id)) return;
+        errs.push_back({section, "codec",
+            QStringLiteral("references unknown codec '%1'").arg(id), -1});
+    };
+
     for (int i = 0; i < s.datapoints.size(); ++i) {
         auto const& d  = s.datapoints[i];
         auto const sec = QStringLiteral("datapoint[%1]").arg(i);
-        if (d.hasSource) checkPortRef(d.source, sec + ".source");
+        if (d.hasSource) {
+            checkPortRef(d.source, sec + ".source");
+            checkCodecRef(d.source.codec, sec + ".source");
+        }
         if (d.hasSink) {
-            // Sink either references a SinkWindow by id (preferred for
-            // staged batch writes) and / or names a transport `port` for
-            // direct writes. When both are set, `window` wins; `port` is
-            // expected to match the SinkWindow's underlying transport and
-            // is purely informational.
             if (!d.sink.window.isEmpty() && !sinkWindowIds.count(d.sink.window)) {
                 errs.push_back({sec + ".sink", "window",
                                 QStringLiteral("references unknown sink_window '%1'")
@@ -530,6 +602,23 @@ void validateRefs(ConfigSchema const& s, ValidationErrors& errs) {
                                 -1});
             }
             checkPortRef(d.sink, sec + ".sink");
+            checkCodecRef(d.sink.codec, sec + ".sink");
+
+            // sink.addr must fall within the referenced sink_window.
+            if (!d.sink.window.isEmpty()) {
+                auto it = sinkWindowById.find(d.sink.window);
+                if (it != sinkWindowById.end()) {
+                    auto const* sw = it->second;
+                    int const lo = sw->startAddress;
+                    int const hi = sw->startAddress + sw->size;
+                    if (d.sink.address < lo || d.sink.address >= hi) {
+                        errs.push_back({sec + ".sink", "addr",
+                            QStringLiteral("addr %1 outside sink_window '%2' [%3,%4)")
+                                .arg(d.sink.address).arg(d.sink.window)
+                                .arg(lo).arg(hi), -1});
+                    }
+                }
+            }
         }
         if (dp::isMultiRegister(d.type) && d.hasSource && d.source.wordOrder.isEmpty()) {
             errs.push_back({sec + ".source", "wordOrder",
@@ -543,6 +632,52 @@ void validateRefs(ConfigSchema const& s, ValidationErrors& errs) {
                             QStringLiteral("type=Bool requires bit (0..15)"),
                             -1});
         }
+
+        // EnumU16 requires an explicit codec (no builtin enum codec exists).
+        if (d.type == dp::ScalarType::EnumU16 && d.hasSource
+         && d.source.codec.isEmpty()) {
+            errs.push_back({sec + ".source", "codec",
+                QStringLiteral("type=EnumU16 requires an explicit codec"), -1});
+        }
+
+        // Kind ↔ source/sink consistency.
+        if (d.kind == "Status" && !d.hasSource) {
+            errs.push_back({sec, "kind",
+                QStringLiteral("kind=Status requires source"), -1});
+        }
+        if (d.kind == "Command" && !d.hasSink) {
+            errs.push_back({sec, "kind",
+                QStringLiteral("kind=Command requires sink"), -1});
+        }
+        if (d.kind == "Bidirectional" && (!d.hasSource || !d.hasSink)) {
+            errs.push_back({sec, "kind",
+                QStringLiteral("kind=Bidirectional requires both source and sink"),
+                -1});
+        }
+
+        // UntilAck policy needs an ack block; reuse hasAck flag set by parser.
+        if (d.policy == "UntilAck" && !d.hasAck) {
+            errs.push_back({sec, "policy",
+                QStringLiteral("policy=UntilAck requires [datapoint.ack]"), -1});
+        }
+
+        // Mask must fit in the type's bit width.
+        auto checkMask = [&](PortRefConfig const& p, QString const& port_sec) {
+            int const width = typeBitWidth(d.type);
+            if (width >= 64) return;   // String and 64-bit types: skip
+            quint64 const limit = (width >= 64)
+                ? ~quint64(0)
+                : ((quint64(1) << width) - 1);
+            if (p.mask != ~quint64(0) && (p.mask & ~limit) != 0) {
+                errs.push_back({port_sec, "mask",
+                    QStringLiteral("mask 0x%1 exceeds type=%2 bit width (%3)")
+                        .arg(p.mask, 0, 16)
+                        .arg(QString::fromUtf8(dp::scalarTypeName(d.type)))
+                        .arg(width), -1});
+            }
+        };
+        if (d.hasSource) checkMask(d.source, sec + ".source");
+        if (d.hasSink)   checkMask(d.sink,   sec + ".sink");
     }
 
     for (int i = 0; i < s.ackWatches.size(); ++i) {

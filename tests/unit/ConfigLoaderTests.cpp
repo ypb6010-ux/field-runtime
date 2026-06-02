@@ -423,6 +423,213 @@ expected  = 1
     REQUIRE(found);
 }
 
+TEST_CASE("ConfigLoader rejects sink_window with size > Modbus FC16 max (123)",
+          "[config][validate]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[[sink_window]]
+module_id = "sink.too.big"
+transport = "tcp1"
+table     = "HR"
+range     = [0, 200]
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+    bool found = false;
+    for (auto const& e : result.error()) {
+        if (e.section.startsWith("sink_window") && e.field == "range"
+         && e.message.contains("FC16")) { found = true; break; }
+    }
+    REQUIRE(found);
+}
+
+TEST_CASE("ConfigLoader rejects datapoint sink.addr outside its sink_window",
+          "[config][validate]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[[sink_window]]
+module_id = "sink.small"
+transport = "tcp1"
+table     = "HR"
+range     = [100, 4]
+
+[[datapoint]]
+id   = "stray"
+kind = "Command"
+type = "U16"
+sink = { port="tcp1", table="HR", addr=200, window="sink.small" }
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+    bool found = false;
+    for (auto const& e : result.error()) {
+        if (e.field == "addr"
+         && e.message.contains("outside sink_window")) {
+            found = true; break;
+        }
+    }
+    REQUIRE(found);
+}
+
+TEST_CASE("ConfigLoader rejects datapoint referencing unknown codec",
+          "[config][validate]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[[datapoint]]
+id   = "x"
+kind = "Status"
+type = "U16"
+source = { port="tcp1", table="HR", addr=0, codec="missing.codec" }
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+    bool found = false;
+    for (auto const& e : result.error()) {
+        if (e.field == "codec" && e.message.contains("missing.codec")) {
+            found = true; break;
+        }
+    }
+    REQUIRE(found);
+}
+
+TEST_CASE("ConfigLoader rejects EnumU16 datapoint without explicit codec",
+          "[config][validate]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[[datapoint]]
+id   = "state"
+kind = "Status"
+type = "EnumU16"
+source = { port="tcp1", table="HR", addr=0 }
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+    bool found = false;
+    for (auto const& e : result.error()) {
+        if (e.field == "codec" && e.message.contains("EnumU16")) {
+            found = true; break;
+        }
+    }
+    REQUIRE(found);
+}
+
+TEST_CASE("ConfigLoader enforces kind ↔ source / sink consistency",
+          "[config][validate]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[[datapoint]]
+id   = "cmd_no_sink"
+kind = "Command"
+type = "U16"
+source = { port="tcp1", table="HR", addr=0 }
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+    bool found = false;
+    for (auto const& e : result.error()) {
+        if (e.field == "kind" && e.message.contains("Command")) {
+            found = true; break;
+        }
+    }
+    REQUIRE(found);
+}
+
+TEST_CASE("ConfigLoader rejects UntilAck policy without ack block",
+          "[config][validate]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[[sink_window]]
+module_id = "sw"
+transport = "tcp1"
+table     = "HR"
+range     = [0, 4]
+
+[[datapoint]]
+id   = "needs_ack"
+kind = "Command"
+type = "U16"
+sink   = { port="tcp1", table="HR", addr=0, window="sw" }
+policy = "UntilAck"
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+    bool found = false;
+    for (auto const& e : result.error()) {
+        if (e.field == "policy" && e.message.contains("UntilAck")) {
+            found = true; break;
+        }
+    }
+    REQUIRE(found);
+}
+
+TEST_CASE("ConfigLoader rejects mask wider than the datapoint type",
+          "[config][validate]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[[datapoint]]
+id   = "wide_mask"
+kind = "Status"
+type = "U16"
+source = { port="tcp1", table="HR", addr=0, mask=0xFFFFFF }
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+    bool found = false;
+    for (auto const& e : result.error()) {
+        if (e.field == "mask") { found = true; break; }
+    }
+    REQUIRE(found);
+}
+
 TEST_CASE("ConfigLoader parses enum_u16 codec map", "[config][codec]") {
     QTemporaryFile temp;
     auto path = writeTomlFile(R"toml(

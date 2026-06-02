@@ -17,5 +17,10 @@ CORE_EXPORT void pollAllOnce(ICore& core);
 // flush evaluation without spinning the QTimer loop.
 CORE_EXPORT void tickSinkWindowsOnce(ICore& core);
 
+// Drive one round of `SchedulerStatsEvent` publication for every transport.
+// Tests use this to verify scheduler-stats wiring without depending on the
+// QTimer-driven pump.
+CORE_EXPORT void publishSchedulerStatsOnce(ICore& core);
+
 } // namespace internal
 } // namespace core

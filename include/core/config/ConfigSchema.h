@@ -24,15 +24,39 @@ struct MetaConfig {
 struct TransportConfig {
     QString                    id;
     transport::TransportKind   kind;
+    // ─── modbus_tcp_client / opc_ua_client / mqtt_client / s7_client ────
     QString                    host;
     int                        port = 502;
     int                        slaveId = 1;
+    // ─── modbus_tcp_server ──────────────────────────────────────────
     QString                    listenAddress;
     int                        listenPort = 502;
     int                        maxClients = 1;
     QList<transport::WatchRange> listenRanges;
+    // ─── modbus_rtu ─────────────────────────────────────────────────
+    QString                    portName;            // e.g. "COM3", "/dev/ttyUSB0"
+    int                        baudRate    = 9600;
+    int                        dataBits    = 8;
+    int                        stopBits    = 1;
+    QString                    parity      = QStringLiteral("none");  // none / even / odd
+    // ─── opc_ua_client ──────────────────────────────────────────────
+    QString                    endpointUrl;         // opc.tcp://host:port/path
+    QString                    securityPolicy = QStringLiteral("None");
+    QString                    username;
+    QString                    password;
+    // ─── mqtt_client ────────────────────────────────────────────────
+    QString                    clientId;
+    QString                    brokerUri;           // tcp://host:port or ssl://...
+    QString                    topicPrefix;
+    int                        qos      = 1;
+    bool                       cleanSession = true;
+    // ─── s7_client ──────────────────────────────────────────────────
+    int                        rack = 0;
+    int                        slot = 1;
+    // ─── common ─────────────────────────────────────────────────────
     int                        reconnectIntervalMs = 15000;
     int                        connectTimeoutMs    = 3000;
+    int                        requestTimeoutMs    = 1000;
     sched::SchedulerConfig     scheduler;
 };
 

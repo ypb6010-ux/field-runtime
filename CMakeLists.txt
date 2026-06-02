@@ -18,7 +18,7 @@ option(CORE_BUILD_LUA   "Enable Lua codec support"  OFF)
 # Dependencies
 # ---------------------------------------------------------------------------
 
-set(CORE_QT_COMPONENTS Core Network SerialBus Sql)
+set(CORE_QT_COMPONENTS Core Network SerialBus SerialPort Sql)
 if(CORE_BUILD_QML)
     list(APPEND CORE_QT_COMPONENTS Qml)
 endif()
@@ -56,6 +56,7 @@ target_link_libraries(Core
         Qt6::Core
         Qt6::Network
         Qt6::SerialBus
+        Qt6::SerialPort
         Qt6::Sql
         async_simple::async_simple_static
     PRIVATE

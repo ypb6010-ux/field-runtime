@@ -8,6 +8,7 @@
 
 #include <QHash>
 #include <QQmlContext>
+#include <QTimer>
 #include <QtSerialBus/QModbusDataUnit>
 
 #include "core/bus/EventBus.h"
@@ -26,8 +27,12 @@
 #include "core/module/PollRange.h"
 #include "core/module/SinkWindow.h"
 #include "core/plugin/PluginRegistry.h"
+#include "core/transport/ModbusRtuTransport.h"
 #include "core/transport/ModbusTcpClientTransport.h"
 #include "core/transport/ModbusTcpServerTransport.h"
+#include "core/transport/MqttClientTransport.h"
+#include "core/transport/OpcUaClientTransport.h"
+#include "core/transport/S7ClientTransport.h"
 #include "core/transport/Transport.h"
 
 namespace core {
@@ -137,11 +142,13 @@ public:
             (void)t->connect();
         }
         m_modules->startAll();
+        startStatsPump();
         m_bus->publish(bus::CoreReady{});
     }
 
     void stop() override {
         m_bus->publish(bus::CoreStopping{});
+        stopStatsPump();
         m_modules->stopAll();
         for (auto& [id, t] : m_transports) t->disconnect();
     }
@@ -154,6 +161,14 @@ public:
         for (auto* sw : m_sinkWindowPtrs) sw->onTick();
     }
 
+    void publishSchedulerStatsOnce() {
+        for (auto& [id, t] : m_transports) {
+            m_bus->publish(bus::SchedulerStatsEvent{id, t->scheduler().stats()});
+        }
+    }
+
+    void setSchedulerStatsIntervalMs(int ms) { m_statsIntervalMs = ms; }
+
 private:
     void wireFromSchema(config::ConfigSchema const& schema) {
         registerCustomCodecs(schema);
@@ -165,6 +180,24 @@ private:
         buildAckWatches(schema);
         buildCommands(schema);
         m_routes = schema.routes;
+    }
+
+    void startStatsPump() {
+        if (m_statsIntervalMs <= 0) return;
+        if (m_statsTimer) return;
+        m_statsTimer = new QTimer(m_bus.get());
+        m_statsTimer->setInterval(m_statsIntervalMs);
+        m_statsTimer->setSingleShot(false);
+        QObject::connect(m_statsTimer, &QTimer::timeout, m_bus.get(),
+            [this]() { publishSchedulerStatsOnce(); });
+        m_statsTimer->start();
+    }
+
+    void stopStatsPump() {
+        if (!m_statsTimer) return;
+        m_statsTimer->stop();
+        m_statsTimer->deleteLater();
+        m_statsTimer = nullptr;
     }
 
     void installEventWiring() {
@@ -282,6 +315,73 @@ private:
                     tc.id,
                     std::make_unique<transport::ModbusTcpServerTransport>(
                         std::move(cfg), *m_bus));
+            } else if (tc.kind == transport::TransportKind::ModbusRtu) {
+                transport::ModbusRtuTransport::Config cfg;
+                cfg.id                   = tc.id;
+                cfg.portName             = tc.portName;
+                cfg.baudRate             = tc.baudRate;
+                cfg.dataBits             = tc.dataBits;
+                cfg.stopBits             = tc.stopBits;
+                if      (tc.parity == "even") cfg.parity = transport::ModbusRtuTransport::Parity::Even;
+                else if (tc.parity == "odd")  cfg.parity = transport::ModbusRtuTransport::Parity::Odd;
+                else                          cfg.parity = transport::ModbusRtuTransport::Parity::None;
+                cfg.slaveId              = tc.slaveId;
+                cfg.connectTimeoutMs     = tc.connectTimeoutMs;
+                cfg.requestTimeoutMs     = tc.requestTimeoutMs;
+                cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
+                cfg.scheduler            = tc.scheduler;
+                m_transports.emplace(
+                    tc.id,
+                    std::make_unique<transport::ModbusRtuTransport>(
+                        std::move(cfg), m_bus.get()));
+            } else if (tc.kind == transport::TransportKind::OpcUaClient) {
+                transport::OpcUaClientTransport::Config cfg;
+                cfg.id                   = tc.id;
+                cfg.endpointUrl          = tc.endpointUrl;
+                cfg.securityPolicy       = tc.securityPolicy;
+                cfg.username             = tc.username;
+                cfg.password             = tc.password;
+                cfg.connectTimeoutMs     = tc.connectTimeoutMs;
+                cfg.requestTimeoutMs     = tc.requestTimeoutMs;
+                cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
+                cfg.scheduler            = tc.scheduler;
+                m_transports.emplace(
+                    tc.id,
+                    std::make_unique<transport::OpcUaClientTransport>(
+                        std::move(cfg), m_bus.get()));
+            } else if (tc.kind == transport::TransportKind::MqttClient) {
+                transport::MqttClientTransport::Config cfg;
+                cfg.id                   = tc.id;
+                cfg.brokerUri            = tc.brokerUri;
+                cfg.clientId             = tc.clientId;
+                cfg.username             = tc.username;
+                cfg.password             = tc.password;
+                cfg.topicPrefix          = tc.topicPrefix;
+                cfg.qos                  = tc.qos;
+                cfg.cleanSession         = tc.cleanSession;
+                cfg.connectTimeoutMs     = tc.connectTimeoutMs;
+                cfg.requestTimeoutMs     = tc.requestTimeoutMs;
+                cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
+                cfg.scheduler            = tc.scheduler;
+                m_transports.emplace(
+                    tc.id,
+                    std::make_unique<transport::MqttClientTransport>(
+                        std::move(cfg), m_bus.get()));
+            } else if (tc.kind == transport::TransportKind::S7Client) {
+                transport::S7ClientTransport::Config cfg;
+                cfg.id                   = tc.id;
+                cfg.host                 = tc.host;
+                cfg.port                 = tc.port;
+                cfg.rack                 = tc.rack;
+                cfg.slot                 = tc.slot;
+                cfg.connectTimeoutMs     = tc.connectTimeoutMs;
+                cfg.requestTimeoutMs     = tc.requestTimeoutMs;
+                cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
+                cfg.scheduler            = tc.scheduler;
+                m_transports.emplace(
+                    tc.id,
+                    std::make_unique<transport::S7ClientTransport>(
+                        std::move(cfg), m_bus.get()));
             }
         }
     }
@@ -387,6 +487,47 @@ private:
             m_dps->registerDp(datapoint);
             out.emplace(dc.id, datapoint);
             m_datapointById.emplace(dc.id, datapoint);
+
+            // Auto-publish DpChanged on every value change so plugins /
+            // database / dashboard subscribers don't need to poll.
+            std::weak_ptr<dp::Datapoint> weak = datapoint;
+            QObject::connect(datapoint.get(), &dp::Datapoint::valueChanged,
+                m_bus.get(), [this, weak] {
+                    auto sp = weak.lock();
+                    if (!sp) return;
+                    m_bus->publish(bus::DpChanged{
+                        sp->id(), sp->value(), sp->timestamp()});
+                });
+
+            // For Command / Bidirectional datapoints with a SinkWindow sink,
+            // wire a writer that encodes the value through the codec then
+            // stages into the named SinkWindow. QML calls `dp.write(v)` and
+            // the new value lands on the PLC at the next flush tick.
+            if ((datapoint->kind() == dp::Kind::Command
+                 || datapoint->kind() == dp::Kind::Bidirectional)
+                && datapoint->sink().has_value()
+                && !datapoint->sink()->window.isEmpty()) {
+                QString const windowId = datapoint->sink()->window;
+                datapoint->setWriter([this, weak, windowId](QVariant v) {
+                    auto sp = weak.lock();
+                    if (!sp || !sp->sink().has_value()) return;
+                    auto sink = *sp->sink();
+                    if (!sink.codec) return;
+                    auto encoded = sink.codec->encode(v, sink);
+                    if (encoded.isEmpty()) return;
+                    for (auto* sw : m_sinkWindowPtrs) {
+                        if (sw->id() != windowId) continue;
+                        for (int i = 0; i < encoded.size(); ++i) {
+                            quint16 mask = (sink.bit.has_value() && i == 0)
+                                ? quint16(1u << *sink.bit)
+                                : 0xFFFFu;
+                            sw->stageRegister(sink.address + i,
+                                              encoded.at(i), mask);
+                        }
+                        break;
+                    }
+                });
+            }
         }
         return out;
     }
@@ -448,6 +589,8 @@ private:
     QList<config::RouteConfig>                                  m_routes;
     std::unique_ptr<bus::Subscription>                          m_transportEventSub;
     std::unique_ptr<bus::Subscription>                          m_serverWriteSub;
+    QTimer*                                                     m_statsTimer = nullptr;
+    int                                                         m_statsIntervalMs = 1000;
 };
 
 std::unique_ptr<ICore> ICore::create(QQmlContext* qml) {
@@ -460,6 +603,9 @@ void pollAllOnce(ICore& core) {
 }
 void tickSinkWindowsOnce(ICore& core) {
     static_cast<CoreImpl&>(core).tickSinkWindowsOnce();
+}
+void publishSchedulerStatsOnce(ICore& core) {
+    static_cast<CoreImpl&>(core).publishSchedulerStatsOnce();
 }
 } // namespace internal
 

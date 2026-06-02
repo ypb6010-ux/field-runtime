@@ -18,6 +18,10 @@ enum class ConnectionState {
 enum class TransportKind {
     ModbusTcpClient,
     ModbusTcpServer,
+    ModbusRtu,
+    OpcUaClient,
+    MqttClient,
+    S7Client,
 };
 
 struct ReadRequest {

@@ -6,6 +6,8 @@ target_sources(Core PRIVATE
     Stubs.cpp
     EventBus.cpp
     SerialScheduler.cpp
+    CreditScheduler.cpp
+    PriorityScheduler.cpp
     BuiltinCodecs.cpp
     CodecRegistry.cpp
     Datapoint.cpp
@@ -18,6 +20,10 @@ target_sources(Core PRIVATE
     ModuleRegistry.cpp
     ModbusTcpClientTransport.cpp
     ModbusTcpServerTransport.cpp
+    ModbusRtuTransport.cpp
+    OpcUaClientTransport.cpp
+    MqttClientTransport.cpp
+    S7ClientTransport.cpp
     ConfigLoader.cpp
     Core.cpp
     # Headers carrying Q_OBJECT must be listed for AUTOMOC to pick them up
