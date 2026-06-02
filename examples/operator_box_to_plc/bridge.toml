@@ -1,0 +1,52 @@
+[meta]
+project = "operator_box_to_plc"
+
+# Outbound: connects to the PLC.
+[[transport]]
+id    = "plc"
+kind  = "modbus_tcp_client"
+host  = "127.0.0.1"
+port  = 51500
+slave_id = 1
+connect_timeout_ms    = 500
+reconnect_interval_ms = 3000
+
+# Inbound: hosts a Modbus server the operator boxes connect to.
+[[transport]]
+id   = "box"
+kind = "modbus_tcp_server"
+listen_address = "127.0.0.1"
+listen_port    = 5020
+slave_id       = 1
+[[transport.listen_ranges]]
+table = "HR"
+range = [0, 64]
+
+# Batched outbound window: PLC HR[100..103].
+[[sink_window]]
+module_id = "sw.plc"
+transport = "plc"
+table     = "HR"
+range     = [100, 4]
+priority  = "High"
+initial   = [0, 0, 0, 0]
+[sink_window.flush]
+debounce_ms  = 20
+keepalive_ms = 5000
+coalesce     = true
+
+# Logical signal: source is the operator-box write target, sink is the
+# SinkWindow position on the PLC side.
+[[datapoint]]
+id   = "cmd_in"
+kind = "Bidirectional"
+type = "U16"
+source = { port="box", table="HR", addr=0 }
+sink   = { port="plc", table="HR", addr=100, window="sw.plc" }
+
+# Route operator-box writes into the SinkWindow.
+[[route]]
+name   = "box-to-plc"
+from   = "cmd_in"
+to     = "cmd_in"
+policy = "ContinuousMirror"

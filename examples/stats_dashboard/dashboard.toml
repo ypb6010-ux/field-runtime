@@ -1,0 +1,51 @@
+[meta]
+project = "stats_dashboard"
+
+[[transport]]
+id   = "plc_a"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+port = 51500
+slave_id = 1
+reconnect_interval_ms = 2000
+[transport.scheduler]
+kind                 = "serial"
+inter_request_gap_ms = 5
+
+[[transport]]
+id   = "plc_b"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+port = 51501
+slave_id = 1
+reconnect_interval_ms = 2000
+# Full-duplex simulation — let multiple polls fly at once.
+[transport.scheduler]
+kind          = "credit"
+max_inflight  = 4
+
+[[poll_range]]
+module_id = "poll.a"
+transport = "plc_a"
+table     = "HR"
+range     = [0, 16]
+period_ms = 100
+
+[[poll_range]]
+module_id = "poll.b"
+transport = "plc_b"
+table     = "HR"
+range     = [0, 32]
+period_ms = 50
+
+[[datapoint]]
+id   = "a0"
+kind = "Status"
+type = "U16"
+source = { port="plc_a", table="HR", addr=0 }
+
+[[datapoint]]
+id   = "b0"
+kind = "Status"
+type = "U16"
+source = { port="plc_b", table="HR", addr=0 }

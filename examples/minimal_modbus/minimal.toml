@@ -1,0 +1,41 @@
+[meta]
+project = "minimal_modbus"
+version = "0.1"
+
+[[transport]]
+id    = "plc"
+kind  = "modbus_tcp_client"
+host  = "127.0.0.1"
+port  = 51500
+slave_id = 1
+connect_timeout_ms    = 500
+reconnect_interval_ms = 3000
+
+[transport.scheduler]
+kind                 = "serial"
+inter_request_gap_ms = 5
+
+[[poll_range]]
+module_id = "poll.plc.hr0"
+transport = "plc"
+table     = "HR"
+range     = [0, 8]
+period_ms = 200
+
+[[datapoint]]
+id   = "temperature"
+kind = "Status"
+type = "S16"
+source = { port="plc", table="HR", addr=0, scale=0.1, offset=-40.0 }
+
+[[datapoint]]
+id   = "pressure"
+kind = "Status"
+type = "U16"
+source = { port="plc", table="HR", addr=2 }
+
+[[datapoint]]
+id   = "speed_rpm"
+kind = "Status"
+type = "F32"
+source = { port="plc", table="HR", addr=4, wordOrder="CDAB" }

@@ -10,9 +10,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
 
-option(CORE_BUILD_TESTS "Build Core unit tests"     ON)
-option(CORE_BUILD_QML   "Build QML integration"     ON)
-option(CORE_BUILD_LUA   "Enable Lua codec support"  OFF)
+option(CORE_BUILD_TESTS    "Build Core unit tests"     ON)
+option(CORE_BUILD_EXAMPLES "Build Core example apps"   ON)
+option(CORE_BUILD_QML      "Build QML integration"     ON)
+option(CORE_BUILD_LUA      "Enable Lua codec support"  OFF)
 
 # ---------------------------------------------------------------------------
 # Dependencies
@@ -86,4 +87,8 @@ add_subdirectory(src)
 if(CORE_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+if(CORE_BUILD_EXAMPLES)
+    add_subdirectory(examples)
 endif()
