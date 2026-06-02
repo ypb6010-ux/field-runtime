@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <QString>
 #include <expected>
 
@@ -40,6 +41,24 @@ public:
     // from arbitrary user code.
     virtual ReadResult  read      (ReadRequest const& req)         = 0;
     virtual WriteResult writeBatch(WriteBatch  const& batch)       = 0;
+
+    // Non-blocking I/O. The request is dispatched to the transport's worker
+    // thread and `done(result)` is invoked there when the reply finishes — no
+    // caller thread ever blocks waiting on the device. This is what lets the
+    // event-driven scheduler run a poll without parking a thread per request.
+    //
+    // The default implementation just runs the synchronous read/writeBatch on
+    // the calling thread and forwards the result — correct but blocking, for
+    // transports not yet converted (and for MockTransport, whose I/O is
+    // instantaneous). Real device transports override with a true async path.
+    using ReadDone  = std::function<void(ReadResult)>;
+    using WriteDone = std::function<void(WriteResult)>;
+    virtual void readAsync (ReadRequest const& req,   ReadDone  done) {
+        done(read(req));
+    }
+    virtual void writeAsync(WriteBatch  const& batch, WriteDone done) {
+        done(writeBatch(batch));
+    }
 };
 
 } // namespace core::transport

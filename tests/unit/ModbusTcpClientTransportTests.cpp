@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <atomic>
 #include <chrono>
+#include <thread>
 
 #include "core/transport/ModbusTcpClientTransport.h"
 #include "mocks/ModbusTestServer.h"
@@ -85,6 +87,56 @@ TEST_CASE("Transport reads and writes against a real QModbusTcpServer",
 
     t.disconnect();
     REQUIRE(t.state() == ConnectionState::Disconnected);
+}
+
+TEST_CASE("readAsync/writeAsync are non-blocking and deliver the reply",
+          "[transport][modbus][integration][async]") {
+    auto port = nextPort();
+    core::test::ModbusTestServer srv(port);
+    REQUIRE(srv.listening());
+    srv.setData(QModbusDataUnit::HoldingRegisters, 0, 0x1111);
+    srv.setData(QModbusDataUnit::HoldingRegisters, 1, 0x2222);
+
+    ModbusTcpClientTransport t(cfgFor(port));
+    REQUIRE(t.connect().has_value());
+
+    auto waitFor = [](std::atomic<bool>& flag) {
+        auto const deadline = std::chrono::steady_clock::now() + 2s;
+        while (!flag.load() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(2ms);
+        return flag.load();
+    };
+
+    std::atomic<bool> readDone{false};
+    ReadResult rr;
+    t.readAsync({QModbusDataUnit::HoldingRegisters, 0, 2},
+                [&](ReadResult r) { rr = std::move(r); readDone.store(true); });
+    // readAsync returned without blocking on the reply; result arrives later.
+    REQUIRE(waitFor(readDone));
+    REQUIRE(rr.ok);
+    REQUIRE(rr.values == QList<quint16>{0x1111, 0x2222});
+
+    std::atomic<bool> writeDone{false};
+    WriteResult wres;
+    t.writeAsync({QModbusDataUnit::HoldingRegisters, 5, {0xABCD}},
+                 [&](WriteResult w) { wres = std::move(w); writeDone.store(true); });
+    REQUIRE(waitFor(writeDone));
+    REQUIRE(wres.ok);
+    REQUIRE(srv.getData(QModbusDataUnit::HoldingRegisters, 5) == 0xABCD);
+
+    t.disconnect();
+}
+
+TEST_CASE("readAsync on a disconnected transport reports 'not connected'",
+          "[transport][modbus][async][disconnected]") {
+    ModbusTcpClientTransport t(cfgFor(nextPort()));
+    std::atomic<bool> done{false};
+    ReadResult rr;
+    t.readAsync({QModbusDataUnit::HoldingRegisters, 0, 4},
+                [&](ReadResult r) { rr = std::move(r); done.store(true); });
+    REQUIRE(done.load());   // synchronous fast-fail path, no event loop needed
+    REQUIRE_FALSE(rr.ok);
+    REQUIRE(rr.errorMessage.contains("not connected"));
 }
 
 TEST_CASE("Transport.scheduler() returns a usable SerialScheduler instance",
