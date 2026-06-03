@@ -24,6 +24,10 @@ void PriorityScheduler::setDelayFn(DelayFn fn) {
     m_impl->setDelayFn(std::move(fn));
 }
 
+void PriorityScheduler::stopAsync() {
+    m_impl->stopAsync();
+}
+
 int PriorityScheduler::cancelModule(QString const& moduleId) {
     return m_impl->cancelModule(moduleId);
 }

@@ -52,6 +52,12 @@ public:
     // async path (see DelayFn). Optional; called once at wiring time.
     virtual void setDelayFn(DelayFn fn) = 0;
 
+    // Halt the async path (teardown): no more queued submitAsync work is
+    // selected/run; an in-flight op still completes. The owning transport calls
+    // this before joining its worker thread so a completion firing during
+    // teardown cannot pump the next request into a half-destroyed transport.
+    virtual void stopAsync() = 0;
+
     virtual int            cancelModule(QString const& moduleId) = 0;
     virtual SchedulerStats stats() const                         = 0;
 };

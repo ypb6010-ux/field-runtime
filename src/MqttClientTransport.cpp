@@ -111,6 +111,7 @@ public:
     }
 
     ~Impl() {
+        if (scheduler) scheduler->stopAsync();
         if (client) {
             QMetaObject::invokeMethod(client, [this] {
                 client->disconnectFromHost();
@@ -238,6 +239,32 @@ WriteResult MqttClientTransport::writeBatch(WriteBatch const& batch) {
     return result;
 }
 
+// Async publish — post to the client thread with QueuedConnection so the caller
+// (the GUI tick) never parks. publish() is fire-and-forget at this layer (QoS
+// acks land later via the broker); a publish-id of -1 is the only failure we can
+// surface synchronously, so we report ok once all topics are enqueued.
+void MqttClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
+    if (state() != ConnectionState::Connected) {
+        done(WriteResult{false, QStringLiteral("not connected")});
+        return;
+    }
+    auto* client = m_impl->client;
+    QMetaObject::invokeMethod(client, [this, batch, done = std::move(done)]() {
+        for (int i = 0; i < batch.values.size(); ++i) {
+            QString const topic = m_impl->topicForAddress(batch.startAddress + i);
+            QByteArray const payload = QByteArray::number(batch.values.at(i));
+            auto id = m_impl->client->publish(QMqttTopicName(topic), payload,
+                                              quint8(m_impl->cfg.qos));
+            if (id == -1) {
+                done(WriteResult{false,
+                    QStringLiteral("MQTT publish failed @ %1").arg(topic)});
+                return;
+            }
+        }
+        done(WriteResult{true, {}});
+    }, Qt::QueuedConnection);
+}
+
 #else  // !CORE_HAS_MQTT_QT
 
 class MqttClientTransport::Impl {
@@ -272,6 +299,9 @@ ReadResult  MqttClientTransport::read      (ReadRequest const&)       {
 WriteResult MqttClientTransport::writeBatch(WriteBatch  const&)       {
     WriteResult r; r.errorMessage = QStringLiteral("Qt MQTT disabled at build time");
     return r;
+}
+void MqttClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
+    done(writeBatch(batch));
 }
 
 #endif

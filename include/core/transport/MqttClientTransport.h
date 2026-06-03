@@ -63,6 +63,10 @@ public:
     ReadResult  read      (ReadRequest const& req)         override;
     WriteResult writeBatch(WriteBatch  const& batch)       override;
 
+    // read() is a non-blocking cache lookup, so the base readAsync default is
+    // already non-blocking; only the publish path needs an async override.
+    void writeAsync(WriteBatch const& batch, WriteDone done) override;
+
 private:
     class Impl;
     std::unique_ptr<Impl> m_impl;

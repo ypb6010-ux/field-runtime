@@ -24,6 +24,10 @@ void CreditScheduler::setDelayFn(DelayFn fn) {
     m_impl->setDelayFn(std::move(fn));
 }
 
+void CreditScheduler::stopAsync() {
+    m_impl->stopAsync();
+}
+
 int CreditScheduler::cancelModule(QString const& moduleId) {
     return m_impl->cancelModule(moduleId);
 }

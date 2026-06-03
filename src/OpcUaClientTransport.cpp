@@ -1,7 +1,9 @@
 #include "core/transport/OpcUaClientTransport.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -84,11 +86,21 @@ public:
             if (e == QOpcUaClient::NoError) return;
             lastError = QStringLiteral("OPC UA error %1").arg(int(e));
         });
+        {
+            auto* cl = client;
+            scheduler->setDelayFn([cl](int ms, std::function<void()> fn) {
+                QMetaObject::invokeMethod(cl, [cl, ms, fn = std::move(fn)]() mutable {
+                    QTimer::singleShot(ms, cl, [fn = std::move(fn)]() mutable { fn(); });
+                });
+            });
+        }
+
         client->moveToThread(thread);
         thread->start();
     }
 
     ~Impl() {
+        if (scheduler) scheduler->stopAsync();
         if (client) {
             QMetaObject::invokeMethod(client, [this] {
                 client->disconnectFromEndpoint();
@@ -247,6 +259,168 @@ WriteResult OpcUaClientTransport::writeBatch(WriteBatch const& batch) {
     return result;
 }
 
+// --- Async I/O ------------------------------------------------------------
+// OPC UA maps one ReadRequest to N node reads. The sync path walks them with a
+// BlockingQueued hop + semaphore per node; the async path chains them on the
+// client thread: read node[i] -> on attributeRead append + i++ -> read node[i+1]
+// -> deliver when i == count. A single overall safety timeout bounds a stuck
+// node so it cannot wedge the poll module forever; `completed` makes the timeout
+// and the signal path mutually exclusive (whoever fires first wins, once).
+void OpcUaClientTransport::readAsync(ReadRequest const& req, ReadDone done) {
+    if (state() != ConnectionState::Connected) {
+        ReadResult r;
+        r.startAddress = req.startAddress;
+        r.errorMessage = QStringLiteral("not connected");
+        done(std::move(r));
+        return;
+    }
+    struct Chain {
+        ReadRequest    req;
+        ReadDone       done;
+        QList<quint16> out;
+        int            i = 0;
+        bool           completed = false;
+    };
+    auto  st  = std::make_shared<Chain>();
+    st->req   = req;
+    st->done  = std::move(done);
+    auto* client  = m_impl->client;
+    QString tpl   = m_impl->cfg.nodeIdTemplate;
+    int safetyMs  = m_impl->cfg.requestTimeoutMs * std::max(1, req.count) + 500;
+
+    QMetaObject::invokeMethod(client, [st, client, tpl, safetyMs]() {
+        QTimer::singleShot(safetyMs, client, [st]() {
+            if (st->completed) return;
+            st->completed = true;
+            ReadResult r;
+            r.startAddress = st->req.startAddress;
+            r.errorMessage = QStringLiteral("OPC UA read timeout");
+            st->done(std::move(r));
+        });
+        auto readNext = std::make_shared<std::function<void()>>();
+        *readNext = [st, client, tpl, readNext]() {
+            if (st->completed) return;
+            if (st->i >= st->req.count) {
+                st->completed = true;
+                ReadResult r;
+                r.ok           = true;
+                r.startAddress = st->req.startAddress;
+                r.values       = st->out;
+                st->done(std::move(r));
+                return;
+            }
+            QString const nodeId = tpl.arg(st->req.startAddress + st->i);
+            auto* node = client->node(nodeId);
+            if (!node) {
+                st->completed = true;
+                ReadResult r;
+                r.startAddress = st->req.startAddress;
+                r.errorMessage = QStringLiteral("OPC UA bad node %1").arg(nodeId);
+                st->done(std::move(r));
+                return;
+            }
+            QObject::connect(node, &QOpcUaNode::attributeRead, node,
+                [st, node, readNext](QOpcUa::NodeAttributes attrs) {
+                    if (st->completed) { node->deleteLater(); return; }
+                    bool const ok = attrs.testFlag(QOpcUa::NodeAttribute::Value);
+                    if (ok) {
+                        st->out.append(quint16(
+                            node->attribute(QOpcUa::NodeAttribute::Value).toUInt()));
+                    }
+                    node->deleteLater();
+                    if (!ok) {
+                        st->completed = true;
+                        ReadResult r;
+                        r.startAddress = st->req.startAddress;
+                        r.errorMessage = QStringLiteral("OPC UA read failed");
+                        st->done(std::move(r));
+                        return;
+                    }
+                    ++st->i;
+                    (*readNext)();
+                });
+            if (!node->readAttributes(QOpcUa::NodeAttribute::Value)) {
+                node->deleteLater();
+                st->completed = true;
+                ReadResult r;
+                r.startAddress = st->req.startAddress;
+                r.errorMessage = QStringLiteral("OPC UA readAttributes failed");
+                st->done(std::move(r));
+            }
+        };
+        (*readNext)();
+    }, Qt::QueuedConnection);
+}
+
+void OpcUaClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
+    if (state() != ConnectionState::Connected) {
+        done(WriteResult{false, QStringLiteral("not connected")});
+        return;
+    }
+    struct Chain {
+        WriteBatch batch;
+        WriteDone  done;
+        int        i = 0;
+        bool       completed = false;
+    };
+    auto  st  = std::make_shared<Chain>();
+    st->batch = batch;
+    st->done  = std::move(done);
+    auto* client  = m_impl->client;
+    QString tpl   = m_impl->cfg.nodeIdTemplate;
+    int const n   = batch.values.size();
+    int safetyMs  = m_impl->cfg.requestTimeoutMs * std::max(1, n) + 500;
+
+    QMetaObject::invokeMethod(client, [st, client, tpl, safetyMs]() {
+        QTimer::singleShot(safetyMs, client, [st]() {
+            if (st->completed) return;
+            st->completed = true;
+            st->done(WriteResult{false, QStringLiteral("OPC UA write timeout")});
+        });
+        auto writeNext = std::make_shared<std::function<void()>>();
+        *writeNext = [st, client, tpl, writeNext]() {
+            if (st->completed) return;
+            if (st->i >= st->batch.values.size()) {
+                st->completed = true;
+                st->done(WriteResult{true, {}});
+                return;
+            }
+            QString const nodeId =
+                tpl.arg(st->batch.startAddress + st->i);
+            QVariant const v = st->batch.values.at(st->i);
+            auto* node = client->node(nodeId);
+            if (!node) {
+                st->completed = true;
+                st->done(WriteResult{false,
+                    QStringLiteral("OPC UA bad node %1").arg(nodeId)});
+                return;
+            }
+            QObject::connect(node, &QOpcUaNode::attributeWritten, node,
+                [st, node, writeNext](QOpcUa::NodeAttribute /*attr*/,
+                                      QOpcUa::UaStatusCode status) {
+                    if (st->completed) { node->deleteLater(); return; }
+                    bool const ok = (status == QOpcUa::UaStatusCode::Good);
+                    node->deleteLater();
+                    if (!ok) {
+                        st->completed = true;
+                        st->done(WriteResult{false,
+                            QStringLiteral("OPC UA write rejected")});
+                        return;
+                    }
+                    ++st->i;
+                    (*writeNext)();
+                });
+            if (!node->writeAttribute(QOpcUa::NodeAttribute::Value, v)) {
+                node->deleteLater();
+                st->completed = true;
+                st->done(WriteResult{false,
+                    QStringLiteral("OPC UA writeAttribute failed")});
+            }
+        };
+        (*writeNext)();
+    }, Qt::QueuedConnection);
+}
+
 #else  // !CORE_HAS_OPCUA
 
 class OpcUaClientTransport::Impl {
@@ -281,6 +455,12 @@ ReadResult  OpcUaClientTransport::read      (ReadRequest const&)       {
 WriteResult OpcUaClientTransport::writeBatch(WriteBatch  const&)       {
     WriteResult r; r.errorMessage = QStringLiteral("OPC UA disabled at build time");
     return r;
+}
+void OpcUaClientTransport::readAsync(ReadRequest const& req, ReadDone done) {
+    done(read(req));   // stub returns instantly; no thread is parked
+}
+void OpcUaClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
+    done(writeBatch(batch));
 }
 
 #endif
