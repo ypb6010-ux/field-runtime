@@ -16,6 +16,14 @@ SubmitResult PriorityScheduler::submit(RequestTag tag,
     return m_impl->submit(std::move(tag), std::move(work));
 }
 
+SubmitResult PriorityScheduler::submitAsync(RequestTag tag, AsyncWork work) {
+    return m_impl->submitAsync(std::move(tag), std::move(work));
+}
+
+void PriorityScheduler::setDelayFn(DelayFn fn) {
+    m_impl->setDelayFn(std::move(fn));
+}
+
 int PriorityScheduler::cancelModule(QString const& moduleId) {
     return m_impl->cancelModule(moduleId);
 }

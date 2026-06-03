@@ -31,6 +31,7 @@ add_executable(CoreTests
     unit/ModuleRegistryTickTests.cpp
     unit/TransportReconnectTests.cpp
     unit/CreditPrioritySchedulerTests.cpp
+    unit/AsyncSchedulerTests.cpp
     unit/ModbusRtuTransportTests.cpp
     unit/OpcUaTransportTests.cpp
     unit/MqttTransportTests.cpp

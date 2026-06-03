@@ -21,6 +21,8 @@ public:
     CORE_DISABLE_COPY_MOVE(CreditScheduler)
 
     SubmitResult   submit(RequestTag tag, std::function<void()> work) override;
+    SubmitResult   submitAsync(RequestTag tag, AsyncWork work) override;
+    void           setDelayFn(DelayFn fn) override;
     int            cancelModule(QString const& moduleId) override;
     SchedulerStats stats() const override;
 
