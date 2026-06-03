@@ -18,6 +18,8 @@
 #include "core/bus/EventBus.h"
 #include "core/sched/SerialScheduler.h"
 
+#include "ModbusReplyAsync.h"
+
 namespace core::transport {
 
 namespace {
@@ -55,6 +57,18 @@ public:
         client->moveToThread(thread);
         thread->start();
 
+        // Honour inter_request_gap in the async path via a one-shot timer on
+        // the client thread (critical for RS-485 bus turnaround). See the TCP
+        // transport for the rationale.
+        {
+            auto* cl = client;
+            scheduler->setDelayFn([cl](int ms, std::function<void()> fn) {
+                QMetaObject::invokeMethod(cl, [cl, ms, fn = std::move(fn)]() mutable {
+                    QTimer::singleShot(ms, cl, [fn = std::move(fn)]() mutable { fn(); });
+                });
+            });
+        }
+
         QObject::connect(client, &QModbusDevice::stateChanged,
                          client, [this](QModbusDevice::State s) {
             auto const cur  = stateFromQt(s);
@@ -85,6 +99,7 @@ public:
 
     ~Impl() {
         autoReconnect.store(false, std::memory_order_release);
+        if (scheduler) scheduler->stopAsync();   // no async pump into a dying transport
         if (reconnectTimer) {
             QMetaObject::invokeMethod(reconnectTimer, [this] {
                 reconnectTimer->stop();
@@ -289,6 +304,27 @@ WriteResult ModbusRtuTransport::writeBatch(WriteBatch const& batch) {
         result.errorMessage = QStringLiteral("write timeout");
     }
     return result;
+}
+
+// Async I/O — non-blocking; shares the QModbusReply helper with the TCP client.
+void ModbusRtuTransport::readAsync(ReadRequest const& req, ReadDone done) {
+    if (state() != ConnectionState::Connected) {
+        ReadResult r;
+        r.startAddress = req.startAddress;
+        r.ok = false;
+        r.errorMessage = QStringLiteral("not connected");
+        done(std::move(r));
+        return;
+    }
+    detail::modbusReadAsync(m_impl->client, m_impl->cfg.slaveId, req, std::move(done));
+}
+
+void ModbusRtuTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
+    if (state() != ConnectionState::Connected) {
+        done(WriteResult{false, QStringLiteral("not connected")});
+        return;
+    }
+    detail::modbusWriteAsync(m_impl->client, m_impl->cfg.slaveId, batch, std::move(done));
 }
 
 } // namespace core::transport

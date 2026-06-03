@@ -18,6 +18,8 @@
 #include "core/bus/EventBus.h"
 #include "core/sched/SerialScheduler.h"
 
+#include "ModbusReplyAsync.h"
+
 namespace core::transport {
 
 namespace {
@@ -430,13 +432,8 @@ WriteResult ModbusTcpClientTransport::writeBatch(WriteBatch const& batch) {
     return result;
 }
 
-// ---------------------------------------------------------------------------
-// Async I/O — non-blocking. The request is posted to the client's worker
-// thread (QueuedConnection, so the caller returns at once) and `done` is
-// invoked on that thread when the reply finishes. The client's own event loop
-// services the socket and the per-request timeout (setTimeout + retries 0), so
-// no caller thread is ever parked and no extra wait machinery is needed.
-// ---------------------------------------------------------------------------
+// Async I/O — non-blocking; the shared QModbusReply helper posts the request to
+// the client thread and delivers `done` on finished (see ModbusReplyAsync.h).
 void ModbusTcpClientTransport::readAsync(ReadRequest const& req, ReadDone done) {
     if (state() != ConnectionState::Connected) {
         ReadResult r;
@@ -446,36 +443,7 @@ void ModbusTcpClientTransport::readAsync(ReadRequest const& req, ReadDone done) 
         done(std::move(r));
         return;
     }
-    auto*     client  = m_impl->client;
-    int const slaveId = m_impl->cfg.slaveId;
-    QMetaObject::invokeMethod(client, [client, slaveId, req, done = std::move(done)]() mutable {
-        auto* reply = client->sendReadRequest(
-            QModbusDataUnit(req.table, req.startAddress, req.count), slaveId);
-        if (!reply) {
-            ReadResult r;
-            r.startAddress = req.startAddress;
-            r.ok = false;
-            r.errorMessage = client->errorString();
-            if (r.errorMessage.isEmpty()) r.errorMessage = QStringLiteral("sendReadRequest failed");
-            done(std::move(r));
-            return;
-        }
-        auto finish = [reply, req, done = std::move(done)]() {
-            ReadResult r;
-            r.startAddress = req.startAddress;
-            if (reply->error() != QModbusDevice::NoError) {
-                r.ok = false;
-                r.errorMessage = reply->errorString();
-            } else {
-                r.ok = true;
-                r.values = reply->result().values();
-            }
-            reply->deleteLater();
-            done(std::move(r));
-        };
-        if (reply->isFinished()) finish();
-        else QObject::connect(reply, &QModbusReply::finished, client, std::move(finish));
-    }, Qt::QueuedConnection);
+    detail::modbusReadAsync(m_impl->client, m_impl->cfg.slaveId, req, std::move(done));
 }
 
 void ModbusTcpClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
@@ -483,36 +451,7 @@ void ModbusTcpClientTransport::writeAsync(WriteBatch const& batch, WriteDone don
         done(WriteResult{false, QStringLiteral("not connected")});
         return;
     }
-    if (batch.values.isEmpty()) {
-        done(WriteResult{true, {}});
-        return;
-    }
-    auto*     client  = m_impl->client;
-    int const slaveId = m_impl->cfg.slaveId;
-    QMetaObject::invokeMethod(client, [client, slaveId, batch, done = std::move(done)]() mutable {
-        QModbusDataUnit unit(batch.table, batch.startAddress, batch.values.size());
-        for (int i = 0; i < batch.values.size(); ++i) unit.setValue(i, batch.values.at(i));
-        auto* reply = client->sendWriteRequest(unit, slaveId);
-        if (!reply) {
-            QString err = client->errorString();
-            if (err.isEmpty()) err = QStringLiteral("sendWriteRequest failed");
-            done(WriteResult{false, std::move(err)});
-            return;
-        }
-        auto finish = [reply, done = std::move(done)]() {
-            WriteResult r;
-            if (reply->error() != QModbusDevice::NoError) {
-                r.ok = false;
-                r.errorMessage = reply->errorString();
-            } else {
-                r.ok = true;
-            }
-            reply->deleteLater();
-            done(std::move(r));
-        };
-        if (reply->isFinished()) finish();
-        else QObject::connect(reply, &QModbusReply::finished, client, std::move(finish));
-    }, Qt::QueuedConnection);
+    detail::modbusWriteAsync(m_impl->client, m_impl->cfg.slaveId, batch, std::move(done));
 }
 
 } // namespace core::transport

@@ -53,6 +53,9 @@ public:
     ReadResult  read      (ReadRequest const& req)         override;
     WriteResult writeBatch(WriteBatch  const& batch)       override;
 
+    void readAsync (ReadRequest const& req,   ReadDone  done) override;
+    void writeAsync(WriteBatch  const& batch, WriteDone done) override;
+
 private:
     void armReconnectIfConfigured();
 
