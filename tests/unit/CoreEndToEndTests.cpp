@@ -38,6 +38,19 @@ QString writeToml(QString const& contents, QTemporaryFile& f) {
     return f.fileName();
 }
 
+// ICore::start() now connects transports in parallel without blocking, so the
+// connection completes shortly AFTER start() returns. Poll for it.
+bool waitConnected(ICore& core, QString const& id, int timeoutMs = 2000) {
+    auto const deadline = std::chrono::steady_clock::now()
+                        + std::chrono::milliseconds(timeoutMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+        auto* t = core.transport(id);
+        if (t && t->state() == transport::ConnectionState::Connected) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+}
+
 } // namespace
 
 TEST_CASE("ICore loads a TOML config and polls a real Modbus server end-to-end",
@@ -109,7 +122,7 @@ source = { port="tcp1", table="HR", addr=4, wordOrder="CDAB" }
 
     core->start();
     REQUIRE(ready);
-    REQUIRE(core->transport("tcp1")->state() == transport::ConnectionState::Connected);
+    REQUIRE(waitConnected(*core, "tcp1"));
 
     internal::pollAllOnce(*core);
 
@@ -226,8 +239,8 @@ policy = "ContinuousMirror"
         });
 
     core->start();
-    REQUIRE(core->transport("tcp1")->state() == transport::ConnectionState::Connected);
-    REQUIRE(core->transport("box1")->state() == transport::ConnectionState::Connected);
+    REQUIRE(waitConnected(*core, "tcp1"));
+    REQUIRE(waitConnected(*core, "box1"));
 
     // Operator box (acts as a Modbus client against our server transport).
     transport::ModbusTcpClientTransport::Config opCfg;

@@ -3,6 +3,7 @@
 
 #include <map>
 #include <memory>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -123,6 +124,7 @@ public:
         //   5. datapoints / codecs / bus, then the logger last.
         m_transportEventSub.reset();
         m_serverWriteSub.reset();
+        joinConnectThreads();                  // no connect() in flight on a dying transport
         if (m_modules) m_modules->stopAll();   // stop ticks; keep modules alive
         m_transports.clear();                  // join worker threads → drain in-flight
         m_pollRangePtrs.clear();
@@ -184,9 +186,17 @@ public:
     }
 
     void start() override {
+        if (m_started) return;   // one-shot: a second start() must not spawn a
+        m_started = true;        // second concurrent connect() per transport
         installEventWiring();
+        // Connect transports in PARALLEL, off the calling (GUI) thread: a slow
+        // or unreachable transport (e.g. a wrong MQTT / OPC UA endpoint) must
+        // not stall start() for its whole connect timeout. The threads are
+        // joined at stop()/teardown. Modules start polling immediately; reads
+        // before a connection completes simply report "not connected".
         for (auto& [id, t] : m_transports) {
-            (void)t->connect();
+            transport::Transport* tp = t.get();
+            m_connectThreads.emplace_back([tp]() { (void)tp->connect(); });
         }
         m_modules->startAll();
         startStatsPump();
@@ -196,13 +206,23 @@ public:
     }
 
     void stop() override {
+        if (!m_started) return;
+        m_started = false;
         m_logger->logf(log::LogLevel::Info, QStringLiteral("core"),
                        QStringLiteral("ICore"), QStringLiteral("stopping"));
+        joinConnectThreads();   // no connect in flight before we disconnect
         m_bus->publish(bus::CoreStopping{});
         stopStatsPump();
         m_modules->stopAll();
         for (auto& [id, t] : m_transports) t->disconnect();
         m_logger->flush();
+    }
+
+    void joinConnectThreads() {
+        for (auto& th : m_connectThreads) {
+            if (th.joinable()) th.join();
+        }
+        m_connectThreads.clear();
     }
 
     void pollAllOnce() {
@@ -691,6 +711,8 @@ private:
     std::unique_ptr<module::ModuleRegistry>                     m_modules;
     std::unique_ptr<plugin::PluginRegistry>                     m_plugins;
     std::map<QString, std::unique_ptr<transport::Transport>>    m_transports;
+    std::vector<std::thread>                                    m_connectThreads;
+    bool                                                        m_started = false;
     std::vector<module::PollRange*>                             m_pollRangePtrs;
     std::vector<module::SinkWindow*>                            m_sinkWindowPtrs;
     std::map<QString, std::shared_ptr<dp::Datapoint>>           m_datapointById;

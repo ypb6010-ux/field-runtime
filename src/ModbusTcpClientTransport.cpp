@@ -61,6 +61,21 @@ public:
         client->moveToThread(thread);
         thread->start();
 
+        // Install the deferred-pump hook so the async scheduler can honour
+        // inter_request_gap without sleeping: it asks us to re-pump after `ms`,
+        // and we run that on the client's own thread via a one-shot timer
+        // (context = client, so a pending timer is dropped if the client is
+        // torn down). Posted to the client thread first so the timer is created
+        // there regardless of which thread completed the previous request.
+        {
+            auto* cl = client;
+            scheduler->setDelayFn([cl](int ms, std::function<void()> fn) {
+                QMetaObject::invokeMethod(cl, [cl, ms, fn = std::move(fn)]() mutable {
+                    QTimer::singleShot(ms, cl, [fn = std::move(fn)]() mutable { fn(); });
+                });
+            });
+        }
+
         // The state and error signals are emitted from the client's thread;
         // each handler updates atomics so any thread reading state() sees a
         // current view without locking.
