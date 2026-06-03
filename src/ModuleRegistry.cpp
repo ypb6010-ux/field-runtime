@@ -1,33 +1,33 @@
 #include "core/module/ModuleRegistry.h"
 
-#include <map>
 #include <utility>
 #include <vector>
 
 #include <QObject>
-#include <QThread>
 #include <QTimer>
 
 #include "core/module/FunctionalModule.h"
 
 namespace core::module {
 
-// TickDriver — drives each auto-ticking module's driveTick() on a dedicated
-// worker thread, grouped by transport.
+// TickDriver — drives each auto-ticking module's driveTick() from QTimers on the
+// thread that owns the Core lifecycle (the GUI / main event loop).
 //
-// driveTick() is non-blocking ONLY when the transport implements a true async
-// path: ModbusTcpClient overrides readAsync/writeAsync to post the request to
-// its client thread and return at once. The other transports (Modbus RTU,
-// OPC UA, MQTT, S7) still fall back to the base Transport::readAsync default,
-// which runs the SYNCHRONOUS read/writeBatch on the caller — i.e. it blocks.
+// This is safe because every transport now exposes a NON-BLOCKING async path:
+// driveTick() submits its read/write through the scheduler, whose AsyncWork
+// posts the request to the transport's own client thread (Modbus TCP/RTU via
+// QModbusReply, OPC UA via a node chain, MQTT via QueuedConnection publish) and
+// returns at once; the reply's completion fires later on that client thread.
+// So a tick never parks the GUI thread, and the per-transport worker tick
+// threads this class used to spin up are gone — the minimal event-driven form.
 //
-// Because a poll/sink/heartbeat module can be wired to any of them, we keep one
-// tick thread per transport: a blocking driveTick() (and any slow/unreachable
-// PLC) stalls only that thread, never the GUI thread, and one transport's
-// stall does not affect another's ticks. The modules are plain (non-QObject)
-// and internally synchronized, so calling driveTick() from a worker thread is
-// safe. (Once every transport has a non-blocking async path, ticks could move
-// back to the GUI thread and these threads be dropped.)
+// INVARIANT: a module may only be wired to a transport whose readAsync/writeAsync
+// are non-blocking. The S7 stub and the (build-disabled) Paho stub return
+// instantly; if Paho is ever enabled, give it a real async path (or a dedicated
+// worker tick) before driving its modules from here, or it will freeze the GUI.
+//
+// All methods run on the lifecycle thread (Core::start/stop/pause/resume), so no
+// cross-thread hops are needed; the timers and their anchor share that thread.
 class ModuleRegistry::TickDriver {
 public:
     TickDriver() = default;
@@ -37,73 +37,31 @@ public:
         if (!mod) return;
         int const period = mod->tickPeriodMs();
         if (period <= 0) return;
+        if (!m_anchor) m_anchor = new QObject;     // owns the timers, this thread
 
-        QString key = mod->transportId();
-        if (key.isEmpty()) key = QStringLiteral("<none>");
-        QObject* anchor = ensureLane(key);
-
-        // Create + start the timer on the lane's worker thread so its timeout —
-        // and the blocking driveTick() it triggers — run off the caller thread.
-        QMetaObject::invokeMethod(anchor, [anchor, mod, period]() {
-            auto* t = new QTimer(anchor);              // child → lives on this thread
-            t->setInterval(period);
-            t->setSingleShot(false);
-            QObject::connect(t, &QTimer::timeout, t, [mod]() { mod->driveTick(); });
-            t->start();
-        }, Qt::BlockingQueuedConnection);
+        auto* t = new QTimer(m_anchor);
+        t->setInterval(period);
+        t->setSingleShot(false);
+        QObject::connect(t, &QTimer::timeout, t, [mod]() { mod->driveTick(); });
+        t->start();
     }
 
     void stopAll() {
-        for (auto& [_, lane] : m_lanes) {
-            if (lane.anchor) {
-                QObject* a = lane.anchor;
-                // Delete the anchor (and its child timers) on its own thread —
-                // destroying a QObject from a foreign thread aborts the process.
-                QMetaObject::invokeMethod(a, [a]() { delete a; },
-                                          Qt::BlockingQueuedConnection);
-            }
-            if (lane.thread) {
-                lane.thread->quit();
-                lane.thread->wait();
-                delete lane.thread;
-            }
-        }
-        m_lanes.clear();
+        delete m_anchor;        // deletes child timers; same thread that created them
+        m_anchor = nullptr;
     }
 
-    void pauseAll()  { forEachLaneTimers([](QTimer* t) { t->stop(); }); }
-    void resumeAll() { forEachLaneTimers([](QTimer* t) { if (!t->isActive()) t->start(); }); }
+    void pauseAll()  { forEachTimer([](QTimer* t) { t->stop(); }); }
+    void resumeAll() { forEachTimer([](QTimer* t) { if (!t->isActive()) t->start(); }); }
 
 private:
-    struct Lane {
-        QThread* thread = nullptr;
-        QObject* anchor = nullptr;   // parent of the lane's timers; lives on `thread`
-    };
-
-    QObject* ensureLane(QString const& key) {
-        auto it = m_lanes.find(key);
-        if (it != m_lanes.end()) return it->second.anchor;
-        Lane lane;
-        lane.thread = new QThread;
-        lane.anchor = new QObject;          // created here, then handed to the thread
-        lane.anchor->moveToThread(lane.thread);
-        lane.thread->start();
-        auto [ins, ok] = m_lanes.emplace(key, lane);
-        return ins->second.anchor;
-    }
-
     template <class F>
-    void forEachLaneTimers(F fn) {
-        for (auto& [_, lane] : m_lanes) {
-            QObject* a = lane.anchor;
-            if (!a) continue;
-            QMetaObject::invokeMethod(a, [a, fn]() {
-                for (auto* t : a->findChildren<QTimer*>()) fn(t);
-            }, Qt::BlockingQueuedConnection);
-        }
+    void forEachTimer(F fn) {
+        if (!m_anchor) return;
+        for (auto* t : m_anchor->findChildren<QTimer*>()) fn(t);
     }
 
-    std::map<QString, Lane> m_lanes;   // by transportId
+    QObject* m_anchor = nullptr;   // parent of all tick timers; lifecycle thread
 };
 
 ModuleRegistry::ModuleRegistry()
