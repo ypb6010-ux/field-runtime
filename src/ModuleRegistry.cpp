@@ -111,10 +111,15 @@ ModuleRegistry::ModuleRegistry()
 
 ModuleRegistry::~ModuleRegistry() = default;
 
-void ModuleRegistry::registerModule(std::unique_ptr<FunctionalModule> mod) {
-    if (!mod) return;
+bool ModuleRegistry::registerModule(std::unique_ptr<FunctionalModule> mod) {
+    if (!mod) return false;
+    // Reject registration while ticking: an active tick timer captures a raw
+    // FunctionalModule*, so replacing/destroying a module now would dangle it.
+    // Modules must be wired before startAll() (config reload = stopAll first).
+    if (m_started) return false;
     QString const id = mod->id();
     m_modules.insert_or_assign(id, std::move(mod));
+    return true;
 }
 
 FunctionalModule* ModuleRegistry::find(QString const& moduleId) const {
@@ -139,6 +144,7 @@ QList<FunctionalModule*> ModuleRegistry::all() const {
 }
 
 void ModuleRegistry::startAll() {
+    m_started = true;
     for (auto& [_, m] : m_modules) m->start();
     if (m_autoTick) {
         for (auto& [_, m] : m_modules) m_tickDriver->start(m.get());
@@ -148,6 +154,7 @@ void ModuleRegistry::startAll() {
 void ModuleRegistry::stopAll() {
     if (m_tickDriver) m_tickDriver->stopAll();
     for (auto& [_, m] : m_modules) m->stop();
+    m_started = false;
 }
 
 void ModuleRegistry::pauseAll() {

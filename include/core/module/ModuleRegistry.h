@@ -17,7 +17,12 @@ public:
 
     CORE_DISABLE_COPY_MOVE(ModuleRegistry)
 
-    void registerModule(std::unique_ptr<FunctionalModule> mod);
+    // Register a module. MUST be called before startAll(): once ticking is
+    // live, a tick timer holds a raw FunctionalModule*, so replacing/destroying
+    // a module would leave that timer calling a dangling pointer. Returns false
+    // (and ignores the module) if called after startAll() without an
+    // intervening stopAll().
+    bool registerModule(std::unique_ptr<FunctionalModule> mod);
     FunctionalModule*           find(QString const& moduleId) const;
     QList<FunctionalModule*>    byTransport(QString const& transportId) const;
     QList<FunctionalModule*>    all() const;
@@ -39,6 +44,7 @@ private:
     std::map<QString, std::unique_ptr<FunctionalModule>> m_modules;
     std::unique_ptr<TickDriver> m_tickDriver;
     bool m_autoTick = true;
+    bool m_started  = false;   // true between startAll() and stopAll()
 };
 
 } // namespace core::module
