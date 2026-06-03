@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <QString>
 #include <QVector>
@@ -47,7 +48,7 @@ public:
     // Execute exactly one poll cycle synchronously on the calling thread.
     // Returns the scheduler submission result so callers can observe
     // success / cancellation / circuit-open without scraping the datapoint
-    // state machine.
+    // state machine. Retained for tests and any synchronous caller.
     sched::SubmitResult pollOnce();
 
     // FunctionalModule
@@ -56,7 +57,11 @@ public:
     void pause()  override;
     void resume() override;
     int  tickPeriodMs() const override { return m_periodMs; }
-    void driveTick()         override { (void)pollOnce(); }
+    // Event-driven, non-blocking: submits one read via the scheduler's async
+    // path and applies the result in the completion callback. Coalesces — if a
+    // poll is still in flight (e.g. a slow PLC), this tick is skipped rather
+    // than queueing another read.
+    void driveTick()         override;
 
 private:
     struct Binding {
@@ -65,11 +70,16 @@ private:
         int                             offset;
     };
 
+    // Decode a successful read into the bound datapoints, or mark them
+    // Error. Shared by the sync (pollOnce) and async (driveTick) paths.
+    void applyResult(transport::ReadResult const& result);
+
     transport::Transport*       m_transport;
     transport::ReadRequest      m_req;
     int                         m_periodMs;
     QVector<Binding>            m_bindings;
-    bool                        m_paused = false;
+    std::atomic<bool>           m_paused{false};   // read on tick thread, set on stop/pause
+    std::atomic<bool>           m_inFlight{false};
 };
 
 } // namespace core::module

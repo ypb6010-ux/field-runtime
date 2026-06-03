@@ -71,6 +71,38 @@ TEST_CASE("Heartbeat respects periodMs between subsequent writes",
     REQUIRE(mock.capturedWrites().size() == 2);
 }
 
+TEST_CASE("Heartbeat.driveTick writes via the async path and honours periodMs",
+          "[heartbeat][async]") {
+    test::MockTransport mock;
+    module::Heartbeat hb(cfgFor("hb.async", 1000), mock);
+    hb.start();
+
+    hb.driveTick();
+    REQUIRE(mock.capturedWrites().size() == 1);
+    REQUIRE(mock.capturedWrites().first().values == QList<quint16>{0xA5A5});
+
+    hb.driveTick();   // period not elapsed → no new write
+    REQUIRE(mock.capturedWrites().size() == 1);
+}
+
+TEST_CASE("Heartbeat.driveTick coalesces while a write is in flight",
+          "[heartbeat][async][coalesce]") {
+    test::MockTransport mock;
+    mock.setDeferAsync(true);
+    module::Heartbeat hb(cfgFor("hb.coalesce", 0), mock);   // period 0 → always due
+    hb.start();
+
+    hb.driveTick();                       // starts write, deferred (in flight)
+    REQUIRE(mock.capturedWrites().size() == 1);
+    hb.driveTick();                       // in flight → skipped
+    REQUIRE(mock.capturedWrites().size() == 1);
+
+    REQUIRE(mock.completeNextWrite());    // finish it
+    hb.driveTick();                       // free → a new write
+    REQUIRE(mock.capturedWrites().size() == 2);
+    REQUIRE(mock.completeNextWrite());
+}
+
 TEST_CASE("Heartbeat surfaces write failures from the transport",
           "[heartbeat][error]") {
     test::MockTransport mock;

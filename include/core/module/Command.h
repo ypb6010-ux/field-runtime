@@ -37,11 +37,17 @@ public:
 
     CORE_DISABLE_COPY_MOVE(Command)
 
-    // Issue the configured writes through the transport's scheduler. Returns
-    // the *first failure* (or Ok if all writes succeeded). Subsequent writes
-    // continue regardless so the operator's intent reaches the device as
-    // fully as possible.
+    // Issue the configured writes through the transport's scheduler (blocking,
+    // synchronous). Returns the *first failure* (or Ok if all writes
+    // succeeded). Retained for tests and synchronous callers.
     sched::SubmitResult execute();
+
+    // Event-driven, non-blocking equivalent: each write is handed to the
+    // scheduler's async path (it serialises them in order) and the call
+    // returns immediately. This is the production entry point on a transport
+    // whose scheduler is in async mode (i.e. also driven by PollRange etc.) —
+    // a synchronous execute() would be rejected there.
+    void executeAsync();
 
     int writeCount() const noexcept;
 

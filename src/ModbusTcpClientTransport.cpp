@@ -99,6 +99,10 @@ public:
 
     ~Impl() {
         autoReconnect.store(false, std::memory_order_release);
+        // Halt the async scheduler first: any completion that fires while we
+        // join the worker thread below must NOT pump the next queued module
+        // request into this half-destroyed transport.
+        if (scheduler) scheduler->stopAsync();
         if (reconnectTimer) {
             QMetaObject::invokeMethod(reconnectTimer, [this] {
                 reconnectTimer->stop();

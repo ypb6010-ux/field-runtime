@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <QList>
 #include <QString>
@@ -48,13 +49,15 @@ public:
     void pause()  override;
     void resume() override;
     int  tickPeriodMs() const override { return m_cfg.periodMs; }
-    void driveTick()         override { (void)onTick(); }
+    // Event-driven, non-blocking write via the scheduler's async path.
+    void driveTick()         override;
 
 private:
     transport::Transport*                  m_transport;
     Config                                  m_cfg;
-    bool                                    m_started = false;
+    std::atomic<bool>                       m_started{false};
     std::chrono::steady_clock::time_point   m_lastSentAt;
+    std::atomic<bool>                       m_inFlight{false};
 };
 
 } // namespace core::module

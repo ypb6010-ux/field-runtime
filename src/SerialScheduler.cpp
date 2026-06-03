@@ -92,6 +92,7 @@ public:
     bool     delayScheduled = false;   // a gap timer is pending
     bool     pumping        = false;   // a pump is running (re-entrancy trampoline)
     bool     repump         = false;   // a pump was requested while one was running
+    bool     stopped        = false;   // async path halted (teardown) — no new work
 
     // A scheduler instance is used in ONE mode: either the blocking submit()
     // path or the event-driven submitAsync() path — never both. Mixing them on
@@ -226,6 +227,7 @@ public:
 
     PumpResult selectAsyncLocked() {
         PumpResult pr;
+        if (stopped) return pr;   // teardown: never start more queued work
         if (delayFn && cfg.interRequestGapMs > 0
          && lastCompleteAt.time_since_epoch().count() > 0) {
             using namespace std::chrono;
@@ -469,6 +471,11 @@ SubmitResult SerialScheduler::submitAsync(RequestTag tag, AsyncWork work) {
 void SerialScheduler::setDelayFn(DelayFn fn) {
     std::lock_guard lk(m_impl->mtx);
     m_impl->delayFn = std::move(fn);
+}
+
+void SerialScheduler::stopAsync() {
+    std::lock_guard lk(m_impl->mtx);
+    m_impl->stopped = true;
 }
 
 int SerialScheduler::cancelModule(QString const& moduleId) {

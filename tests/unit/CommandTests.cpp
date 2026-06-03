@@ -52,6 +52,31 @@ TEST_CASE("Command.execute reports the first failure but continues other writes"
     REQUIRE(mock.capturedWrites().size() == 3);   // all 3 attempted
 }
 
+TEST_CASE("Command.executeAsync writes each entry via the async scheduler path",
+          "[command][async]") {
+    test::MockTransport mock;
+    module::Command::Config cfg;
+    cfg.moduleId = "cmd.async";
+    cfg.priority = sched::Priority::Critical;
+    cfg.writes = {
+        {QModbusDataUnit::HoldingRegisters, 400, 0xDEAD},
+        {QModbusDataUnit::HoldingRegisters, 401, 0xBEEF},
+    };
+    module::Command cmd(cfg, mock);
+
+    cmd.executeAsync();   // sync mock async → serialised writes complete inline
+
+    auto const writes = mock.capturedWrites();
+    REQUIRE(writes.size() == 2);
+    REQUIRE(writes[0].startAddress == 400);
+    REQUIRE(writes[0].values == QList<quint16>{0xDEAD});
+    REQUIRE(writes[1].startAddress == 401);
+    REQUIRE(writes[1].values == QList<quint16>{0xBEEF});
+
+    // The scheduler is now in async mode; a synchronous execute() is rejected.
+    REQUIRE(cmd.execute().kind == sched::ResultKind::Error);
+}
+
 TEST_CASE("Command exposes its configured priority", "[command][priority]") {
     test::MockTransport mock;
     module::Command::Config cfg;

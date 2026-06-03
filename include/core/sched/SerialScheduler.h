@@ -29,6 +29,13 @@ public:
     int            cancelModule(QString const& moduleId) override;
     SchedulerStats stats() const override;
 
+    // Halt the async path: after this, the scheduler will not select/run any
+    // more queued submitAsync work (an already in-flight op still completes and
+    // updates stats). The owning transport calls this at the START of teardown
+    // so a completion that fires while the worker thread is being joined cannot
+    // pump the next queued module lambda into a half-destroyed transport.
+    void stopAsync();
+
     // Test hook — record a synthetic failure to drive the circuit-breaker.
     void recordFailureForTesting();
 

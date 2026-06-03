@@ -41,39 +41,13 @@ transport::ReadRequest const& PollRange::request() const noexcept {
     return m_req;
 }
 
-sched::SubmitResult PollRange::pollOnce() {
-    if (m_paused) {
-        return {sched::ResultKind::Cancelled,
-                QStringLiteral("module paused"), 0};
-    }
-
-    sched::RequestTag tag;
-    tag.moduleId = m_id;
-    tag.priority = m_priority;
-
-    transport::ReadResult result{};
-    auto submission = m_transport->scheduler().submit(tag, [&] {
-        result = m_transport->read(m_req);
-    });
-
-    // Even if the scheduler accepted the work, the underlying I/O may have
-    // failed. We translate both layers into datapoint state below so QML and
-    // database consumers see a consistent picture.
-    if (submission.kind != sched::ResultKind::Ok) {
-        for (auto& b : m_bindings) {
-            b.dp->setState(dp::DpState::Stale);
-        }
-        return submission;
-    }
+void PollRange::applyResult(transport::ReadResult const& result) {
     if (!result.ok) {
         for (auto& b : m_bindings) {
             b.dp->setState(dp::DpState::Error);
         }
-        submission.kind         = sched::ResultKind::Error;
-        submission.errorMessage = result.errorMessage;
-        return submission;
+        return;
     }
-
     // Successful read: dispatch slices to each bound datapoint.
     for (auto& b : m_bindings) {
         int const rc = dp::registerCountFor(b.dp->type());
@@ -97,7 +71,73 @@ sched::SubmitResult PollRange::pollOnce() {
         }
         b.dp->setValue(std::move(decoded));
     }
+}
+
+sched::SubmitResult PollRange::pollOnce() {
+    if (m_paused.load()) {
+        return {sched::ResultKind::Cancelled,
+                QStringLiteral("module paused"), 0};
+    }
+
+    sched::RequestTag tag;
+    tag.moduleId = m_id;
+    tag.priority = m_priority;
+
+    transport::ReadResult result{};
+    auto submission = m_transport->scheduler().submit(tag, [&] {
+        result = m_transport->read(m_req);
+    });
+
+    // Even if the scheduler accepted the work, the underlying I/O may have
+    // failed. We translate both layers into datapoint state so QML and
+    // database consumers see a consistent picture.
+    if (submission.kind != sched::ResultKind::Ok) {
+        for (auto& b : m_bindings) {
+            b.dp->setState(dp::DpState::Stale);
+        }
+        return submission;
+    }
+    applyResult(result);
+    if (!result.ok) {
+        submission.kind         = sched::ResultKind::Error;
+        submission.errorMessage = result.errorMessage;
+    }
     return submission;
+}
+
+void PollRange::driveTick() {
+    if (m_paused.load()) return;
+
+    // Coalesce: if the previous poll has not finished (slow / unreachable PLC),
+    // skip this tick instead of stacking another read in the queue.
+    bool expected = false;
+    if (!m_inFlight.compare_exchange_strong(expected, true,
+                                            std::memory_order_acq_rel)) {
+        return;
+    }
+
+    sched::RequestTag tag;
+    tag.moduleId = m_id;
+    tag.priority = m_priority;
+
+    auto const submission = m_transport->scheduler().submitAsync(tag,
+        [this](sched::AsyncDone done) {
+            m_transport->readAsync(m_req,
+                [this, done = std::move(done)](transport::ReadResult r) mutable {
+                    applyResult(r);
+                    m_inFlight.store(false, std::memory_order_release);
+                    done(r.ok);
+                });
+        });
+
+    if (submission.kind != sched::ResultKind::Ok) {
+        // Rejected by the scheduler (circuit open / queue full): mark stale and
+        // release the coalesce guard so the next tick can retry.
+        for (auto& b : m_bindings) {
+            b.dp->setState(dp::DpState::Stale);
+        }
+        m_inFlight.store(false, std::memory_order_release);
+    }
 }
 
 void PollRange::start()  { m_paused = false; }

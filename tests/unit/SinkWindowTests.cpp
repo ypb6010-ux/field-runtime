@@ -197,6 +197,50 @@ TEST_CASE("Write failure preserves dirty state for next-tick retry",
     REQUIRE(mock.capturedWrites().size() == 2);
 }
 
+TEST_CASE("SinkWindow.driveTick flushes via the async path", "[sink][async]") {
+    test::MockTransport mock;
+    auto cfg = baseCfg("win.async");
+    cfg.debounceMs = 10'000;            // only forceFlush will trigger
+    module::SinkWindow w(cfg, mock);
+    w.start();
+
+    w.stageRegister(0, 0x1234);
+    w.forceFlush();
+    w.driveTick();                     // sync mock async → flush completes inline
+
+    auto const writes = mock.capturedWrites();
+    REQUIRE(writes.size() == 1);
+    REQUIRE(writes.first().values.at(0) == 0x1234);
+    REQUIRE_FALSE(w.dirty());           // cleared on a successful flush
+}
+
+TEST_CASE("SinkWindow.driveTick coalesces and does not lose a mid-flight stage",
+          "[sink][async][coalesce]") {
+    test::MockTransport mock;
+    mock.setDeferAsync(true);
+    auto cfg = baseCfg("win.coalesce");
+    cfg.debounceMs = 0;                     // dirty flushes on the next tick
+    module::SinkWindow w(cfg, mock);
+    w.start();
+
+    w.stageRegister(0, 0x11);
+    w.driveTick();                          // flush 0x11, deferred (in flight)
+    REQUIRE(mock.capturedWrites().size() == 1);
+    REQUIRE(mock.capturedWrites().first().values.at(0) == 0x11);
+
+    w.stageRegister(0, 0x22);               // new stage WHILE the write is in flight
+    w.driveTick();                          // in flight → coalesced (skipped)
+    REQUIRE(mock.capturedWrites().size() == 1);
+
+    REQUIRE(mock.completeNextWrite());      // first flush done; 0x22 must NOT be lost
+    w.driveTick();                          // → flushes 0x22
+    REQUIRE(mock.capturedWrites().size() == 2);
+    REQUIRE(mock.capturedWrites().at(1).values.at(0) == 0x22);
+
+    REQUIRE(mock.completeNextWrite());
+    REQUIRE_FALSE(w.dirty());               // now everything is flushed
+}
+
 TEST_CASE("SinkWindow uses moduleId and priority on the scheduler tag",
           "[sink][sched]") {
     test::MockTransport mock;

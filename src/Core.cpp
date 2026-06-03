@@ -107,17 +107,27 @@ public:
     }
 
     ~CoreImpl() override {
-        // Deterministic teardown order — modules first (they hold raw
-        // Transport*), then transports (each one stops its worker thread),
-        // then datapoints / codecs / bus. Letting the default destructor
-        // run member-by-member in reverse declaration order would tear
-        // down transports while PollRange* are still alive.
+        // Async-safe teardown order:
+        //   1. drop event-bus subscriptions (no more routing into modules);
+        //   2. stop the module tick driver so no NEW driveTick() is issued
+        //      (modules stay alive);
+        //   3. destroy the transports — each stops its scheduler's async pump
+        //      (stopAsync) then joins its worker thread, SAFELY ABANDONING any
+        //      in-flight completion (a pending reply may be cancelled, not
+        //      delivered). Whatever completion does still run invokes module
+        //      callbacks (apply result / clear in-flight), so the modules MUST
+        //      still be alive here — hence transports before modules. The
+        //      modules' raw Transport* go dangling but are never dereferenced
+        //      after the tick driver stopped;
+        //   4. now destroy the modules;
+        //   5. datapoints / codecs / bus, then the logger last.
         m_transportEventSub.reset();
         m_serverWriteSub.reset();
-        m_modules.reset();
+        if (m_modules) m_modules->stopAll();   // stop ticks; keep modules alive
+        m_transports.clear();                  // join worker threads → drain in-flight
         m_pollRangePtrs.clear();
         m_sinkWindowPtrs.clear();
-        m_transports.clear();
+        m_modules.reset();                     // safe: no completion can fire now
         m_plugins.reset();
         m_dps.reset();
         m_codecs.reset();

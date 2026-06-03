@@ -9,6 +9,7 @@
 
 #include "core/sched/RequestScheduler.h"
 #include "core/sched/SchedulerTypes.h"
+#include "core/sched/SerialScheduler.h"
 
 using namespace core::sched;
 using namespace std::chrono_literals;
@@ -177,4 +178,18 @@ TEST_CASE("submitAsync ignores a duplicate completion", "[sched][async]") {
     auto st = h.sched->stats();
     REQUIRE(st.totalCompleted == 1);
     REQUIRE(st.inflight == 0);
+}
+
+TEST_CASE("stopAsync halts pumping of queued work (teardown safety)",
+          "[sched][async]") {
+    Harness h(SchedulerConfig{});
+    h.submit(0);   // starts (in flight)
+    h.submit(1);   // queued
+    REQUIRE(h.started == std::vector<int>{0});
+
+    static_cast<SerialScheduler*>(h.sched.get())->stopAsync();
+
+    h.done[0](true);   // completes op0; the pump must NOT start op1
+    REQUIRE(h.started == std::vector<int>{0});   // op1 never started after stop
+    REQUIRE(h.sched->stats().inflight == 0);
 }

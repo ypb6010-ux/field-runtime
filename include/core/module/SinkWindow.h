@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -71,18 +72,33 @@ public:
     void pause()  override;
     void resume() override;
     int  tickPeriodMs() const override;
-    void driveTick()         override { (void)onTick(); }
+    // Event-driven, non-blocking flush via the scheduler's async path.
+    void driveTick()         override;
 
 private:
+    // Decide whether a flush is due; if so, snapshot the values + reason and
+    // the staging generation at snapshot time. Returns false when nothing
+    // needs writing. Shared by onTick / driveTick.
+    bool decideFlush(QList<quint16>& values, QString& reason, quint64& gen);
+    // On a successful write, clear dirty / forceFlush and stamp the flush time —
+    // but ONLY if no new stage/forceFlush arrived since `gen` was snapshotted,
+    // otherwise that update would be lost while the write was in flight.
+    void markFlushed(bool ok, quint64 gen);
+
     transport::Transport*              m_transport;
     Config                              m_cfg;
     QList<quint16>                      m_snapshot;
     bool                                m_dirty       = false;
     bool                                m_forceFlush  = false;
-    bool                                m_started     = false;
+    std::atomic<bool>                   m_started{false};
+    // Bumped by every effective stageRegister() / forceFlush(); lets a flush
+    // detect concurrent staging and avoid clearing dirty for data it did not
+    // write (the in-flight lost-update race Codex flagged).
+    quint64                             m_generation  = 0;
     std::chrono::steady_clock::time_point m_dirtyAt;
     std::chrono::steady_clock::time_point m_lastFlushAt;
     mutable std::mutex                   m_mtx;
+    std::atomic<bool>                    m_inFlight{false};
 };
 
 } // namespace core::module

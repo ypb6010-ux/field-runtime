@@ -104,6 +104,7 @@ public:
                     continue;
                 }
                 batch.swap(queue);
+                processing = true;   // batch is in flight (queue may now be empty)
             }
             spaceCv.notify_all();
 
@@ -120,10 +121,9 @@ public:
 
             {
                 std::lock_guard lk(mtx);
-                if (queue.empty()) {
-                    drainedGen.fetch_add(1, std::memory_order_release);
-                    drainCv.notify_all();
-                }
+                processing = false;
+                drainedGen.fetch_add(1, std::memory_order_release);
+                drainCv.notify_all();
             }
         }
         // Final drain on shutdown so nothing queued is lost.
@@ -147,13 +147,13 @@ public:
     }
 
     void flush() {
+        // Wait until nothing is queued AND no batch is mid-delivery. Checking
+        // only `queue.empty()` would return early in the window after the
+        // dispatch thread swaps the queue out but before it writes the batch
+        // to the sinks (the flaky race).
         std::unique_lock lk(mtx);
-        if (queue.empty()) return;
-        quint64 target = drainedGen.load(std::memory_order_acquire) + 1;
-        drainCv.wait(lk, [&] {
-            return stopping
-                || (queue.empty()
-                    && drainedGen.load(std::memory_order_acquire) >= target);
+        drainCv.wait(lk, [this] {
+            return stopping || (queue.empty() && !processing);
         });
     }
 
@@ -163,7 +163,8 @@ public:
     std::condition_variable         spaceCv;   // queue has room
     std::condition_variable         drainCv;   // queue drained
     std::deque<Entry>               queue;
-    bool                            stopping = false;
+    bool                            stopping   = false;
+    bool                            processing = false;   // a batch is mid-delivery
     std::atomic<quint64>            dropped{0};
     std::atomic<quint64>            drainedGen{0};
 

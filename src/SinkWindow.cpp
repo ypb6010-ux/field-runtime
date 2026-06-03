@@ -59,6 +59,7 @@ bool SinkWindow::stageRegister(int absAddress, quint16 value, quint16 mask) {
     quint16 const next = quint16((cur & ~mask) | (value & mask));
     if (next == cur) return false;
     m_snapshot[idx] = next;
+    ++m_generation;   // an effective change — lost-update guard
     if (!m_dirty) {
         m_dirty   = true;
         m_dirtyAt = clock_t::now();
@@ -69,42 +70,58 @@ bool SinkWindow::stageRegister(int absAddress, quint16 value, quint16 mask) {
 void SinkWindow::forceFlush() {
     std::lock_guard lk(m_mtx);
     m_forceFlush = true;
+    ++m_generation;
+}
+
+bool SinkWindow::decideFlush(QList<quint16>& values, QString& reason, quint64& gen) {
+    auto const now = clock_t::now();
+    std::lock_guard lk(m_mtx);
+    bool flush = false;
+    if (m_forceFlush) {
+        flush  = true;
+        reason = QStringLiteral("force");
+    } else if (m_dirty) {
+        auto const elapsed = duration_cast<milliseconds>(now - m_dirtyAt).count();
+        if (elapsed >= m_cfg.debounceMs) {
+            flush  = true;
+            reason = QStringLiteral("debounce");
+        }
+    }
+    if (!flush && m_cfg.keepAlivePeriodMs > 0) {
+        auto const elapsed = duration_cast<milliseconds>(now - m_lastFlushAt).count();
+        if (elapsed >= m_cfg.keepAlivePeriodMs) {
+            flush  = true;
+            reason = QStringLiteral("keepalive");
+        }
+    }
+    if (!flush) return false;
+    values = m_snapshot;
+    gen    = m_generation;
+    return true;
+}
+
+void SinkWindow::markFlushed(bool ok, quint64 gen) {
+    if (!ok) return;   // dirty preserved on failure so the next tick retries
+    std::lock_guard lk(m_mtx);
+    // If a stage / forceFlush landed since the snapshot, that data was not in
+    // this write — keep dirty so the next tick flushes it (no lost update).
+    if (m_generation != gen) return;
+    m_dirty       = false;
+    m_forceFlush  = false;
+    m_lastFlushAt = clock_t::now();
 }
 
 sched::SubmitResult SinkWindow::onTick() {
-    if (!m_started) {
+    if (!m_started.load()) {
         return {sched::ResultKind::Cancelled,
                 QStringLiteral("module not started"), 0};
     }
 
-    auto const  now = clock_t::now();
-    bool        flush = false;
-    QString     reason;
     QList<quint16> values;
-
-    {
-        std::lock_guard lk(m_mtx);
-        if (m_forceFlush) {
-            flush  = true;
-            reason = QStringLiteral("force");
-        } else if (m_dirty) {
-            auto const elapsed = duration_cast<milliseconds>(now - m_dirtyAt).count();
-            if (elapsed >= m_cfg.debounceMs) {
-                flush  = true;
-                reason = QStringLiteral("debounce");
-            }
-        }
-        if (!flush && m_cfg.keepAlivePeriodMs > 0) {
-            auto const elapsed = duration_cast<milliseconds>(now - m_lastFlushAt).count();
-            if (elapsed >= m_cfg.keepAlivePeriodMs) {
-                flush  = true;
-                reason = QStringLiteral("keepalive");
-            }
-        }
-        if (!flush) {
-            return {sched::ResultKind::Ok, QStringLiteral("no flush due"), 0};
-        }
-        values = m_snapshot;
+    QString        reason;
+    quint64        gen = 0;
+    if (!decideFlush(values, reason, gen)) {
+        return {sched::ResultKind::Ok, QStringLiteral("no flush due"), 0};
     }
 
     transport::WriteBatch batch;
@@ -126,17 +143,7 @@ sched::SubmitResult SinkWindow::onTick() {
         return submission;
     }
 
-    {
-        std::lock_guard lk(m_mtx);
-        if (write.ok) {
-            // Clear dirty / forceFlush; record successful flush time. Dirty
-            // is intentionally preserved when writes fail so the next tick
-            // automatically retries.
-            m_dirty       = false;
-            m_forceFlush  = false;
-            m_lastFlushAt = now;
-        }
-    }
+    markFlushed(write.ok, gen);
 
     if (!write.ok) {
         submission.kind         = sched::ResultKind::Error;
@@ -144,6 +151,48 @@ sched::SubmitResult SinkWindow::onTick() {
     }
     submission.errorMessage = reason + (write.ok ? QString{} : (": " + write.errorMessage));
     return submission;
+}
+
+void SinkWindow::driveTick() {
+    if (!m_started.load()) return;
+
+    bool expected = false;
+    if (!m_inFlight.compare_exchange_strong(expected, true,
+                                            std::memory_order_acq_rel)) {
+        return;
+    }
+
+    QList<quint16> values;
+    QString        reason;
+    quint64        gen = 0;
+    if (!decideFlush(values, reason, gen)) {
+        m_inFlight.store(false, std::memory_order_release);
+        return;
+    }
+
+    transport::WriteBatch batch;
+    batch.table        = m_cfg.table;
+    batch.startAddress = m_cfg.startAddress;
+    batch.values       = std::move(values);
+
+    sched::RequestTag tag;
+    tag.moduleId = m_id;
+    tag.priority = m_priority;
+    tag.coalesce = m_cfg.coalesceWrites;
+
+    auto const submission = m_transport->scheduler().submitAsync(tag,
+        [this, batch, gen](sched::AsyncDone done) {
+            m_transport->writeAsync(batch,
+                [this, gen, done = std::move(done)](transport::WriteResult w) mutable {
+                    markFlushed(w.ok, gen);
+                    m_inFlight.store(false, std::memory_order_release);
+                    done(w.ok);
+                });
+        });
+
+    if (submission.kind != sched::ResultKind::Ok) {
+        m_inFlight.store(false, std::memory_order_release);
+    }
 }
 
 void SinkWindow::start() {

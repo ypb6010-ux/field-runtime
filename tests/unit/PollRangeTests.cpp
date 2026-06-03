@@ -215,3 +215,67 @@ TEST_CASE("PollRange supports no bindings (raw poll-only mode)",
     REQUIRE(mock.readCount() == 1);
     REQUIRE(poll.bindingCount() == 0);
 }
+
+TEST_CASE("PollRange.driveTick dispatches decoded values via the async path",
+          "[poll][async]") {
+    test::MockTransport mock;
+    module::PollRange poll(QStringLiteral("poll.async"),
+                           mock, readRange(0, 2), 100);
+    auto spec = dpSpec("a", dp::ScalarType::U16, 0);
+    auto dpt  = std::make_shared<dp::Datapoint>(spec);
+    poll.bind(dpt, std::make_shared<codec::BuiltinScalarCodec>(dp::ScalarType::U16), 0);
+
+    mock.enqueueReadValues({0x0055, 0});
+    poll.driveTick();   // sync mock async → completes inline
+
+    REQUIRE(mock.readCount() == 1);
+    REQUIRE(dpt->value().value<quint16>() == 0x55);
+    REQUIRE(dpt->state() == dp::DpState::Ok);
+}
+
+TEST_CASE("PollRange.driveTick coalesces while a read is still in flight",
+          "[poll][async][coalesce]") {
+    test::MockTransport mock;
+    mock.setDeferAsync(true);   // hold completions so a read stays in flight
+    module::PollRange poll(QStringLiteral("poll.coalesce"),
+                           mock, readRange(0, 1), 100);
+    auto spec = dpSpec("a", dp::ScalarType::U16, 0);
+    auto dpt  = std::make_shared<dp::Datapoint>(spec);
+    poll.bind(dpt, std::make_shared<codec::BuiltinScalarCodec>(dp::ScalarType::U16), 0);
+
+    mock.enqueueReadValues({0x11});
+    poll.driveTick();                       // starts read, deferred (in flight)
+    REQUIRE(mock.readCount() == 1);
+    REQUIRE(mock.pendingReadCount() == 1);
+
+    poll.driveTick();                       // in flight → skipped (coalesced)
+    REQUIRE(mock.readCount() == 1);
+
+    REQUIRE(mock.completeNextRead());       // finish the first read
+    REQUIRE(dpt->value().value<quint16>() == 0x11);
+
+    mock.enqueueReadValues({0x22});
+    poll.driveTick();                       // guard freed → a new read fires
+    REQUIRE(mock.readCount() == 2);
+    REQUIRE(mock.completeNextRead());
+    REQUIRE(dpt->value().value<quint16>() == 0x22);
+}
+
+TEST_CASE("PollRange.driveTick marks Stale and frees the guard when rejected",
+          "[poll][async][reject]") {
+    test::MockTransport mock;
+    auto& sched = static_cast<core::sched::SerialScheduler&>(mock.scheduler());
+    for (int i = 0; i < 10; ++i) sched.recordFailureForTesting();
+    REQUIRE(sched.stats().circuitState == core::sched::CircuitState::Open);
+
+    module::PollRange poll(QStringLiteral("poll.reject"),
+                           mock, readRange(0, 1), 100);
+    auto spec = dpSpec("a", dp::ScalarType::U16, 0);
+    auto dpt  = std::make_shared<dp::Datapoint>(spec);
+    dpt->setValue(quint16(1));
+    poll.bind(dpt, std::make_shared<codec::BuiltinScalarCodec>(dp::ScalarType::U16), 0);
+
+    poll.driveTick();
+    REQUIRE(dpt->state() == dp::DpState::Stale);
+    REQUIRE(mock.readCount() == 0);   // no I/O while circuit open; guard released
+}
