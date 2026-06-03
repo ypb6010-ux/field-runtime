@@ -15,16 +15,19 @@ namespace core::module {
 // TickDriver — drives each auto-ticking module's driveTick() on a dedicated
 // worker thread, grouped by transport.
 //
-// driveTick() is NOT non-blocking: PollRange / SinkWindow / Heartbeat call
-// scheduler().submit(...), which runs the work on the calling thread and
-// blocks on the transport's synchronous read/write until the reply (or a
-// timeout) arrives. If the tick fired on the GUI thread it would freeze the UI
-// for the duration of every poll (and far longer when a PLC is slow or down).
+// driveTick() is non-blocking ONLY when the transport implements a true async
+// path: ModbusTcpClient overrides readAsync/writeAsync to post the request to
+// its client thread and return at once. The other transports (Modbus RTU,
+// OPC UA, MQTT, S7) still fall back to the base Transport::readAsync default,
+// which runs the SYNCHRONOUS read/writeBatch on the caller — i.e. it blocks.
 //
-// So we give each transport its own tick thread: the blocking happens there,
-// never on the GUI thread, and a slow/unreachable PLC on one transport cannot
-// stall ticks on another. The modules themselves are plain (non-QObject) and
-// internally synchronized, so calling driveTick() from a worker thread is safe.
+// Because a poll/sink/heartbeat module can be wired to any of them, we keep one
+// tick thread per transport: a blocking driveTick() (and any slow/unreachable
+// PLC) stalls only that thread, never the GUI thread, and one transport's
+// stall does not affect another's ticks. The modules are plain (non-QObject)
+// and internally synchronized, so calling driveTick() from a worker thread is
+// safe. (Once every transport has a non-blocking async path, ticks could move
+// back to the GUI thread and these threads be dropped.)
 class ModuleRegistry::TickDriver {
 public:
     TickDriver() = default;
