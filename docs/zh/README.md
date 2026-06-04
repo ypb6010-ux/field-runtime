@@ -426,7 +426,7 @@ S7 stub 在 `connect()` 时返回 `"snap7 library not yet vendored"`。如现场
 | `JMJAttributes` Q_PROPERTY    | `Datapoint` Q_PROPERTY + DatapointQmlBridge |
 | `JMJDatabase` Q_INVOKABLE     | 订阅 `DpChanged` + persistTag 路由（Phase 3+） |
 | INI 配置                       | TOML（schema 参见 §4） |
-| Lua 解码                       | builtin scale/mask/wordOrder + EnumU16Codec（LuaCodec Phase 3+） |
+| Lua 解码                       | builtin scale/mask/wordOrder + EnumU16Codec + **LuaCodec**（sol2+lua5.4,`CORE_BUILD_LUA=ON`,示例 `data/codec/bcd_datetime.lua`） |
 | `ModbusPoll` 协程             | `PollRange` + `RequestScheduler` |
 
 详细迁移步骤见 spec §Phase 4 章节。

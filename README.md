@@ -22,14 +22,13 @@ A C++20 / Qt6 library for building SCADA-style upper-computer software that brid
 | Datapoint / DatapointRegistry | ✅ shipped | QObject + `Q_PROPERTY(value)` for direct QML binding |
 | BuiltinScalarCodec | ✅ shipped | all 11 ScalarTypes × 4 WordOrders, scale/offset/mask/shift |
 | EnumU16Codec / CodecRegistry | ✅ shipped | |
+| LuaCodec | ✅ shipped | sol2 + lua5.4 script codecs (BCD, bit-fields, RTC); `CORE_BUILD_LUA=ON`; example `data/codec/bcd_datetime.lua`; sandbox still TODO |
 | PollRange | ✅ shipped | per-tick algorithm + datapoint bindings (`pollOnce()`) |
 | SinkWindow | ✅ shipped | debounce / keepAlive / forceFlush / coalesce; auto force-flush on reconnect |
 | Heartbeat / Command / AckWatch | ✅ shipped | synchronous AckWatch; coroutine variant Phase 3 |
 | ConfigLoader (TOML) | ✅ shipped | full schema: transport / poll_range / sink_window / heartbeat / ack_watch / command / datapoint / route / codec; cross-section ref + uniqueness validation |
 | ICore facade | ✅ shipped | wires every section from TOML; operator-box → ServerWriteEvent → SinkWindow → PLC routed end-to-end |
 | ModuleRegistry QTimer autopilot | ✅ shipped | `startAll()` arms a `QTimer` per module whose `tickPeriodMs() > 0`; test hook to disable |
-| CreditScheduler / PriorityScheduler | ⏳ pending | Phase 3 |
-| LuaCodec | ⏳ pending | Phase 3 (sol2 sandbox) |
 | Plugin / Database integration | ⏳ pending | Phase 3+ |
 
 See the [implementation specification](../doc/design/Core-Greenfield-Spec.md) for the full progress table and ~150-item checklist.
