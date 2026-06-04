@@ -239,6 +239,7 @@ CodecConfig parseCodec(toml::table const& t,
     requireStr(t, "id",   section, c.id,   errs);
     requireStr(t, "kind", section, c.kind, errs);
     c.script = getStr(t, "script", {});
+    c.arg    = getStr(t, "arg", {});
     if (auto m = t["map"].as_table()) {
         for (auto&& [k, v] : *m) {
             auto key = qstr(k.str());

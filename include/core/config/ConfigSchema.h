@@ -69,6 +69,7 @@ struct CodecConfig {
     QString                    kind;       // "enum_u16" / "lua" / ...
     QVariantMap                map;        // for enum_u16
     QString                    script;     // for lua
+    QString                    arg;        // for lua: opaque selector passed as ctx.arg
 };
 
 struct PollRangeConfig {

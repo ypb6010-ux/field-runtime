@@ -421,7 +421,7 @@ private:
                 if (QFileInfo(script).isRelative() && !m_configDir.isEmpty())
                     script = QDir(m_configDir).filePath(script);
                 QString err;
-                auto lc = codec::LuaCodec::fromFile(cc.id, script, &err);
+                auto lc = codec::LuaCodec::fromFile(cc.id, script, cc.arg, &err);
                 if (lc) {
                     m_codecs->registerCodec(std::move(lc));
                 } else {

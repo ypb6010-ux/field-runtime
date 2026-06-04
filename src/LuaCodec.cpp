@@ -63,6 +63,7 @@ QVariant fromLua(sol::object const& o) {
 class LuaCodec::Impl {
 public:
     QString                  id;
+    QString                  arg;   // opaque selector → ctx.arg
     sol::state               lua;
     sol::protected_function  decodeFn;
     sol::protected_function  encodeFn;
@@ -74,6 +75,7 @@ public:
         ctx["count"]   = regCount;
         ctx["scale"]   = ref.scale;
         ctx["offset"]  = ref.offset;
+        ctx["arg"]     = arg.toStdString();
         return ctx;
     }
 };
@@ -85,6 +87,7 @@ QString LuaCodec::id() const { return m_impl->id; }
 
 std::shared_ptr<LuaCodec> LuaCodec::fromFile(QString const& id,
                                             QString const& scriptPath,
+                                            QString const& arg,
                                             QString*       error) {
     auto fail = [&](QString const& msg) -> std::shared_ptr<LuaCodec> {
         if (error) *error = msg;
@@ -95,6 +98,7 @@ std::shared_ptr<LuaCodec> LuaCodec::fromFile(QString const& id,
 
     auto impl = std::make_unique<Impl>();
     impl->id  = id;
+    impl->arg = arg;
     impl->lua.open_libraries(sol::lib::base, sol::lib::math,
                              sol::lib::string, sol::lib::table);
 
@@ -174,7 +178,7 @@ LuaCodec::~LuaCodec() = default;
 QString LuaCodec::id() const { return m_impl ? m_impl->id : QString(); }
 
 std::shared_ptr<LuaCodec> LuaCodec::fromFile(QString const&, QString const&,
-                                            QString* error) {
+                                            QString const&, QString* error) {
     if (error)
         *error = QStringLiteral("Lua codec disabled at build time "
                                 "(CORE_BUILD_LUA=OFF)");

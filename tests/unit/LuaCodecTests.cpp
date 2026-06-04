@@ -1,7 +1,10 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <QDir>
+#include <QFile>
 #include <QList>
 #include <QString>
+#include <QTemporaryDir>
 
 #include "core/codec/LuaCodec.h"
 #include "core/dp/PortRef.h"
@@ -24,7 +27,7 @@ QString const        kStr = QStringLiteral("2024-06-03 14:30:45");
 
 std::shared_ptr<LuaCodec> loadBcd(QString* err) {
     return LuaCodec::fromFile(QStringLiteral("bcd_datetime"),
-                              QStringLiteral(CORE_LUA_BCD_SCRIPT), err);
+                              QStringLiteral(CORE_LUA_BCD_SCRIPT), {}, err);
 }
 
 } // namespace
@@ -78,7 +81,31 @@ TEST_CASE("LuaCodec tolerates malformed input without crashing", "[codec][lua]")
 TEST_CASE("LuaCodec.fromFile reports a missing script", "[codec][lua]") {
     QString err;
     auto codec = LuaCodec::fromFile(QStringLiteral("x"),
-                                    QStringLiteral("does/not/exist.lua"), &err);
+                                    QStringLiteral("does/not/exist.lua"), {}, &err);
     REQUIRE(codec == nullptr);
     REQUIRE_FALSE(err.isEmpty());
+}
+
+TEST_CASE("LuaCodec passes the config arg to the script as ctx.arg",
+          "[codec][lua]") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    QString const path = dir.filePath(QStringLiteral("echo_arg.lua"));
+    {
+        QFile f(path);
+        REQUIRE(f.open(QIODevice::WriteOnly));
+        // Decode ignores the registers and just returns the selector — so two
+        // codecs sharing one script, with different args, produce different values.
+        f.write("return { decode = function(raw, ctx) return ctx.arg end,"
+                "          encode = function(v, ctx) return {} end }");
+    }
+
+    QString err;
+    auto hi = LuaCodec::fromFile(QStringLiteral("c1"), path, QStringLiteral("high"), &err);
+    auto lo = LuaCodec::fromFile(QStringLiteral("c2"), path, QStringLiteral("low"),  &err);
+    if (!hi) SKIP("Lua disabled: " + err.toStdString());
+
+    PortRef ref;
+    REQUIRE(hi->decode(QList<quint16>{0}, ref).toString() == QStringLiteral("high"));
+    REQUIRE(lo->decode(QList<quint16>{0}, ref).toString() == QStringLiteral("low"));
 }
