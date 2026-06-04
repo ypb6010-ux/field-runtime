@@ -127,28 +127,7 @@ dp::Datapoint* DatapointQmlBridge::dp(QString const& id) const {
 
 // ModuleRegistry lives in ModuleRegistry.cpp.
 
-// ---------------------------------------------------------------------------
-// PluginRegistry / PortRegistry — stubs (Phase 2)
-// ---------------------------------------------------------------------------
-namespace core::plugin {
-
-class PluginRegistry::Impl {};
-
-PluginRegistry::PluginRegistry()  : m_impl(std::make_unique<Impl>()) {}
-PluginRegistry::~PluginRegistry() = default;
-
-bool PluginRegistry::load(QString const&) { return false; }
-void PluginRegistry::unloadAll() {}
-void PluginRegistry::registerAllPorts(PortRegistry&) {}
-QList<Plugin*> PluginRegistry::all() const { return {}; }
-
-class PortRegistry::Impl {};
-
-PortRegistry::PortRegistry(dp::DatapointRegistry&, bus::EventBus&) : m_impl(nullptr) {}
-PortRegistry::~PortRegistry() = default;
-
-} // namespace core::plugin
-
+// PluginRegistry / PortRegistry live in PluginSystem.cpp.
 // ConfigLoader lives in ConfigLoader.cpp, ICore in Core.cpp.
 
 // Suppress unused warning for notImplemented when nothing uses it yet.

@@ -23,3 +23,14 @@ public:
 };
 
 } // namespace core::plugin
+
+// DLL entry contract. A plugin shared library exports a single C symbol
+// `corePluginCreate` returning a heap Plugin* that Core owns (deleted on
+// unloadAll). Use this macro in exactly one TU of the plugin:
+//
+//     CORE_PLUGIN_ENTRY(MyPlugin)
+//
+#define CORE_PLUGIN_ENTRY(ClassName)                                   \
+    extern "C" Q_DECL_EXPORT core::plugin::Plugin* corePluginCreate() { \
+        return new ClassName();                                        \
+    }

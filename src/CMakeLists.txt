@@ -19,6 +19,7 @@ target_sources(Core PRIVATE
     Command.cpp
     AckWatch.cpp
     ModuleRegistry.cpp
+    PluginSystem.cpp
     ModbusTcpClientTransport.cpp
     ModbusTcpServerTransport.cpp
     ModbusRtuTransport.cpp

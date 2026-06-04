@@ -410,6 +410,17 @@ RouteConfig parseRoute(toml::table const& t,
     return c;
 }
 
+PluginConfig parsePlugin(toml::table const& t,
+                          int                index,
+                          ValidationErrors&   errs) {
+    auto const section = QStringLiteral("plugin[%1]").arg(index);
+    PluginConfig c;
+    requireStr(t, "dll", section, c.dllPath, errs);
+    c.name   = getStr(t, "name",   {});
+    c.config = getStr(t, "config", {});
+    return c;
+}
+
 PortRefConfig parsePortRef(toml::table const& t,
                              QString const&     section,
                              ValidationErrors&   errs) {
@@ -748,6 +759,7 @@ ConfigLoader::loadFromToml(QString const& path) {
     parseArray(root, "command",     schema.commands,    parseCommand,    errs);
     parseArray(root, "datapoint",   schema.datapoints,  parseDatapoint,  errs);
     parseArray(root, "route",       schema.routes,      parseRoute,      errs);
+    parseArray(root, "plugin",      schema.plugins,     parsePlugin,     errs);
 
     auto vErrs = validate(schema);
     if (vErrs.has_value()) {

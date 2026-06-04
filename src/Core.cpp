@@ -34,7 +34,9 @@
 #include "core/module/ModuleRegistry.h"
 #include "core/module/PollRange.h"
 #include "core/module/SinkWindow.h"
+#include "core/plugin/Plugin.h"
 #include "core/plugin/PluginRegistry.h"
+#include "core/plugin/PortRegistry.h"
 #include "core/transport/ModbusRtuTransport.h"
 #include "core/transport/ModbusTcpClientTransport.h"
 #include "core/transport/ModbusTcpServerTransport.h"
@@ -134,7 +136,8 @@ public:
         m_pollRangePtrs.clear();
         m_sinkWindowPtrs.clear();
         m_modules.reset();                     // safe: no completion can fire now
-        m_plugins.reset();
+        m_plugins.reset();                     // destroy plugins (and their port emitters) first
+        m_ports.reset();                       // then the port registry (drops its bus sub)
         m_dps.reset();
         m_codecs.reset();
         m_bus.reset();
@@ -259,6 +262,26 @@ private:
         buildAckWatches(schema);
         buildCommands(schema);
         m_routes = schema.routes;
+        loadPlugins(schema);
+    }
+
+    // Load each [[plugin]] DLL, let it bind In/OutPorts to datapoints (which now
+    // exist), then notify all that Core is wired. dll paths resolve against the
+    // config dir when relative.
+    void loadPlugins(config::ConfigSchema const& schema) {
+        if (schema.plugins.isEmpty()) return;
+        m_ports = std::make_unique<plugin::PortRegistry>(*m_dps, *m_bus);
+        for (auto const& pc : schema.plugins) {
+            QString dll = pc.dllPath;
+            if (QFileInfo(dll).isRelative() && !m_configDir.isEmpty())
+                dll = QDir(m_configDir).filePath(dll);
+            if (!m_plugins->load(dll)) {
+                m_logger->logf(log::LogLevel::Error, QStringLiteral("plugin"), dll,
+                               QStringLiteral("failed to load plugin '%1'").arg(pc.name));
+            }
+        }
+        m_plugins->registerAllPorts(*m_ports);
+        for (auto* p : m_plugins->all()) p->onInitialized();
     }
 
     void startStatsPump() {
@@ -733,6 +756,7 @@ private:
     std::unique_ptr<dp::DatapointRegistry>                      m_dps;
     std::unique_ptr<module::ModuleRegistry>                     m_modules;
     std::unique_ptr<plugin::PluginRegistry>                     m_plugins;
+    std::unique_ptr<plugin::PortRegistry>                       m_ports;
     std::map<QString, std::unique_ptr<transport::Transport>>    m_transports;
     std::vector<std::thread>                                    m_connectThreads;
     bool                                                        m_started = false;

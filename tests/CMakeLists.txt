@@ -37,6 +37,7 @@ add_executable(CoreTests
     unit/MqttTransportTests.cpp
     unit/LoggerTests.cpp
     unit/LuaCodecTests.cpp
+    unit/PluginSystemTests.cpp
 )
 
 # Point the Lua codec test at the real shipped script.
