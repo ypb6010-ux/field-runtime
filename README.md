@@ -77,8 +77,7 @@ or expose them to QML through the provided bridge.
 
 ## License
 
-FieldRuntime is released under the BSD Zero Clause License (`0BSD`). You may
-use, copy, modify, and distribute it for any purpose, with or without fee.
+FieldRuntime is released under the MIT License.
 
 ## Detailed Chinese Documentation
 
