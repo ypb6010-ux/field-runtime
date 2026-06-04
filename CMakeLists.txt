@@ -93,6 +93,24 @@ if(CORE_BUILD_MQTT_QT)
     target_link_libraries(Core PUBLIC Qt6::Mqtt)
     target_compile_definitions(Core PRIVATE CORE_HAS_MQTT_QT=1)
 endif()
+if(CORE_BUILD_LUA)
+    find_package(sol2 CONFIG REQUIRED)
+    # vcpkg's Lua ships an unversioned lua.h, which CMake's FindLua can miss when
+    # the vcpkg toolchain wrapper isn't active (this build dir uses CMAKE_PREFIX_PATH
+    # only). Try FindLua, then fall back to locating the header/lib directly.
+    find_package(Lua QUIET)
+    if(NOT LUA_FOUND)
+        find_path(LUA_INCLUDE_DIR NAMES lua.h)
+        find_library(LUA_LIBRARIES NAMES lua lua54 lua5.4 liblua)
+    endif()
+    if(NOT LUA_INCLUDE_DIR OR NOT LUA_LIBRARIES)
+        message(FATAL_ERROR "CORE_BUILD_LUA=ON but Lua was not found. Set "
+            "LUA_INCLUDE_DIR / LUA_LIBRARIES, or configure with the vcpkg toolchain.")
+    endif()
+    target_link_libraries(Core PRIVATE sol2::sol2 ${LUA_LIBRARIES})
+    target_include_directories(Core PRIVATE ${LUA_INCLUDE_DIR})
+    target_compile_definitions(Core PRIVATE CORE_HAS_LUA=1)
+endif()
 if(CORE_BUILD_MQTT_PAHO)
     # vcpkg ships paho.mqtt.cpp under PahoMqttCpp::paho-mqttpp3 (shared) or
     # PahoMqttCpp::paho-mqttpp3-static, depending on triplet selection.

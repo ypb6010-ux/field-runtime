@@ -15,8 +15,12 @@
 #include "core/bus/EventBus.h"
 #include "core/bus/BusEvents.h"
 #include "core/bus/Subscription.h"
+#include <QDir>
+#include <QFileInfo>
+
 #include "core/codec/BuiltinCodecs.h"
 #include "core/codec/CodecRegistry.h"
+#include "core/codec/LuaCodec.h"
 #include "core/config/ConfigLoader.h"
 #include "core/dp/Datapoint.h"
 #include "core/dp/DatapointRegistry.h"
@@ -156,6 +160,9 @@ public:
         if (!schema->meta.logLevel.isEmpty()) {
             m_logger->setThreshold(log::levelFromString(schema->meta.logLevel));
         }
+        // Resolve config-relative paths (e.g. lua codec scripts) against the
+        // config file's directory.
+        m_configDir = QFileInfo(path).absolutePath();
         wireFromSchema(*schema);
         m_logger->logf(log::LogLevel::Info, QStringLiteral("config"), path,
                        QStringLiteral("loaded"),
@@ -386,6 +393,21 @@ private:
                 }
                 m_codecs->registerCodec(
                     std::make_shared<codec::EnumU16Codec>(cc.id, std::move(map)));
+            } else if (cc.kind == QStringLiteral("lua")) {
+                QString script = cc.script;
+                if (QFileInfo(script).isRelative() && !m_configDir.isEmpty())
+                    script = QDir(m_configDir).filePath(script);
+                QString err;
+                auto lc = codec::LuaCodec::fromFile(cc.id, script, &err);
+                if (lc) {
+                    m_codecs->registerCodec(std::move(lc));
+                } else {
+                    m_logger->logf(log::LogLevel::Error, QStringLiteral("config"),
+                                   script,
+                                   err.isEmpty()
+                                       ? QStringLiteral("lua codec load failed")
+                                       : err);
+                }
             }
         }
     }
@@ -703,6 +725,7 @@ private:
 
 private:
     QQmlContext*                                                m_qml;
+    QString                                                     m_configDir;
     std::unique_ptr<log::Logger>                                m_logger;
     std::unique_ptr<qml::LogBridge>                             m_logBridge;
     std::unique_ptr<bus::EventBus>                              m_bus;

@@ -10,6 +10,7 @@ target_sources(Core PRIVATE
     PriorityScheduler.cpp
     BuiltinCodecs.cpp
     CodecRegistry.cpp
+    LuaCodec.cpp
     Datapoint.cpp
     DatapointRegistry.cpp
     PollRange.cpp

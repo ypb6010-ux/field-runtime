@@ -36,7 +36,12 @@ add_executable(CoreTests
     unit/OpcUaTransportTests.cpp
     unit/MqttTransportTests.cpp
     unit/LoggerTests.cpp
+    unit/LuaCodecTests.cpp
 )
+
+# Point the Lua codec test at the real shipped script.
+target_compile_definitions(CoreTests PRIVATE
+    CORE_LUA_BCD_SCRIPT="${CMAKE_CURRENT_SOURCE_DIR}/../data/codec/bcd_datetime.lua")
 
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
