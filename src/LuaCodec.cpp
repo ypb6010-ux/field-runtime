@@ -101,6 +101,11 @@ std::shared_ptr<LuaCodec> LuaCodec::fromFile(QString const& id,
     impl->arg = arg;
     impl->lua.open_libraries(sol::lib::base, sol::lib::math,
                              sol::lib::string, sol::lib::table);
+    // sol::lib::base 自带 dofile/loadfile/load/loadstring —— 即便不开 io/os/package,
+    // 这些也能读取并执行任意 Lua 文件 / 动态加载代码,会突破"无文件/外部访问"的沙箱承诺。
+    // codec 只做纯数据变换,显式移除它们,让沙箱与文档一致。
+    for (char const* g : {"dofile", "loadfile", "load", "loadstring"})
+        impl->lua[g] = sol::nil;
 
     sol::protected_function_result res =
         impl->lua.safe_script_file(scriptPath.toStdString(),

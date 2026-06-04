@@ -328,7 +328,7 @@ return {
 |---|---|---|
 | 数据范围 | 只看得到**本数据点的寄存器** + ctx | `Codec` 接口签名 |
 | 副作用 | **纯函数**,不能写别的寄存器/发事件/写日志/碰 DB | 不给任何 core 句柄 |
-| 沙箱 | 只开 `base/math/string/table`;**无 io/os/package/coroutine/debug**(连 os.time 都没有) | `LuaCodec.cpp` 的 `open_libraries` |
+| 沙箱 | 只开 `base/math/string/table`,**无 io/os/package/coroutine/debug**;并显式移除 base 里的 `dofile/loadfile/load/loadstring`(否则它们能读/执行任意文件) | `LuaCodec.cpp` 的 `open_libraries` + nil 掉加载器 |
 | 时间 | **同步内联**在数据路径上跑、互斥串行,必须立刻返回(不能 sleep/长循环) | 调用模型 |
 
 > ⚠️ 已知缺口:**未做 CPU/内存配额**。沙箱防"越权"(碰 OS),但防不住"失控"(死循环会卡住该
