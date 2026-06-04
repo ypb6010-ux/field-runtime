@@ -123,7 +123,11 @@ if(CORE_BUILD_MQTT_PAHO)
 endif()
 
 if(MSVC)
-    target_compile_options(Core PRIVATE /W4 /permissive- /utf-8)
+    # /EHsc is required: ConfigLoader uses try/catch around toml::parse, and
+    # toml++ switches to its non-throwing parse_result API (whose table
+    # conversion makes `root = toml::parse(...)` ambiguous) when C++ exceptions
+    # are off. Some preset/Qt configs don't add /EHsc by default, so force it.
+    target_compile_options(Core PRIVATE /W4 /permissive- /utf-8 /EHsc)
 else()
     target_compile_options(Core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
