@@ -150,7 +150,7 @@ PLC ──Modbus──► Transport.read
 
 ## 4. TOML 配置参考
 
-完整 schema 见 [`doc/design/Core-Greenfield-Spec.md` §四](../../../doc/design/Core-Greenfield-Spec.md#4-配置层-toml-schema-全集)。
+完整 schema 见 [`doc/design/core/Core-Greenfield-Spec.md` §四](../../../doc/design/core/Core-Greenfield-Spec.md#4-配置层-toml-schema-全集)。
 这里给出最常用字段的速查表。
 
 ### 4.1 `[[transport]]`
@@ -418,7 +418,7 @@ S7 stub 在 `connect()` 时返回 `"snap7 library not yet vendored"`。如现场
 
 ## 8. 从旧 Core 迁移
 
-新 Core 与 `src/Core/` 完全独立，可并行运行直到 App 全部迁完。
+新 Core 与旧 `src/Core/` 完全独立。当前主工程已完成切换,旧 `src/Core/` 已退役并删除;迁移痕迹保留在 `doc/refactor/`。
 
 | 旧 Core | 新 Core |
 |---------|---------|

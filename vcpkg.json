@@ -1,6 +1,6 @@
 {
-  "name": "core",
-  "version": "0.1.0",
+  "name": "field-runtime",
+  "version": "2.0.0",
   "description": "Industrial Modbus runtime: typed datapoints, declarative routing, half-duplex aware scheduling.",
   "dependencies": [
     "async-simple"

@@ -14,4 +14,4 @@
 5. **Schedulers** — Serial / Credit / Priority — when to pick which
 6. **Multi-Protocol Transports** — Modbus TCP/RTU, OPC UA, MQTT, S7
 7. **Examples Index** — three runnable demos in `core/examples/`
-8. **Migration Guide** — porting from the legacy `src/Core/` to the new Core
+8. **Migration Guide** — porting from the retired legacy `src/Core/` to the new Core

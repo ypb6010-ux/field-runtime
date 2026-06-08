@@ -4,8 +4,8 @@
 
 namespace core {
 
-constexpr int kVersionMajor = 0;
-constexpr int kVersionMinor = 1;
+constexpr int kVersionMajor = 2;
+constexpr int kVersionMinor = 0;
 constexpr int kVersionPatch = 0;
 
 CORE_EXPORT const char* versionString() noexcept;

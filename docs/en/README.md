@@ -153,7 +153,7 @@ operator box ──Modbus write──► ServerTransport.dataWritten
 ## 4. TOML Configuration Reference
 
 The full schema is documented in
-[`doc/design/Core-Greenfield-Spec.md` §4](../../../doc/design/Core-Greenfield-Spec.md#四-配置层-toml-schema-全集).
+[`doc/design/core/Core-Greenfield-Spec.md` §4](../../../doc/design/core/Core-Greenfield-Spec.md#四-配置层-toml-schema-全集).
 Below is the cheat sheet.
 
 ### 4.1 `[[transport]]`
@@ -431,7 +431,7 @@ README.
 ## 8. Migration from Legacy Core
 
 The new Core lives at `core/` and is completely independent of
-`src/Core/`. They can coexist while applications migrate one by one.
+the legacy `src/Core/`. In this host repository the legacy implementation has been retired; keep migration notes in `doc/refactor/`.
 
 | Legacy Core | New Core |
 |-------------|----------|

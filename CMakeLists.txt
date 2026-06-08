@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 project(Core
-    VERSION 0.1.0
+    VERSION 2.0.0
     DESCRIPTION "Industrial Modbus runtime with typed datapoints and declarative routing"
     LANGUAGES CXX
 )
