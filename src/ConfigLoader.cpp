@@ -411,6 +411,22 @@ RouteConfig parseRoute(toml::table const& t,
     return c;
 }
 
+BridgeConfig parseBridge(toml::table const& t,
+                          int                index,
+                          ValidationErrors&   errs) {
+    auto const section = QStringLiteral("bridge[%1]").arg(index);
+    BridgeConfig c;
+    requireStr(t, "server", section, c.server, errs);
+    requireStr(t, "plc",    section, c.plc,    errs);
+    c.offset         = getInt(t, "offset", 0);
+    c.writeStart     = getInt(t, "write_start", 0);
+    c.writeCount     = getInt(t, "write_count", 0);
+    c.mirrorStart    = getInt(t, "mirror_start", 0);
+    c.mirrorCount    = getInt(t, "mirror_count", 0);
+    c.mirrorPeriodMs = getInt(t, "mirror_period_ms", 100);
+    return c;
+}
+
 PluginConfig parsePlugin(toml::table const& t,
                           int                index,
                           ValidationErrors&   errs) {
@@ -720,6 +736,34 @@ void validateRefs(ConfigSchema const& s, ValidationErrors& errs) {
                 QStringLiteral("references unknown datapoint '%1'").arg(r.to), -1});
         }
     }
+
+    for (int i = 0; i < s.bridges.size(); ++i) {
+        auto const& b   = s.bridges[i];
+        auto const sec  = QStringLiteral("bridge[%1]").arg(i);
+        checkTransportRef(b.server, sec, "server");
+        checkTransportRef(b.plc,    sec, "plc");
+        if (b.writeCount < 0 || b.mirrorCount < 0) {
+            errs.push_back({sec, "count",
+                QStringLiteral("write_count / mirror_count must be >= 0"), -1});
+        }
+        // 镜像区必须至少有一个来自 plc 的 HR datapoint,否则镜像恒为 0(配错的常见原因)。
+        if (b.mirrorCount > 0 && transports.count(b.plc)) {
+            bool anyDp = false;
+            for (auto const& d : s.datapoints) {
+                if (!d.hasSource || d.source.port != b.plc) continue;
+                if (d.source.table != QStringLiteral("HR")
+                 && d.source.table != QStringLiteral("HoldingRegisters")) continue;
+                int const a = d.source.address;
+                if (a >= b.mirrorStart && a < b.mirrorStart + b.mirrorCount) { anyDp = true; break; }
+            }
+            if (!anyDp) {
+                errs.push_back({sec, "mirror",
+                    QStringLiteral("mirror range [%1,%2) has no datapoint sourced from plc "
+                                   "'%3' (HR); mirror would be all zeros")
+                        .arg(b.mirrorStart).arg(b.mirrorStart + b.mirrorCount).arg(b.plc), -1});
+            }
+        }
+    }
 }
 
 } // namespace
@@ -760,6 +804,7 @@ ConfigLoader::loadFromToml(QString const& path) {
     parseArray(root, "command",     schema.commands,    parseCommand,    errs);
     parseArray(root, "datapoint",   schema.datapoints,  parseDatapoint,  errs);
     parseArray(root, "route",       schema.routes,      parseRoute,      errs);
+    parseArray(root, "bridge",      schema.bridges,     parseBridge,     errs);
     parseArray(root, "plugin",      schema.plugins,     parsePlugin,     errs);
 
     auto vErrs = validate(schema);

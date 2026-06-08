@@ -128,6 +128,10 @@ public:
         //      after the tick driver stopped;
         //   4. now destroy the modules;
         //   5. datapoints / codecs / bus, then the logger last.
+        stopMirrorPump();                      // no bridge mirror fires during teardown
+        m_bridgeMirrors.clear();               // drop datapoint refs before the registry dies
+        m_bridgeFwdSinks.clear();              // raw ptrs owned by m_modules
+        m_bridges.clear();
         m_transportEventSub.reset();
         m_serverWriteSub.reset();
         joinConnectThreads();                  // no connect() in flight on a dying transport
@@ -210,6 +214,7 @@ public:
         }
         m_modules->startAll();
         startStatsPump();
+        startMirrorPump();
         m_bus->publish(bus::CoreReady{});
         m_logger->logf(log::LogLevel::Info, QStringLiteral("core"),
                        QStringLiteral("ICore"), QStringLiteral("started"));
@@ -223,6 +228,7 @@ public:
         joinConnectThreads();   // no connect in flight before we disconnect
         m_bus->publish(bus::CoreStopping{});
         stopStatsPump();
+        stopMirrorPump();
         m_modules->stopAll();
         for (auto& [id, t] : m_transports) t->disconnect();
         m_logger->flush();
@@ -262,6 +268,7 @@ private:
         buildAckWatches(schema);
         buildCommands(schema);
         m_routes = schema.routes;
+        buildBridges(schema);
         loadPlugins(schema);
     }
 
@@ -334,6 +341,7 @@ private:
                             + QString::number(e.startAddress),
                         QStringLiteral("ok"), {}});
                     routeServerWrite(e);
+                    forwardBridges(e);
                 }));
     }
 
@@ -402,6 +410,117 @@ private:
             if (mask == 0) mask = 0xFFFFu;
             target->stageRegister(addr, raw, mask);
         }
+    }
+
+    // ——— 整段桥接(替代旧 ModbusServer 中继) ———
+    void buildBridges(config::ConfigSchema const& schema) {
+        m_bridges = schema.bridges;
+        m_bridgeMirrors.assign(size_t(m_bridges.size()), {});
+        m_bridgeFwdSinks.assign(size_t(m_bridges.size()), nullptr);
+        for (int i = 0; i < m_bridges.size(); ++i) {
+            auto const& b = m_bridges[i];
+            auto& list = m_bridgeMirrors[size_t(i)];
+            for (auto const& dp : m_dps->all()) {
+                auto const& src = dp->source();
+                if (!src.has_value()) continue;
+                if (src->transport != b.plc) continue;
+                if (src->table != QModbusDataUnit::HoldingRegisters) continue;
+                int const a = src->address;
+                if (a < b.mirrorStart || a >= b.mirrorStart + b.mirrorCount) continue;
+                list.emplace_back(a, dp);
+            }
+            // 转发走 PLC 侧的 SinkWindow(同 route 路径):线程安全地 stageRegister,
+            // 由 TickDriver 在生命周期线程带重试/coalesce 地刷到 PLC —— 避免单次
+            // submitAsync 在调度器繁忙时被丢弃。
+            if (b.writeCount > 0) {
+                if (auto* plc = transport(b.plc)) {
+                    module::SinkWindow::Config cfg;
+                    cfg.moduleId       = QStringLiteral("bridge.fwd.") + b.server;
+                    cfg.table          = QModbusDataUnit::HoldingRegisters;
+                    cfg.startAddress   = b.writeStart - b.offset;
+                    cfg.size           = b.writeCount;
+                    cfg.priority       = sched::Priority::High;
+                    cfg.debounceMs     = 0;
+                    cfg.keepAlivePeriodMs = 0;
+                    cfg.coalesceWrites = true;
+                    auto sw = std::make_unique<module::SinkWindow>(std::move(cfg), *plc);
+                    m_bridgeFwdSinks[size_t(i)] = sw.get();
+                    m_sinkWindowPtrs.push_back(sw.get());
+                    m_modules->registerModule(std::move(sw));
+                }
+            }
+        }
+    }
+
+    // 操作箱写 server → 写区子段 stage 到 PLC 侧 SinkWindow(server 地址 - offset)。
+    // stageRegister 线程安全,可直接在 server transport 线程调用;刷写由 TickDriver 做。
+    void forwardBridges(bus::ServerWriteEvent const& e) {
+        if (e.table != QModbusDataUnit::HoldingRegisters) return;
+        for (int i = 0; i < m_bridges.size(); ++i) {
+            auto const& b = m_bridges[i];
+            if (b.server != e.transportId) continue;
+            auto* sink = m_bridgeFwdSinks[size_t(i)];
+            if (!sink) continue;
+            int const eStart = e.startAddress;
+            int const eEnd   = e.startAddress + int(e.values.size());
+            int const s  = std::max(eStart, b.writeStart);
+            int const en = std::min(eEnd, b.writeStart + b.writeCount);
+            for (int a = s; a < en; ++a) {
+                sink->stageRegister(a - b.offset, e.values.at(a - eStart));
+            }
+        }
+    }
+
+public:
+    // 周期把 PLC 读区数据整段镜像回 server 自己的寄存器表(操作箱即可读到)。
+    // 也是测试入口(internal::mirrorBridgesOnce)。
+    void mirrorBridgesOnce() {
+        for (int i = 0; i < m_bridges.size(); ++i) {
+            auto const& b = m_bridges[i];
+            if (b.mirrorCount <= 0) continue;
+            auto* server = transport(b.server);
+            if (!server) continue;
+            QList<quint16> values(b.mirrorCount, quint16(0));
+            for (auto const& [addr, dp] : m_bridgeMirrors[size_t(i)]) {
+                int const idx = addr - b.mirrorStart;
+                if (idx >= 0 && idx < b.mirrorCount) values[idx] = quint16(dp->value().toUInt());
+            }
+            transport::WriteBatch batch;
+            batch.table        = QModbusDataUnit::HoldingRegisters;
+            batch.startAddress = b.mirrorStart + b.offset;
+            batch.values       = std::move(values);
+            sched::RequestTag tag;
+            tag.moduleId = QStringLiteral("bridge.mirror.") + b.server;
+            tag.priority = sched::Priority::Low;
+            tag.coalesce = true;
+            server->scheduler().submitAsync(tag, [server, batch](sched::AsyncDone done) {
+                server->writeAsync(batch, [done](transport::WriteResult w) mutable { done(w.ok); });
+            });
+        }
+    }
+
+private:
+    void startMirrorPump() {
+        if (m_mirrorTimer) return;
+        int period = 100;
+        bool any = false;
+        for (auto const& b : m_bridges) {
+            if (b.mirrorCount > 0) { any = true; period = std::min(period, std::max(20, b.mirrorPeriodMs)); }
+        }
+        if (!any) return;
+        m_mirrorTimer = new QTimer(m_bus.get());
+        m_mirrorTimer->setInterval(period);
+        m_mirrorTimer->setSingleShot(false);
+        QObject::connect(m_mirrorTimer, &QTimer::timeout, m_bus.get(),
+            [this]() { mirrorBridgesOnce(); });
+        m_mirrorTimer->start();
+    }
+
+    void stopMirrorPump() {
+        if (!m_mirrorTimer) return;
+        m_mirrorTimer->stop();
+        m_mirrorTimer->deleteLater();
+        m_mirrorTimer = nullptr;
     }
 
     void registerCustomCodecs(config::ConfigSchema const& schema) {
@@ -764,6 +883,10 @@ private:
     std::vector<module::SinkWindow*>                            m_sinkWindowPtrs;
     std::map<QString, std::shared_ptr<dp::Datapoint>>           m_datapointById;
     QList<config::RouteConfig>                                  m_routes;
+    QList<config::BridgeConfig>                                 m_bridges;
+    std::vector<std::vector<std::pair<int, std::shared_ptr<dp::Datapoint>>>> m_bridgeMirrors;
+    std::vector<module::SinkWindow*>                            m_bridgeFwdSinks;
+    QTimer*                                                     m_mirrorTimer = nullptr;
     std::unique_ptr<bus::Subscription>                          m_transportEventSub;
     std::unique_ptr<bus::Subscription>                          m_serverWriteSub;
     QTimer*                                                     m_statsTimer = nullptr;
@@ -783,6 +906,9 @@ void tickSinkWindowsOnce(ICore& core) {
 }
 void publishSchedulerStatsOnce(ICore& core) {
     static_cast<CoreImpl&>(core).publishSchedulerStatsOnce();
+}
+void mirrorBridgesOnce(ICore& core) {
+    static_cast<CoreImpl&>(core).mirrorBridgesOnce();
 }
 } // namespace internal
 

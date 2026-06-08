@@ -28,6 +28,7 @@ add_executable(CoreTests
     unit/ModbusTcpServerTransportTests.cpp
     unit/ConfigLoaderTests.cpp
     unit/CoreEndToEndTests.cpp
+    unit/BridgeTests.cpp
     unit/ModuleRegistryTickTests.cpp
     unit/TransportReconnectTests.cpp
     unit/CreditPrioritySchedulerTests.cpp

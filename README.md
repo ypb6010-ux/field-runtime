@@ -287,8 +287,37 @@ max_retries  = 2
 [[plugin]]     name="MyLogic" dll="Plugins/MyLogic.dll" config=""    # DLL 插件,见 §9
 ```
 
+> `[[route]]` 是**逐 datapoint**的单点映射;要把操作箱 server 与 PLC client 做**整段双向
+> 中继**(旧 `ModbusServer` 的活),用下面的 `[[bridge]]`。
+
+### `[[bridge]]` 整段桥接(操作箱 ↔ PLC)
+
+把操作箱连接的 `modbus_tcp_server` 与 PLC 侧 `modbus_tcp_client` 整段双向桥接,替代旧
+`ModbusServer` 的中继:
+
+```toml
+[[bridge]]
+server      = "main"      # 操作箱连的 server transport id
+plc         = "default"   # PLC client transport id
+offset      = 0           # server 地址 = plc 地址 + offset
+write_start = 0           # 转发区:server 写 [write_start, write_start+write_count) → PLC
+write_count = 50
+mirror_start = 50         # 镜像区:PLC 读 [mirror_start, mirror_start+mirror_count) → server 寄存器
+mirror_count = 300
+mirror_period_ms = 100    # 镜像刷新周期(默认 100)
+```
+
+- **转发**(写区):操作箱写 server 触发 `ServerWriteEvent` → 命中写区的子段 `stageRegister`
+  到 PLC 侧一个**自动创建的 SinkWindow**(`bridge.fwd.<server>`,High 优先级,带重试/coalesce)
+  → 由 TickDriver 刷到 PLC。地址按 `plc = server - offset` 映射。
+- **镜像**(读区):每 `mirror_period_ms` 把 PLC 读区的 datapoint 值整段 `writeBatch` 回 server
+  transport **自己的寄存器表**,操作箱即可读到 PLC 状态。镜像区必须有来自 `plc` 的 HR datapoint
+  覆盖(否则镜像恒为 0,加载时校验会报错)。
+- 写区/读区**不重叠**:写区保留操作箱写入(不被镜像覆盖),读区回显 PLC。
+
 > 校验:`ConfigLoader::validate` 会查"引用是否命中已声明项""id 唯一""sink.addr 是否落在所引用
-> 的 sink_window 范围内"等,出错会在加载时把 section/field/行号一并报出。
+> 的 sink_window 范围内""bridge.server/plc transport 是否存在""bridge 镜像区是否有 PLC datapoint"
+> 等,出错会在加载时把 section/field/行号一并报出。
 
 ---
 

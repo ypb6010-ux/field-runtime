@@ -184,6 +184,21 @@ struct PluginConfig {
     QString config;
 };
 
+// 整段桥接(替代旧 ModbusServer 中继):把操作箱连的 server transport 与 PLC client
+// transport 双向桥接 —— 写区 [write_start, write_start+write_count) 的 server 写转发到
+// PLC;读区 [mirror_start, mirror_start+mirror_count) 的 PLC 数据周期镜像回 server 寄存器
+// 供操作箱读取。server 地址 = PLC 地址 + offset。
+struct BridgeConfig {
+    QString server;
+    QString plc;
+    int     offset         = 0;
+    int     writeStart     = 0;
+    int     writeCount     = 0;
+    int     mirrorStart    = 0;
+    int     mirrorCount    = 0;
+    int     mirrorPeriodMs = 100;
+};
+
 struct ConfigSchema {
     MetaConfig                meta;
     QList<TransportConfig>    transports;
@@ -195,6 +210,7 @@ struct ConfigSchema {
     QList<CommandConfig>      commands;
     QList<DatapointConfig>    datapoints;
     QList<RouteConfig>        routes;
+    QList<BridgeConfig>       bridges;
     QList<PluginConfig>       plugins;
 };
 
