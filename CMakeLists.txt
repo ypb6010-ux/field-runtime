@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
-project(Core
+project(FieldRuntime
     VERSION 2.0.0
-    DESCRIPTION "Industrial Modbus runtime with typed datapoints and declarative routing"
+    DESCRIPTION "Industrial field-device runtime with typed datapoints and declarative routing"
     LANGUAGES CXX
 )
 
@@ -61,6 +61,7 @@ endif()
 
 add_library(Core SHARED)
 add_library(Core::Core ALIAS Core)
+add_library(FieldRuntime::FieldRuntime ALIAS Core)
 
 target_compile_definitions(Core PRIVATE CORE_BUILDING_LIBRARY)
 

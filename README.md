@@ -1,8 +1,91 @@
-# Core —— 工业 Modbus/多协议 运行时
+# FieldRuntime — Industrial Field-Device Runtime
+
+FieldRuntime is a C++23/Qt 6 runtime for building industrial field-device
+integrations. It turns protocol-specific registers, tags, and messages into
+typed datapoints, then connects polling, writeback, routing, logging, plugins,
+QML bindings, and persistence through a declarative TOML configuration and a
+typed event bus.
+
+It is designed for HMI/SCADA applications, equipment gateways, edge collectors,
+and device-control tools that need to talk to PLCs and industrial protocols
+without hard-coding register logic into UI code.
+
+## What It Provides
+
+- Declarative TOML configuration for transports, polling ranges, datapoints,
+  writeback windows, heartbeats, commands, and acknowledgements.
+- Typed datapoints that can be consumed by C++, QML, plugins, or persistence
+  modules without exposing raw register layout to the application layer.
+- Modbus TCP/RTU support, plus optional OPC UA, Qt MQTT, Paho MQTT, and S7
+  extension points.
+- Serial, credit, and priority schedulers for half-duplex PLC links and
+  higher-throughput transports.
+- Built-in scalar, enum, and optional Lua codecs for protocol-specific parsing.
+- EventBus-based integration for datapoint changes, transport state, server
+  writes, scheduler statistics, and lifecycle events.
+- QML bridge and plugin APIs for production HMI applications.
+- Optional persistence module intended for telemetry and operation/system logs.
+
+## Quick Start
+
+```powershell
+cmake -S . -B build `
+  -DQt6_DIR=D:/path/to/Qt/6.8.x/msvc2022_64/lib/cmake/Qt6 `
+  -DCORE_BUILD_TESTS=ON `
+  -DCORE_BUILD_EXAMPLES=ON `
+  -DCORE_BUILD_LUA=OFF
+
+cmake --build build --config Release
+```
+
+For vcpkg-based builds, install the dependencies declared in `vcpkg.json` and
+configure with your vcpkg toolchain file.
+
+## Example Configuration
+
+```toml
+[meta]
+project = "demo"
+version = "0.1"
+
+[[transport]]
+id = "plc1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+port = 502
+slave_id = 1
+[transport.scheduler]
+kind = "serial"
+inter_request_gap_ms = 5
+
+[[poll_range]]
+module_id = "poll.main"
+transport = "plc1"
+table = "HR"
+range = [0, 32]
+period_ms = 100
+
+[[datapoint]]
+id = "motor.running"
+kind = "Status"
+type = "U16"
+source = { port = "plc1", table = "HR", addr = 0, bit = 0 }
+```
+
+Applications can bind to datapoints directly, subscribe to `DpChanged` events,
+or expose them to QML through the provided bridge.
+
+## License
+
+FieldRuntime is released under the MIT License.
+
+## Detailed Chinese Documentation
 
 > 一个以**声明式配置(TOML)**驱动、**事件总线**解耦、**全异步非阻塞 I/O**的设备采集与控制内核。
 > 把"协议寄存器"抽象成"带类型的数据点(datapoint)",把"采集/下发/心跳/命令"抽象成"模块",
 > 业务侧只面对 datapoint 和事件,不碰寄存器细节。
+>
+> CMake 兼容 target 暂保留为 `Core::Core`, 同时提供 `FieldRuntime::FieldRuntime` 别名。
 
 ---
 
