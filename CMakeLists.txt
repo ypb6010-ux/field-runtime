@@ -155,3 +155,15 @@ endif()
 if(CORE_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
+
+# ---------------------------------------------------------------------------
+# Install
+# ---------------------------------------------------------------------------
+# Core 是 SHARED 库,各产品运行时都依赖 Core.dll。windeployqt(qt_deploy_runtime_dependencies
+# 的 ADDITIONAL_LIBRARIES)只扫描 Core.dll 来解析它的 Qt 依赖,并不会复制 Core.dll 本身,
+# 因此必须在这里显式安装,否则 cmake --install 后产品目录里缺 Core.dll。
+include(GNUInstallDirs)
+install(TARGETS Core
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
