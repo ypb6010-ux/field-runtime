@@ -1,0 +1,20 @@
+version = 1
+SPDX-PackageName = "FieldRuntime"
+SPDX-PackageSupplier = "ypb6010-ux"
+SPDX-PackageDownloadLocation = "https://github.com/ypb6010-ux/field-runtime"
+
+# Default license for the whole tree. Source files also carry their own
+# SPDX headers; the annotations below cover files where an inline header is
+# impractical (binary assets, generated files, data, build metadata).
+
+[[annotations]]
+path = "**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 ypb6010-ux"
+SPDX-License-Identifier = "MPL-2.0"
+
+[[annotations]]
+path = ["data/**", "**/*.png", "**/*.svg", "**/*.ico", "**/*.toml", "**/*.json"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 ypb6010-ux"
+SPDX-License-Identifier = "MPL-2.0"

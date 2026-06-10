@@ -77,7 +77,32 @@ or expose them to QML through the provided bridge.
 
 ## License
 
-FieldRuntime is released under the MIT License.
+FieldRuntime is released under the **Mozilla Public License 2.0
+(MPL-2.0)** — see [`LICENSE`](LICENSE). MPL-2.0 is a file-level copyleft:
+you may use, modify, and integrate FieldRuntime in closed-source products,
+but modifications to MPL-covered files must be made available under the
+same license. Third-party component licenses are listed in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+
+Every source file carries an SPDX header
+(`SPDX-License-Identifier: MPL-2.0`); the repository follows the
+[REUSE](https://reuse.software/) specification (see [`REUSE.toml`](REUSE.toml)).
+
+## Commercial and OEM Use
+
+FieldRuntime is offered as **open core with dual licensing**:
+
+- **Community (MPL-2.0)** — free for everyone, including closed-source
+  products, provided changes to MPL-covered files are published.
+- **Commercial / OEM** — for vendors who need to modify core files without
+  publishing those changes, or who want warranty, support, or brand-use
+  rights. See [`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md).
+
+Contributions are accepted under the MPL-2.0 and require a signed
+Contributor License Agreement — see [`CONTRIBUTING.md`](CONTRIBUTING.md)
+and [`CLA.md`](CLA.md). The project name is covered by a trademark policy
+([`TRADEMARKS.md`](TRADEMARKS.md)); report security issues per
+[`SECURITY.md`](SECURITY.md).
 
 ## Detailed Chinese Documentation
 

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 ypb6010-ux
+// SPDX-License-Identifier: MPL-2.0
 // Live-DB smoke check for CorePersistence. Connects to Postgres, exercises all
 // three streams (telemetry / operation / system), reads them back, prints a
 // summary. Run manually against a reachable database.

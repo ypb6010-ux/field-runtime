@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 ypb6010-ux
+// SPDX-License-Identifier: MPL-2.0
 // stats_dashboard — Subscribe to SchedulerStatsEvent + TransportEvent for
 // every transport and print a one-line snapshot per second. Designed to
 // be wired to a real QML / web dashboard in production.

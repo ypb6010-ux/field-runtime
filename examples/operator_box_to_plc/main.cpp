@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 ypb6010-ux
+// SPDX-License-Identifier: MPL-2.0
 // operator_box_to_plc — Mirror a Modbus TCP server (operator box) into a
 // PLC client through a SinkWindow.
 //

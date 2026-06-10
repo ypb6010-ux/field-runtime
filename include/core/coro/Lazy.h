@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 ypb6010-ux
+// SPDX-License-Identifier: MPL-2.0
 #pragma once
 
 // Lazy<T> is the project-wide single-result coroutine type. It is provided by

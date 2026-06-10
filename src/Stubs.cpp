@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 ypb6010-ux
+// SPDX-License-Identifier: MPL-2.0
 // Minimum stubs to make Core link during the scaffold phase. Each subsystem
 // gets a real implementation file as Phase 1 progresses; this file shrinks
 // every iteration. See doc/design/Core-Greenfield-Spec.md §8 for the order.

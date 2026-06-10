@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 ypb6010-ux
+// SPDX-License-Identifier: MPL-2.0
 // minimal_modbus — Smallest possible Core consumer.
 //
 // Loads a 3-datapoint TOML, polls a Modbus TCP server, prints every value

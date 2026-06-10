@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 ypb6010-ux
+// SPDX-License-Identifier: MPL-2.0
 #include "core/codec/LuaCodec.h"
 
 #include "core/dp/PortRef.h"
