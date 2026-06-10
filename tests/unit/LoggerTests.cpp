@@ -5,6 +5,8 @@
 #include <mutex>
 #include <vector>
 
+#include "core/log/DedupFilter.h"
+#include "core/log/LogFilter.h"
 #include "core/log/Logger.h"
 #include "core/log/Sinks.h"
 
@@ -108,6 +110,92 @@ TEST_CASE("Operation records are never filtered by level", "[logger]") {
     REQUIRE(ops.size() == 1);
     REQUIRE(ops[0].action == "reset");
     REQUIRE(ops[0].actor == "ui:user");
+}
+
+TEST_CASE("LogFilter gates on category and level independently", "[logfilter]") {
+    LogFilter f;
+    f.setDefault(true, LogLevel::Info);
+    f.setCategory("switch", false, LogLevel::Trace);   // disabled at any level
+    f.setCategory("config", true, LogLevel::Error);    // enabled but Error+ only
+
+    REQUIRE(f.passes("transport", LogLevel::Info));
+    REQUIRE_FALSE(f.passes("transport", LogLevel::Debug));  // below default floor
+    REQUIRE_FALSE(f.passes("switch", LogLevel::Error));     // category disabled
+    REQUIRE_FALSE(f.passes("config", LogLevel::Info));      // below category floor
+    REQUIRE(f.passes("config", LogLevel::Error));
+}
+
+TEST_CASE("LogFilter gates operation records on category axis only", "[logfilter]") {
+    LogFilter f;
+    f.setDefault(true, LogLevel::Critical);   // very high level floor
+    OperationRecord op;
+    op.category = "audit";
+    REQUIRE(f.passes(op));                     // level ignored for ops
+    f.setCategory("audit", false, LogLevel::Trace);
+    REQUIRE_FALSE(f.passes(op));               // disabling category hides it
+}
+
+TEST_CASE("LogFilter inherit then override is independent of base", "[logfilter]") {
+    LogFilter base;
+    base.setDefault(true, LogLevel::Info);
+    base.setCategory("switch", true, LogLevel::Info);
+
+    LogFilter biz = LogFilter::inherit(base);
+    REQUIRE(biz.passes("switch", LogLevel::Info));      // inherited
+    biz.setCategory("switch", false, LogLevel::Info);   // override: hide switch
+    REQUIRE_FALSE(biz.passes("switch", LogLevel::Info));
+    REQUIRE(base.passes("switch", LogLevel::Info));     // base untouched
+}
+
+TEST_CASE("Logger setFilter replaces the gate", "[logger]") {
+    Logger logger;
+    auto sink = std::make_shared<RecordingSink>();
+    logger.addSink(sink);
+
+    LogFilter f;
+    f.setDefault(false, LogLevel::Trace);     // block everything by default
+    f.setCategory("alarm", true, LogLevel::Info);
+    logger.setFilter(f);
+
+    logger.logf(LogLevel::Error, "transport", "s", "blocked");
+    logger.logf(LogLevel::Info,  "alarm", "s", "kept");
+    logger.flush();
+
+    auto recs = sink->system();
+    REQUIRE(recs.size() == 1);
+    REQUIRE(recs[0].category == "alarm");
+}
+
+TEST_CASE("Logger gates operation records by category", "[logger]") {
+    Logger logger;
+    auto sink = std::make_shared<RecordingSink>();
+    logger.addSink(sink);
+
+    LogFilter f;   // default enabled; explicitly hide audit
+    f.setCategory("audit", false, LogLevel::Trace);
+    logger.setFilter(f);
+
+    OperationRecord op;
+    op.action   = "server-write";
+    op.category = "audit";
+    logger.logOperation(op);
+    logger.flush();
+
+    REQUIRE(sink->ops().empty());
+}
+
+TEST_CASE("DedupFilter suppresses repeats within window", "[dedup]") {
+    DedupFilter d(1000);   // 1s window
+    QDateTime const t0(QDate(2026, 6, 10), QTime(0, 0, 0));
+
+    REQUIRE(d.accept("k", t0));                      // first occurrence emits
+    REQUIRE_FALSE(d.accept("k", t0.addMSecs(200)));  // within window: suppressed
+    REQUIRE_FALSE(d.accept("k", t0.addMSecs(900)));
+    REQUIRE(d.takeSuppressed("k") == 2);
+    REQUIRE(d.accept("k", t0.addMSecs(1100)));       // window elapsed: emits again
+
+    d.reset("k");
+    REQUIRE(d.accept("k", t0.addMSecs(1200)));       // reset: emits fresh
 }
 
 TEST_CASE("formatLine renders a system record", "[logger]") {

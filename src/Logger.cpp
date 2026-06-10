@@ -8,8 +8,6 @@
 #include <variant>
 #include <vector>
 
-#include <QHash>
-
 namespace core::log {
 
 const char* levelName(LogLevel level) noexcept {
@@ -63,13 +61,6 @@ public:
         }
         cv.notify_all();
         if (worker.joinable()) worker.join();
-    }
-
-    bool passesThreshold(LogRecord const& r) const {
-        LogLevel min = globalMin.load(std::memory_order_relaxed);
-        auto it = categoryMin.constFind(r.category);
-        if (it != categoryMin.constEnd()) min = it.value();
-        return r.level >= min;
     }
 
     void enqueue(Entry e) {
@@ -168,9 +159,9 @@ public:
     std::atomic<quint64>            dropped{0};
     std::atomic<quint64>            drainedGen{0};
 
-    std::atomic<LogLevel>           globalMin{LogLevel::Info};
+    mutable std::mutex              filterMtx;
+    LogFilter                       coreFilter;    // gate, guarded by filterMtx
     std::mutex                      sinkMtx;
-    QHash<QString, LogLevel>        categoryMin;   // guarded by sinkMtx
     std::vector<std::shared_ptr<ILogSink>> sinks;  // guarded by sinkMtx
 
     std::thread                     worker;
@@ -182,16 +173,28 @@ Logger::Logger(int maxQueueDepth)
 Logger::~Logger() = default;
 
 void Logger::setThreshold(LogLevel min) {
-    m_impl->globalMin.store(min, std::memory_order_relaxed);
+    std::lock_guard lk(m_impl->filterMtx);
+    m_impl->coreFilter.setDefaultMinLevel(min);
 }
 
 void Logger::setCategoryThreshold(QString const& category, LogLevel min) {
-    std::lock_guard lk(m_impl->sinkMtx);
-    m_impl->categoryMin.insert(category, min);
+    std::lock_guard lk(m_impl->filterMtx);
+    m_impl->coreFilter.setCategory(category, true, min);
 }
 
 LogLevel Logger::threshold() const {
-    return m_impl->globalMin.load(std::memory_order_relaxed);
+    std::lock_guard lk(m_impl->filterMtx);
+    return m_impl->coreFilter.defaultRule().minLevel;
+}
+
+void Logger::setFilter(LogFilter filter) {
+    std::lock_guard lk(m_impl->filterMtx);
+    m_impl->coreFilter = std::move(filter);
+}
+
+LogFilter Logger::filter() const {
+    std::lock_guard lk(m_impl->filterMtx);
+    return m_impl->coreFilter;
 }
 
 void Logger::addSink(std::shared_ptr<ILogSink> sink) {
@@ -209,19 +212,21 @@ void Logger::removeSink(ILogSink* sink) {
 void Logger::log(LogRecord rec) {
     if (rec.ts.isNull()) rec.ts = QDateTime::currentDateTime();
     {
-        // Category threshold lives under sinkMtx; read it via the helper which
-        // takes the lock only if a per-category override exists.
-        std::lock_guard lk(m_impl->sinkMtx);
-        LogLevel min = m_impl->globalMin.load(std::memory_order_relaxed);
-        auto it = m_impl->categoryMin.constFind(rec.category);
-        if (it != m_impl->categoryMin.constEnd()) min = it.value();
-        if (rec.level < min) return;
+        std::lock_guard lk(m_impl->filterMtx);
+        if (!m_impl->coreFilter.passes(rec)) return;
     }
     m_impl->enqueue(Entry{std::move(rec)});
 }
 
 void Logger::logOperation(OperationRecord rec) {
     if (rec.ts.isNull()) rec.ts = QDateTime::currentDateTime();
+    if (rec.category.isEmpty()) rec.category = QStringLiteral("audit");
+    {
+        // Audit is gated on the category axis only (see LogFilter); a raised
+        // level threshold never drops it, but disabling its category does.
+        std::lock_guard lk(m_impl->filterMtx);
+        if (!m_impl->coreFilter.passes(rec)) return;
+    }
     m_impl->enqueue(Entry{std::move(rec)});
 }
 

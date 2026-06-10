@@ -3,6 +3,7 @@
 
 #include <map>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -98,7 +99,7 @@ dp::PortRef makePortRef(config::PortRefConfig const& pc,
 
 class CoreImpl : public ICore {
 public:
-    explicit CoreImpl(QQmlContext* qml)
+    CoreImpl(QQmlContext* qml, bool installDefaultConsole)
         : m_qml(qml)
         , m_logger(std::make_unique<log::Logger>())
         , m_bus(std::make_unique<bus::EventBus>())
@@ -108,8 +109,12 @@ public:
         , m_plugins(std::make_unique<plugin::PluginRegistry>()) {
         m_codecs->loadBuiltins();
         // Built-in console sink so diagnostics surface out of the box; the app
-        // adds file / DB sinks via logger().addSink(...).
-        m_logger->addSink(std::make_shared<log::ConsoleSink>());
+        // adds file / DB sinks via logger().addSink(...). Apps that want to
+        // filter or suppress console output pass installDefaultConsole=false
+        // and register their own.
+        if (installDefaultConsole) {
+            m_logger->addSink(std::make_shared<log::ConsoleSink>());
+        }
         installLogBridge();
     }
 
@@ -197,6 +202,25 @@ public:
         ids.reserve(int(m_transports.size()));
         for (auto const& [id, t] : m_transports) ids << id;
         return ids;
+    }
+
+    void setServerForwardEnabled(QString const& serverTransportId, bool enabled) override {
+        bool wasEnabled;
+        {
+            std::lock_guard lk(m_forwardMtx);
+            wasEnabled = m_forwardEnabled.value(serverTransportId, true);
+            m_forwardEnabled[serverTransportId] = enabled;
+        }
+        // 关闭瞬间(true→false):把该 server 桥接的转发区在程序内置 0,取消尚未写入
+        // PLC 的操作箱指令(中性/停机)。只在边沿触发,避免每次调用重复 stage。
+        if (wasEnabled && !enabled) {
+            zeroBridgeForward(serverTransportId);
+        }
+    }
+
+    bool serverForwardEnabled(QString const& serverTransportId) const override {
+        std::lock_guard lk(m_forwardMtx);
+        return m_forwardEnabled.value(serverTransportId, true);
     }
 
     void start() override {
@@ -339,7 +363,10 @@ private:
                         QStringLiteral("server-write"), e.transportId,
                         {}, QString::number(e.values.size()) + " regs @ "
                             + QString::number(e.startAddress),
-                        QStringLiteral("ok"), {}});
+                        QStringLiteral("ok"), {},
+                        QStringLiteral("audit"),
+                        QStringLiteral("server-write:") + QString::number(e.startAddress)});
+                    if (!serverForwardEnabled(e.transportId)) return;   // 业务闸门:不转发
                     routeServerWrite(e);
                     forwardBridges(e);
                 }));
@@ -467,6 +494,20 @@ private:
             int const en = std::min(eEnd, b.writeStart + b.writeCount);
             for (int a = s; a < en; ++a) {
                 sink->stageRegister(a - b.offset, e.values.at(a - eStart));
+            }
+        }
+    }
+
+    // 关闭转发瞬间:把该 server 桥接的整个转发写区在 PLC 侧 SinkWindow 内置 0,
+    // 由 TickDriver 下发 —— 取消尚未写入 PLC 的操作箱指令。
+    void zeroBridgeForward(QString const& server) {
+        for (int i = 0; i < m_bridges.size(); ++i) {
+            auto const& b = m_bridges[i];
+            if (b.server != server) continue;
+            auto* sink = m_bridgeFwdSinks[size_t(i)];
+            if (!sink) continue;
+            for (int a = b.writeStart; a < b.writeStart + b.writeCount; ++a) {
+                sink->stageRegister(a - b.offset, 0);
             }
         }
     }
@@ -886,6 +927,8 @@ private:
     QList<config::BridgeConfig>                                 m_bridges;
     std::vector<std::vector<std::pair<int, std::shared_ptr<dp::Datapoint>>>> m_bridgeMirrors;
     std::vector<module::SinkWindow*>                            m_bridgeFwdSinks;
+    mutable std::mutex                                          m_forwardMtx;
+    QHash<QString, bool>                                        m_forwardEnabled;   // server id → 转发使能(默认 true)
     QTimer*                                                     m_mirrorTimer = nullptr;
     std::unique_ptr<bus::Subscription>                          m_transportEventSub;
     std::unique_ptr<bus::Subscription>                          m_serverWriteSub;
@@ -893,8 +936,8 @@ private:
     int                                                         m_statsIntervalMs = 1000;
 };
 
-std::unique_ptr<ICore> ICore::create(QQmlContext* qml) {
-    return std::make_unique<CoreImpl>(qml);
+std::unique_ptr<ICore> ICore::create(QQmlContext* qml, bool installDefaultConsole) {
+    return std::make_unique<CoreImpl>(qml, installDefaultConsole);
 }
 
 namespace internal {

@@ -398,6 +398,20 @@ mirror_period_ms = 100    # 镜像刷新周期(默认 100)
   覆盖(否则镜像恒为 0,加载时校验会报错)。
 - 写区/读区**不重叠**:写区保留操作箱写入(不被镜像覆盖),读区回显 PLC。
 
+**运行时转发开关(业务可干预):** 转发链路(route + bridge 写区)默认开启,可按 server 透传 id
+运行时启停:
+
+```cpp
+core->setServerForwardEnabled("main", false);   // 停止操作箱→PLC 转发
+bool on = core->serverForwardEnabled("main");
+```
+
+- 关闭(`true→false` 边沿)瞬间,把该 server 桥接的整个写区在 PLC 侧 SinkWindow **置 0**,
+  取消尚未写入 PLC 的操作箱指令(中性/停机)。
+- **镜像不受影响** —— 关掉转发后操作箱仍能读到 PLC 状态。
+- 由业务逻辑驱动,例如按模式位决定是否放行(MYP:仅"井上远程"模式才转发)。审计记录
+  (`server-write`)照常产生,只是不再转发。
+
 > 校验:`ConfigLoader::validate` 会查"引用是否命中已声明项""id 唯一""sink.addr 是否落在所引用
 > 的 sink_window 范围内""bridge.server/plc transport 是否存在""bridge 镜像区是否有 PLC datapoint"
 > 等,出错会在加载时把 section/field/行号一并报出。
@@ -457,6 +471,8 @@ return {
 | **业务逻辑(DLL 插件)** | 实现 `plugin/Plugin.h` 的 `Plugin`,在 `registerPorts(PortRegistry&)` 里把 `InPort<T>`(收 datapoint 变化)/`OutPort<T>`(写 datapoint)绑到点上;用 `CORE_PLUGIN_ENTRY(MyPlugin)` 导出 `corePluginCreate`;TOML `[[plugin]] dll="..."` 加载。 |
 | **自定义编解码** | 简单/可现场改 → **Lua codec**(§8);需要 C++ 性能/复杂逻辑 → 实现 `codec/Codec.h` 的 `Codec` 注册进 `CodecRegistry`。 |
 | **自定义日志去向** | 实现 `log/ILogSink.h` 的 `ILogSink`(`write(LogRecord)`/`write(OperationRecord)`),`logger().addSink(...)`。`Persistence` 的 `DbLogSink`、UI 实时日志都是这么接的。 |
+| **日志过滤(类别×等级双轴)** | `log/LogFilter.h`:`Logger` 内置门(`setFilter`/`filter`/`setThreshold`)为基线;业务 sink 用 `LogFilter::inherit(logger().filter())` 继承再覆盖。`OperationRecord` 仅按类别轴过滤。`DedupFilter` 做重复事件聚合。详见使用手册 §7。 |
+| **控制台输出** | `ICore::create(qml)` 默认挂 `ConsoleSink`;传 `create(qml, /*installDefaultConsole=*/false)` 关闭它,由 app 自己装(可套 `LogFilter`)。 |
 | **自定义协议** | 实现 `transport/Transport.h`,提供非阻塞 `readAsync/writeAsync`(否则会阻塞 GUI 线程 tick)。 |
 | **QML 接入** | `ICore::create(qmlContext)` 自动注入 `log` 桥;datapoint 本身是 QObject,作为 context property 或经 `DatapointQmlBridge` 暴露后直接绑 `value`。 |
 

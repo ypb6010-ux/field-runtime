@@ -36,7 +36,8 @@ struct LogRecord {
 
 // Run / operation / audit record — structured business event. Produced by the
 // router (operator-box writes), commands, and the UI (actor = "ui:user").
-// Never filtered by log level.
+// Gated by the category axis of LogFilter only (no severity); the audit trail
+// is preserved by routing it to a pass-all sink, not by bypassing the filter.
 struct OperationRecord {
     QDateTime ts;
     QString   actor;        // "ui:user" / "operator-box" / "auto"
@@ -46,6 +47,8 @@ struct OperationRecord {
     QVariant  newValue;
     QString   result;       // "ok" / "failed" / "rejected"
     QString   note;
+    QString   category = QStringLiteral("audit");  // LogFilter category axis
+    QString   eventKey;     // dedup key, e.g. "server-write:0"
 };
 
 } // namespace core::log

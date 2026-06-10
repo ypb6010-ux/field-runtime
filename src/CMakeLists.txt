@@ -30,6 +30,8 @@ target_sources(Core PRIVATE
     ConfigLoader.cpp
     Core.cpp
     Logger.cpp
+    LogFilter.cpp
+    DedupFilter.cpp
     Sinks.cpp
     LogBridge.cpp
     # Headers carrying Q_OBJECT must be listed for AUTOMOC to pick them up

@@ -11,8 +11,9 @@
 4. [TOML Configuration Reference](#4-toml-configuration-reference)
 5. [Picking a Scheduler](#5-picking-a-scheduler)
 6. [Multi-Protocol Transports](#6-multi-protocol-transports)
-7. [Examples](#7-examples)
-8. [Migration from Legacy Core](#8-migration-from-legacy-core)
+7. [Logging & Dual-Axis Filtering](#7-logging--dual-axis-filtering)
+8. [Examples](#8-examples)
+9. [Migration from Legacy Core](#9-migration-from-legacy-core)
 
 ---
 
@@ -415,7 +416,100 @@ where it lives.
 
 ---
 
-## 7. Examples
+## 7. Logging & Dual-Axis Filtering
+
+### 7.1 Two record types
+
+| | `LogRecord` (system) | `OperationRecord` (run / audit) |
+|---|---|---|
+| Purpose | diagnostics, troubleshooting | business audit, accountability |
+| Fields | `level / category / source / message / fields` | `actor / action / target / old·newValue / result / note / category / eventKey` |
+| Filtering | category × level (both axes) | **category axis only** (no severity; `category` defaults to `"audit"`) |
+
+Emission is thread-safe and non-blocking — callable from any thread:
+
+```cpp
+core->logger().logf(LogLevel::Warn, "transport", "PLC1", "disconnected");
+core->logger().logOperation({ {}, "ui:user", "reset", "belt2",
+                              {}, {}, "ok", {}, "control", "reset:belt2" });
+```
+
+### 7.2 Sinks & the default console
+
+Records fan out through an async pipeline to registered sinks. Built-in:
+`ConsoleSink` (stderr), `RollingFileSink`; custom sinks implement `ILogSink`'s
+`write(LogRecord)` / `write(OperationRecord)`.
+
+```cpp
+core->logger().addSink(std::make_shared<log::RollingFileSink>("logs/app.log"));
+```
+
+`ICore::create` installs a `ConsoleSink` by default. To suppress stray stderr
+on a field box, or to own the console yourself (e.g. wrapped in a `LogFilter`),
+pass `installDefaultConsole=false`:
+
+```cpp
+auto core = core::ICore::create(qml, /*installDefaultConsole=*/false);
+```
+
+### 7.3 `LogFilter` — two independent axes
+
+```
+passes(category, level) = enabled(category) && level >= minLevel(category)
+```
+
+- **Category axis** — enable/disable each category.
+- **Level axis** — per-category minimum (e.g. `config` only at `Error`).
+- `OperationRecord` has no severity and is gated on the **category axis only**:
+  audit passes unless its category is explicitly disabled, so raising the level
+  threshold never silently drops it.
+
+```cpp
+LogFilter f;
+f.setDefault(false, LogLevel::Trace);        // block everything by default
+f.setCategory("alarm",  true, LogLevel::Info);
+f.setCategory("system", true, LogLevel::Warn);
+```
+
+### 7.4 Two layers: core baseline + business override
+
+- **Core gate** (rule set ①): the `Logger`'s built-in `LogFilter` decides what
+  enters the pipeline and is the baseline the business layer inherits.
+  Convenience: `setThreshold` / `setCategoryThreshold`; full: `setFilter` /
+  `filter`. TOML `[meta].log_level` seeds its default.
+- **Business sinks** (rule set ②): each sink holds its own `LogFilter`,
+  built via `LogFilter::inherit(logger().filter())` then overridden — the two
+  rule sets are independent and the business layer can fully override.
+
+```cpp
+LogFilter ui = LogFilter::inherit(core->logger().filter());
+ui.setDefault(false, LogLevel::Trace);
+ui.setCategory("alarm", true, LogLevel::Info);
+```
+
+> The audit/debug trail is preserved by a pass-all file sink, not by bypassing
+> the filter on the gate.
+
+### 7.5 `DedupFilter` — collapse repeats
+
+First occurrence passes; repeats within the window are suppressed and counted;
+the next occurrence after the window passes again carrying the suppressed count.
+
+```cpp
+DedupFilter d(60'000);                          // 60s window
+QString key = "alarm:plc1:HR70.bit3:on";        // <category>:<source>:<eventKey>
+if (d.accept(key)) {
+    quint64 n = d.takeSuppressed(key);          // aggregate "repeated N times in 60s"
+}
+d.reset(key);                                   // clear on recovery
+```
+
+> Full specification (axis semantics, two-layer inheritance, user-category
+> mapping) in `doc/design/core/Core-日志与数据库模块-需求规格.md` §2.8.
+
+---
+
+## 8. Examples
 
 | Directory | Demonstrates |
 |-----------|-------------|
@@ -428,7 +522,7 @@ README.
 
 ---
 
-## 8. Migration from Legacy Core
+## 9. Migration from Legacy Core
 
 The new Core lives at `core/` and is completely independent of
 the legacy `src/Core/`. In this host repository the legacy implementation has been retired; keep migration notes in `doc/refactor/`.

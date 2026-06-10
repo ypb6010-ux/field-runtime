@@ -5,6 +5,7 @@
 
 #include "core/core_global.h"
 #include "core/log/ILogSink.h"
+#include "core/log/LogFilter.h"
 #include "core/log/LogTypes.h"
 
 namespace core::log {
@@ -28,16 +29,23 @@ public:
     CORE_DISABLE_COPY_MOVE(Logger)
 
     // ── configuration (owner only) ─────────────────────────────────────
-    void setThreshold(LogLevel min);                          // global
+    // The gate is a dual-axis LogFilter (category × level). The convenience
+    // setters below mutate the default rule / a per-category rule of that
+    // filter; setFilter/filter expose the whole thing so a business layer can
+    // inherit core's baseline (filter()) and override it on its own sinks.
+    void setThreshold(LogLevel min);                          // default minLevel
     void setCategoryThreshold(QString const& category, LogLevel min);
     LogLevel threshold() const;
+
+    void setFilter(LogFilter filter);   // replace the gate filter (baseline)
+    LogFilter filter() const;           // copy the gate filter, for inheritance
 
     void addSink(std::shared_ptr<ILogSink> sink);
     void removeSink(ILogSink* sink);
 
     // ── emit (public, write-only, value types only) ────────────────────
     void log(LogRecord rec);            // system / diagnostic
-    void logOperation(OperationRecord rec); // run / audit (never filtered)
+    void logOperation(OperationRecord rec); // run / audit (category-axis gated)
 
     void logf(LogLevel    level,
               QString      category,

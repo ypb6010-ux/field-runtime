@@ -10,8 +10,9 @@
 4. [TOML 配置参考](#4-toml-配置参考)
 5. [调度器选型](#5-调度器选型)
 6. [多协议 Transport](#6-多协议-transport)
-7. [示例](#7-示例)
-8. [从旧 Core 迁移](#8-从旧-core-迁移)
+7. [日志系统与双重过滤](#7-日志系统与双重过滤)
+8. [示例](#8-示例)
+9. [从旧 Core 迁移](#9-从旧-core-迁移)
 
 ---
 
@@ -404,7 +405,96 @@ S7 stub 在 `connect()` 时返回 `"snap7 library not yet vendored"`。如现场
 
 ---
 
-## 7. 示例
+## 7. 日志系统与双重过滤
+
+### 7.1 两类记录
+
+| | `LogRecord` 系统日志 | `OperationRecord` 运行/审计日志 |
+|---|---|---|
+| 用途 | 诊断、排障 | 业务审计、责任追溯 |
+| 字段 | `level / category / source / message / fields` | `actor / action / target / old·newValue / result / note / category / eventKey` |
+| 过滤 | 类别 × 等级双轴 | **仅类别轴**(无等级语义,`category` 默认 `"audit"`) |
+
+发射端线程安全、非阻塞,任意线程可调:
+
+```cpp
+core->logger().logf(LogLevel::Warn, "transport", "PLC1", "disconnected");
+core->logger().logOperation({ {}, "ui:user", "reset", "belt2",
+                              {}, {}, "ok", {}, "control", "reset:belt2" });
+```
+
+### 7.2 Sink 与默认控制台
+
+记录经异步管线 fan-out 到已注册 sink。内置 `ConsoleSink`(stderr)、`RollingFileSink`
+(滚动文件);自定义实现 `ILogSink` 的 `write(LogRecord)` / `write(OperationRecord)`。
+
+```cpp
+core->logger().addSink(std::make_shared<log::RollingFileSink>("logs/app.log"));
+```
+
+`ICore::create` 默认挂一个 `ConsoleSink`。现场不想要 stderr 噪声、或想自己接管控制台
+(套自己的过滤)时,传 `installDefaultConsole=false`:
+
+```cpp
+auto core = core::ICore::create(qml, /*installDefaultConsole=*/false);
+```
+
+### 7.3 双重过滤 `LogFilter`(类别 × 等级）
+
+`LogFilter` 是过滤的最小单元,两轴独立:
+
+```
+passes(category, level) = enabled(category) && level >= minLevel(category)
+```
+
+- **类别轴**:每类可独立启用 / 屏蔽。
+- **等级轴**:每类带最低等级(如 `config` 只放 `Error`)。
+- `OperationRecord` 无等级语义,**只按类别轴**判定:审计默认通过,除非显式禁用其类别——
+  抬高等级阈值不会误删审计。
+
+```cpp
+LogFilter f;
+f.setDefault(false, LogLevel::Trace);        // 默认全屏蔽
+f.setCategory("alarm",  true, LogLevel::Info);
+f.setCategory("system", true, LogLevel::Warn);
+```
+
+### 7.4 两层规则:core 基线 + 业务覆盖
+
+- **core 门**(规则集①):`Logger` 内置 `LogFilter`,决定记录进不进管线,也是业务继承的基线。
+  便捷入口 `setThreshold` / `setCategoryThreshold`,完整入口 `setFilter` / `filter`;
+  TOML `[meta].log_level` 是其默认初值。
+- **业务 sink**(规则集②):各 sink 持自己的 `LogFilter`,**从 `logger.filter()` 继承再覆盖**,
+  两套规则互相独立、可被业务完整覆盖。
+
+```cpp
+// 业务 UI sink 继承 core 基线,再按需覆盖
+LogFilter ui = LogFilter::inherit(core->logger().filter());
+ui.setDefault(false, LogLevel::Trace);
+ui.setCategory("alarm", true, LogLevel::Info);
+```
+
+> 审计 / 调试不丢的保证 = 文件 sink 的过滤放行全部,而非在门上绕过过滤。
+
+### 7.5 去重聚合 `DedupFilter`
+
+防止同一事件持续刷屏:首次放行,窗口内重复抑制并计数,窗口后再放行并带出抑制次数。
+
+```cpp
+DedupFilter d(60'000);                          // 60s 窗口
+QString key = "alarm:plc1:HR70.bit3:on";        // <类别>:<source>:<eventKey>
+if (d.accept(key)) {
+    quint64 n = d.takeSuppressed(key);          // 聚合“60s 内重复 N 次”
+}
+d.reset(key);                                   // 恢复时清零,下次重新放行
+```
+
+> 完整规格(双轴语义、两层继承覆盖、用户分类映射)见
+> `doc/design/core/Core-日志与数据库模块-需求规格.md` §2.8。
+
+---
+
+## 8. 示例
 
 | 目录 | 演示 |
 |------|------|
@@ -416,7 +506,7 @@ S7 stub 在 `connect()` 时返回 `"snap7 library not yet vendored"`。如现场
 
 ---
 
-## 8. 从旧 Core 迁移
+## 9. 从旧 Core 迁移
 
 新 Core 与旧 `src/Core/` 完全独立。当前主工程已完成切换,旧 `src/Core/` 已退役并删除;迁移痕迹保留在 `doc/refactor/`。
 
