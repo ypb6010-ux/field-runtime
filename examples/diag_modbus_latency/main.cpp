@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 ypb6010-ux
+// SPDX-License-Identifier: MPL-2.0
 // Diagnostic probe: is the ~1 s modbus read latency (when reads are issued from
 // a non-main thread) inherent to QModbusTcpClient, or an artifact of an
 // in-process loopback server?

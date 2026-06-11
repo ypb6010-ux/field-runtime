@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 ypb6010-ux
+// SPDX-License-Identifier: MPL-2.0
 // qml_dashboard — a QML showcase for the new Core's logging and persistence
 // modules. An in-process simulated PLC feeds live Modbus data; the UI shows
 // each datapoint's source (Modbus / MQTT / OPC UA), a live system+operation

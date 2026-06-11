@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 ypb6010-ux
+// SPDX-License-Identifier: MPL-2.0
 // PluginRegistry + PortRegistry — the new-core DLL plugin system. A plugin is a
 // shared library exporting `corePluginCreate` (see CORE_PLUGIN_ENTRY); it binds
 // typed In/OutPorts to named datapoints in Plugin::registerPorts.
