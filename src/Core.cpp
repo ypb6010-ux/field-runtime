@@ -522,7 +522,7 @@ public:
             if (b.mirrorCount <= 0) continue;
             auto* server = transport(b.server);
             if (!server) continue;
-            QList<quint16> values(b.mirrorCount, quint16(0));
+            core::RegisterWords values(b.mirrorCount, quint16(0));
             for (auto const& [addr, dp] : m_bridgeMirrors[size_t(i)]) {
                 int const idx = addr - b.mirrorStart;
                 if (idx >= 0 && idx < b.mirrorCount) values[idx] = quint16(dp->value().toUInt());
@@ -846,7 +846,7 @@ private:
                     auto sink = *sp->sink();
                     if (!sink.codec) return;
                     auto encoded = sink.codec->encode(v, sink);
-                    if (encoded.isEmpty()) return;
+                    if (encoded.empty()) return;
                     for (auto* sw : m_sinkWindowPtrs) {
                         if (sw->id() != windowId) continue;
                         for (int i = 0; i < encoded.size(); ++i) {

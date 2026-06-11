@@ -26,9 +26,9 @@ TEST_CASE("Command.execute writes each configured entry exactly once",
     auto const writes = mock.capturedWrites();
     REQUIRE(writes.size() == 2);
     REQUIRE(writes[0].startAddress == 400);
-    REQUIRE(writes[0].values == QList<quint16>{0xDEAD});
+    REQUIRE(writes[0].values == core::RegisterWords{0xDEAD});
     REQUIRE(writes[1].startAddress == 401);
-    REQUIRE(writes[1].values == QList<quint16>{0xBEEF});
+    REQUIRE(writes[1].values == core::RegisterWords{0xBEEF});
 }
 
 TEST_CASE("Command.execute reports the first failure but continues other writes",
@@ -71,9 +71,9 @@ TEST_CASE("Command.executeAsync writes each entry via the async scheduler path",
     auto const writes = mock.capturedWrites();
     REQUIRE(writes.size() == 2);
     REQUIRE(writes[0].startAddress == 400);
-    REQUIRE(writes[0].values == QList<quint16>{0xDEAD});
+    REQUIRE(writes[0].values == core::RegisterWords{0xDEAD});
     REQUIRE(writes[1].startAddress == 401);
-    REQUIRE(writes[1].values == QList<quint16>{0xBEEF});
+    REQUIRE(writes[1].values == core::RegisterWords{0xBEEF});
 
     // The scheduler is now in async mode; a synchronous execute() is rejected.
     REQUIRE(cmd.execute().kind == sched::ResultKind::Error);

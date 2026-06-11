@@ -16,7 +16,7 @@ namespace {
 
 module::Heartbeat::Config cfgFor(QString const& id = "hb",
                                   int            periodMs = 10,
-                                  QList<quint16> values = {0xA5A5}) {
+                                  core::RegisterWords values = {0xA5A5}) {
     module::Heartbeat::Config c;
     c.moduleId = id;
     c.table    = core::RegisterTable::HoldingRegister;
@@ -48,7 +48,7 @@ TEST_CASE("Heartbeat first onTick after start writes immediately",
     auto const writes = mock.capturedWrites();
     REQUIRE(writes.size() == 1);
     REQUIRE(writes.first().startAddress == 500);
-    REQUIRE(writes.first().values == QList<quint16>{0xA5A5});
+    REQUIRE(writes.first().values == core::RegisterWords{0xA5A5});
 }
 
 TEST_CASE("Heartbeat respects periodMs between subsequent writes",
@@ -81,7 +81,7 @@ TEST_CASE("Heartbeat.driveTick writes via the async path and honours periodMs",
 
     hb.driveTick();
     REQUIRE(mock.capturedWrites().size() == 1);
-    REQUIRE(mock.capturedWrites().first().values == QList<quint16>{0xA5A5});
+    REQUIRE(mock.capturedWrites().first().values == core::RegisterWords{0xA5A5});
 
     hb.driveTick();   // period not elapsed → no new write
     REQUIRE(mock.capturedWrites().size() == 1);

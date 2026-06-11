@@ -170,16 +170,16 @@ ReadResult MqttPahoTransport::read(ReadRequest const& req) {
         result.errorMessage = QStringLiteral("not connected");
         return result;
     }
-    QList<quint16> out;
+    core::RegisterWords out;
     out.reserve(req.count);
     std::lock_guard lk(m_impl->cacheMtx);
     for (int i = 0; i < req.count; ++i) {
         QString const suffix = m_impl->cfg.topicTemplate.arg(req.startAddress + i);
         auto it = m_impl->cache.find(suffix);
-        if (it == m_impl->cache.end()) { out.append(0); continue; }
+        if (it == m_impl->cache.end()) { out.push_back(0); continue; }
         bool ok = false;
         quint16 const v = quint16(QString::fromUtf8(it->second).toUInt(&ok));
-        out.append(ok ? v : 0);
+        out.push_back(ok ? v : 0);
     }
     result.ok     = true;
     result.values = std::move(out);

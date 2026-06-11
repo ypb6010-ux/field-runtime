@@ -99,7 +99,7 @@ struct SinkWindowConfig {
     int     size         = 0;
     sched::Priority       priority = sched::Priority::High;
     SinkWindowFlushConfig flush;
-    QList<quint16>        initial;
+    core::RegisterWords        initial;
 };
 
 struct HeartbeatConfig {
@@ -107,7 +107,7 @@ struct HeartbeatConfig {
     QString transport;
     QString table;
     int     address       = 0;
-    QList<quint16> values;
+    core::RegisterWords values;
     int     periodMs      = 0;
     sched::Priority priority = sched::Priority::Low;
     QString incrementer;   // "none" / "u16_inc" / "timestamp"

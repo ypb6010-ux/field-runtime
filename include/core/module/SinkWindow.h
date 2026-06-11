@@ -6,7 +6,6 @@
 #include <chrono>
 #include <memory>
 #include <mutex>
-#include <QList>
 #include <QString>
 
 #include "core/base/RegisterTable.h"
@@ -38,7 +37,7 @@ public:
         int                           debounceMs        = 20;
         int                           keepAlivePeriodMs = 0;   // 0 = disabled
         bool                          coalesceWrites    = true;
-        QList<quint16>                initial;
+        core::RegisterWords                initial;
     };
 
     SinkWindow(Config cfg, transport::Transport& transport);
@@ -65,7 +64,7 @@ public:
 
     int                size()         const noexcept;
     int                startAddress() const noexcept;
-    QList<quint16>     snapshot()     const;
+    core::RegisterWords     snapshot()     const;
     bool               dirty()        const;
 
     // FunctionalModule
@@ -81,7 +80,7 @@ private:
     // Decide whether a flush is due; if so, snapshot the values + reason and
     // the staging generation at snapshot time. Returns false when nothing
     // needs writing. Shared by onTick / driveTick.
-    bool decideFlush(QList<quint16>& values, QString& reason, quint64& gen);
+    bool decideFlush(core::RegisterWords& values, QString& reason, quint64& gen);
     // On a successful write, clear dirty / forceFlush and stamp the flush time —
     // but ONLY if no new stage/forceFlush arrived since `gen` was snapshotted,
     // otherwise that update would be lost while the write was in flight.
@@ -89,7 +88,7 @@ private:
 
     transport::Transport*              m_transport;
     Config                              m_cfg;
-    QList<quint16>                      m_snapshot;
+    core::RegisterWords                      m_snapshot;
     bool                                m_dirty       = false;
     bool                                m_forceFlush  = false;
     std::atomic<bool>                   m_started{false};

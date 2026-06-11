@@ -276,7 +276,7 @@ auto invokeReplyAndWait(QModbusTcpClient*  client,
     bool           ok       = false;
     QString        err;
     QModbusReply*  captured = nullptr;
-    QList<quint16> values;
+    core::RegisterWords values;
 
     QMetaObject::invokeMethod(client, [&] {
         QModbusReply* reply = buildReply(client);
@@ -292,7 +292,7 @@ auto invokeReplyAndWait(QModbusTcpClient*  client,
                 err = reply->errorString();
             } else {
                 ok = true;
-                values = reply->result().values();
+                values = core::fromQtWords(reply->result().values());
             }
             reply->deleteLater();
             done.release();
@@ -304,7 +304,7 @@ auto invokeReplyAndWait(QModbusTcpClient*  client,
                     err = reply->errorString();
                 } else {
                     ok     = true;
-                    values = reply->result().values();
+                    values = core::fromQtWords(reply->result().values());
                 }
                 reply->deleteLater();
                 done.release();
@@ -349,7 +349,7 @@ ReadResult ModbusTcpClientTransport::read(ReadRequest const& req) {
                 result.errorMessage = reply->errorString();
             } else {
                 result.ok     = true;
-                result.values = reply->result().values();
+                result.values = core::fromQtWords(reply->result().values());
             }
             reply->deleteLater();
             done.release();
@@ -362,7 +362,7 @@ ReadResult ModbusTcpClientTransport::read(ReadRequest const& req) {
                     result.errorMessage = reply->errorString();
                 } else {
                     result.ok     = true;
-                    result.values = reply->result().values();
+                    result.values = core::fromQtWords(reply->result().values());
                 }
                 reply->deleteLater();
                 done.release();
@@ -383,7 +383,7 @@ WriteResult ModbusTcpClientTransport::writeBatch(WriteBatch const& batch) {
         result.errorMessage = QStringLiteral("not connected");
         return result;
     }
-    if (batch.values.isEmpty()) {
+    if (batch.values.empty()) {
         result.ok = true;
         return result;
     }

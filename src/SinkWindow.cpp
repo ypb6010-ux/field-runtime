@@ -42,7 +42,7 @@ int SinkWindow::tickPeriodMs() const {
     return d;
 }
 
-QList<quint16> SinkWindow::snapshot() const {
+core::RegisterWords SinkWindow::snapshot() const {
     std::lock_guard lk(m_mtx);
     return m_snapshot;
 }
@@ -75,7 +75,7 @@ void SinkWindow::forceFlush() {
     ++m_generation;
 }
 
-bool SinkWindow::decideFlush(QList<quint16>& values, QString& reason, quint64& gen) {
+bool SinkWindow::decideFlush(core::RegisterWords& values, QString& reason, quint64& gen) {
     auto const now = clock_t::now();
     std::lock_guard lk(m_mtx);
     bool flush = false;
@@ -119,7 +119,7 @@ sched::SubmitResult SinkWindow::onTick() {
                 QStringLiteral("module not started"), 0};
     }
 
-    QList<quint16> values;
+    core::RegisterWords values;
     QString        reason;
     quint64        gen = 0;
     if (!decideFlush(values, reason, gen)) {
@@ -164,7 +164,7 @@ void SinkWindow::driveTick() {
         return;
     }
 
-    QList<quint16> values;
+    core::RegisterWords values;
     QString        reason;
     quint64        gen = 0;
     if (!decideFlush(values, reason, gen)) {

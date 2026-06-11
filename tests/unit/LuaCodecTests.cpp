@@ -24,7 +24,7 @@ namespace {
 
 // 2024-06-03 14:30:45 in the layout documented in bcd_datetime.lua:
 //   raw[0]=0x0024 year, raw[1]=0x0603 MM/DD, raw[2]=0x1430 hh/mm, raw[3]=0x4500 ss
-QList<quint16> const kRaw{0x0024, 0x0603, 0x1430, 0x4500};
+core::RegisterWords const kRaw{0x0024, 0x0603, 0x1430, 0x4500};
 QString const        kStr = QStringLiteral("2024-06-03 14:30:45");
 
 std::shared_ptr<LuaCodec> loadBcd(QString* err) {
@@ -62,7 +62,7 @@ TEST_CASE("LuaCodec bcd_datetime encode round-trips", "[codec][lua]") {
     if (!codec) SKIP("Lua disabled: " + err.toStdString());
 
     PortRef ref;
-    QList<quint16> const back = codec->encode(kStr, ref);
+    core::RegisterWords const back = codec->encode(kStr, ref);
     REQUIRE(back == kRaw);
     // decode(encode(x)) == x
     REQUIRE(codec->decode(back, ref).toString() == kStr);
@@ -75,9 +75,9 @@ TEST_CASE("LuaCodec tolerates malformed input without crashing", "[codec][lua]")
 
     PortRef ref;
     // Too few registers → script returns nil → invalid QVariant.
-    REQUIRE_FALSE(codec->decode(QList<quint16>{0x0024}, ref).isValid());
+    REQUIRE_FALSE(codec->decode(core::RegisterWords{0x0024}, ref).isValid());
     // Unparseable datetime string → script returns {} → empty register list.
-    REQUIRE(codec->encode(QStringLiteral("not-a-date"), ref).isEmpty());
+    REQUIRE(codec->encode(QStringLiteral("not-a-date"), ref).empty());
 }
 
 TEST_CASE("LuaCodec.fromFile reports a missing script", "[codec][lua]") {
@@ -108,6 +108,6 @@ TEST_CASE("LuaCodec passes the config arg to the script as ctx.arg",
     if (!hi) SKIP("Lua disabled: " + err.toStdString());
 
     PortRef ref;
-    REQUIRE(hi->decode(QList<quint16>{0}, ref).toString() == QStringLiteral("high"));
-    REQUIRE(lo->decode(QList<quint16>{0}, ref).toString() == QStringLiteral("low"));
+    REQUIRE(hi->decode(core::RegisterWords{0}, ref).toString() == QStringLiteral("high"));
+    REQUIRE(lo->decode(core::RegisterWords{0}, ref).toString() == QStringLiteral("low"));
 }

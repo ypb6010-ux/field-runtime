@@ -39,7 +39,7 @@ TEST_CASE("SinkWindow initial state matches configured initial values",
     module::SinkWindow w(cfg, mock);
     REQUIRE(w.size() == 4);
     REQUIRE(w.startAddress() == 0);
-    REQUIRE(w.snapshot() == QList<quint16>{0x10, 0x20, 0x30, 0x40});
+    REQUIRE(w.snapshot() == core::RegisterWords{0x10, 0x20, 0x30, 0x40});
     REQUIRE_FALSE(w.dirty());
 }
 
@@ -119,7 +119,7 @@ TEST_CASE("onTick coalesces multiple stages into one write after debounce",
                                                   // dangling reference.
     REQUIRE(writes.size() == 1);
     REQUIRE(writes.first().startAddress == 0);
-    REQUIRE(writes.first().values == QList<quint16>{0xAAAA, 0xBBBB, 0xCCCC, 0});
+    REQUIRE(writes.first().values == core::RegisterWords{0xAAAA, 0xBBBB, 0xCCCC, 0});
     REQUIRE_FALSE(w.dirty());
 }
 
@@ -150,7 +150,7 @@ TEST_CASE("keepAlivePeriod fires periodic writes even without changes",
     REQUIRE(r2.kind == sched::ResultKind::Ok);
     auto const writes = mock.capturedWrites();
     REQUIRE(writes.size() == 1);
-    REQUIRE(writes.first().values == QList<quint16>{0xDEAD, 0xBEEF, 0, 0});
+    REQUIRE(writes.first().values == core::RegisterWords{0xDEAD, 0xBEEF, 0, 0});
 }
 
 TEST_CASE("forceFlush bypasses debounce and keepalive timing",

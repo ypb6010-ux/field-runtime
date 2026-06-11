@@ -77,12 +77,12 @@ public:
         QObject::connect(server, &QModbusTcpServer::dataWritten,
                          server, [this](QModbusDataUnit::RegisterType table,
                                          int address, int size) {
-            QList<quint16> values;
+            core::RegisterWords values;
             values.reserve(size);
             for (int i = 0; i < size; ++i) {
                 quint16 v = 0;
                 server->data(table, address + i, &v);
-                values.append(v);
+                values.push_back(v);
             }
             busPtr->publish(bus::ServerWriteEvent{
                 cfg.id, core::fromQModbus(table), address, std::move(values)});
@@ -241,7 +241,7 @@ ReadResult ModbusTcpServerTransport::read(ReadRequest const& req) {
     ReadResult result;
     result.startAddress = req.startAddress;
     QMetaObject::invokeMethod(m_impl->server, [this, req, &result] {
-        QList<quint16> out;
+        core::RegisterWords out;
         out.reserve(req.count);
         for (int i = 0; i < req.count; ++i) {
             quint16 v = 0;
@@ -250,7 +250,7 @@ ReadResult ModbusTcpServerTransport::read(ReadRequest const& req) {
                 result.errorMessage = QStringLiteral("address out of range");
                 return;
             }
-            out.append(v);
+            out.push_back(v);
         }
         result.ok     = true;
         result.values = std::move(out);

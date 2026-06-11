@@ -3,7 +3,6 @@
 #pragma once
 
 #include <QDateTime>
-#include <QList>
 #include <QString>
 #include <QVariant>
 
@@ -50,7 +49,7 @@ struct ServerWriteEvent {
     QString                            transportId;   // the server's id
     core::RegisterTable                table = core::RegisterTable::HoldingRegister;
     int                                startAddress;
-    QList<quint16>                     values;
+    core::RegisterWords                     values;
 };
 
 // Periodic snapshot of a Transport's scheduler — published by Core's stats

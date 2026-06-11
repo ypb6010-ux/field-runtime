@@ -15,20 +15,20 @@ namespace core::codec {
 
 namespace {
 
-// Pack two-register-wide network bytes from QList<quint16>. Each Modbus
+// Pack two-register-wide network bytes from core::RegisterWords. Each Modbus
 // register is big-endian on the wire; we record the network-order bytes in
 // the order they would appear over TCP (i.e. position 0 = high byte of the
 // first register), then apply the WordOrder permutation.
-quint64 unpackInt(QList<quint16> const& raw,
+quint64 unpackInt(core::RegisterWords const& raw,
                   int                   regCount,
                   dp::WordOrder         wordOrder) {
     if (regCount == 1) {
-        return raw.value(0);
+        return raw[0];
     }
     int const               byteCount = regCount * 2;
     std::array<quint8, 8>   network{};
     for (int i = 0; i < regCount; ++i) {
-        quint16 const r = raw.value(i);
+        quint16 const r = raw[i];
         network[2 * i]     = quint8(r >> 8);
         network[2 * i + 1] = quint8(r & 0xFF);
     }
@@ -40,7 +40,7 @@ quint64 unpackInt(QList<quint16> const& raw,
     return result;
 }
 
-QList<quint16> packInt(quint64       value,
+core::RegisterWords packInt(quint64       value,
                        int           regCount,
                        dp::WordOrder wordOrder) {
     if (regCount == 1) {
@@ -57,12 +57,12 @@ QList<quint16> packInt(quint64       value,
     for (int i = 0; i < byteCount; ++i) {
         network[perm.order[i]] = result[i];
     }
-    QList<quint16> out;
+    core::RegisterWords out;
     out.reserve(regCount);
     for (int i = 0; i < regCount; ++i) {
         quint16 r = quint16(network[2 * i]) << 8;
         r |= quint16(network[2 * i + 1]);
-        out.append(r);
+        out.push_back(r);
     }
     return out;
 }
@@ -81,7 +81,7 @@ QString BuiltinScalarCodec::idFor(dp::ScalarType type) {
     return QStringLiteral("builtin.") + QString::fromUtf8(dp::scalarTypeName(type)).toLower();
 }
 
-QVariant BuiltinScalarCodec::decode(QList<quint16> const& raw,
+QVariant BuiltinScalarCodec::decode(core::RegisterWords const& raw,
                                      dp::PortRef const&     ref) {
     using dp::ScalarType;
     int const rc = dp::registerCountFor(m_type);
@@ -91,7 +91,7 @@ QVariant BuiltinScalarCodec::decode(QList<quint16> const& raw,
 
     if (m_type == ScalarType::Bool) {
         int bit = ref.bit.value_or(0);
-        return bool(((raw.value(0) >> bit) & 1u) != 0);
+        return bool(((raw[0] >> bit) & 1u) != 0);
     }
 
     if (m_type == ScalarType::F32) {
@@ -149,14 +149,14 @@ QVariant BuiltinScalarCodec::decode(QList<quint16> const& raw,
     }
 }
 
-QList<quint16> BuiltinScalarCodec::encode(QVariant const&    value,
+core::RegisterWords BuiltinScalarCodec::encode(QVariant const&    value,
                                             dp::PortRef const& ref) {
     using dp::ScalarType;
     int const rc = dp::registerCountFor(m_type);
     if (rc <= 0) return {};
 
     if (m_type == ScalarType::Bool) {
-        QList<quint16> out(rc, 0);
+        core::RegisterWords out(rc, 0);
         if (value.toBool()) {
             int bit = ref.bit.value_or(0);
             out[0]  = quint16(1u << bit);
@@ -212,10 +212,10 @@ EnumU16Codec::EnumU16Codec(QString                              id,
 
 QString EnumU16Codec::id() const { return m_id; }
 
-QVariant EnumU16Codec::decode(QList<quint16> const& raw,
+QVariant EnumU16Codec::decode(core::RegisterWords const& raw,
                                dp::PortRef const&     ref) {
-    if (raw.isEmpty()) return {};
-    quint16 const masked = quint16((raw.value(0) >> ref.shift) & quint16(ref.mask));
+    if (raw.empty()) return {};
+    quint16 const masked = quint16((raw[0] >> ref.shift) & quint16(ref.mask));
     auto it = m_forward.find(masked);
     if (it == m_forward.end()) {
         return QStringLiteral("Unknown(%1)").arg(masked);
@@ -223,7 +223,7 @@ QVariant EnumU16Codec::decode(QList<quint16> const& raw,
     return it->second;
 }
 
-QList<quint16> EnumU16Codec::encode(QVariant const&    value,
+core::RegisterWords EnumU16Codec::encode(QVariant const&    value,
                                      dp::PortRef const& ref) {
     QString const name = value.toString();
     quint16       raw  = 0;

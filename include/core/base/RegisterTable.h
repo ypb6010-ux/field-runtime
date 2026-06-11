@@ -3,15 +3,17 @@
 #pragma once
 
 // --- core-base ---------------------------------------------------------------
-// First citizen of the Qt-free core-base layer. The register-table vocabulary
-// used across the core abstraction (transport seam, datapoints, modules) must
-// not drag Qt SerialBus into headers, otherwise no Qt-free (gateway) transport
-// can implement the abstraction. This enum mirrors the Modbus table space; the
-// single Qt boundary (Modbus transports) converts via the private bridge
-// src/ModbusRegisterTable.h (toQModbus / fromQModbus).
+// Qt-free register vocabulary shared across the core abstraction (transport
+// seam, datapoints, modules, codecs). Keeping these out of Qt headers is what
+// lets a Qt-free (gateway) transport implement the abstraction. The enum
+// mirrors the Modbus table space; the single Qt boundary (Modbus transports)
+// converts via include/core/transport/RegisterTableQt.h (toQModbus/fromQModbus).
 //
-// Values intentionally mirror QModbusDataUnit::RegisterType semantics so the
-// bridge is a 1:1 switch.
+// RegisterWords is the raw 16-bit register payload — std::vector<uint16_t>
+// instead of QList<quint16> so no QtCore container leaks into the abstraction.
+
+#include <cstdint>
+#include <vector>
 
 namespace core {
 
@@ -22,5 +24,7 @@ enum class RegisterTable {
     InputRegister,    // read-only 16-bit
     HoldingRegister,  // read/write 16-bit
 };
+
+using RegisterWords = std::vector<std::uint16_t>;
 
 } // namespace core

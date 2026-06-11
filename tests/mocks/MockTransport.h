@@ -61,7 +61,7 @@ public:
             ReadResult r;
             r.ok           = true;
             r.startAddress = req.startAddress;
-            r.values       = QList<quint16>(req.count, 0);
+            r.values       = core::RegisterWords(req.count, 0);
             return r;
         }
         auto r = m_readResponses.front();
@@ -140,7 +140,7 @@ public:
         std::lock_guard lk(m_mtx);
         m_readResponses.push_back(std::move(r));
     }
-    void enqueueReadValues(QList<quint16> values) {
+    void enqueueReadValues(core::RegisterWords values) {
         ReadResult r;
         r.ok     = true;
         r.values = std::move(values);

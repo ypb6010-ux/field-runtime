@@ -241,7 +241,7 @@ ReadResult ModbusRtuTransport::read(ReadRequest const& req) {
                 result.errorMessage = reply->errorString();
             } else {
                 result.ok = true;
-                result.values = reply->result().values();
+                result.values = core::fromQtWords(reply->result().values());
             }
             reply->deleteLater();
             done.release();
@@ -253,7 +253,7 @@ ReadResult ModbusRtuTransport::read(ReadRequest const& req) {
                     result.errorMessage = reply->errorString();
                 } else {
                     result.ok = true;
-                    result.values = reply->result().values();
+                    result.values = core::fromQtWords(reply->result().values());
                 }
                 reply->deleteLater();
                 done.release();
@@ -272,7 +272,7 @@ WriteResult ModbusRtuTransport::writeBatch(WriteBatch const& batch) {
         result.errorMessage = QStringLiteral("not connected");
         return result;
     }
-    if (batch.values.isEmpty()) { result.ok = true; return result; }
+    if (batch.values.empty()) { result.ok = true; return result; }
 
     QSemaphore done(0);
     QMetaObject::invokeMethod(m_impl->client, [this, batch, &result, &done] {

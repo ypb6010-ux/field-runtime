@@ -80,7 +80,7 @@ TEST_CASE("Transport reads and writes against a real QModbusTcpServer",
 
     auto r = t.read({core::RegisterTable::HoldingRegister, 0, 4});
     REQUIRE(r.ok);
-    REQUIRE(r.values == QList<quint16>{0x1234, 0x5678, 42, 9999});
+    REQUIRE(r.values == core::RegisterWords{0x1234, 0x5678, 42, 9999});
 
     auto w = t.writeBatch({core::RegisterTable::HoldingRegister, 10, {0xAAAA, 0xBBBB}});
     REQUIRE(w.ok);
@@ -116,7 +116,7 @@ TEST_CASE("readAsync/writeAsync are non-blocking and deliver the reply",
     // readAsync returned without blocking on the reply; result arrives later.
     REQUIRE(waitFor(readDone));
     REQUIRE(rr.ok);
-    REQUIRE(rr.values == QList<quint16>{0x1111, 0x2222});
+    REQUIRE(rr.values == core::RegisterWords{0x1111, 0x2222});
 
     std::atomic<bool> writeDone{false};
     WriteResult wres;

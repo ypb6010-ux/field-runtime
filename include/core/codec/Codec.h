@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include <QList>
 #include <QString>
 #include <QVariant>
 
+#include "core/base/RegisterTable.h"
 #include "core/core_global.h"
 
 namespace core::dp { struct PortRef; }
@@ -18,11 +18,11 @@ public:
     virtual QString id() const = 0;
 
     // Decode raw Modbus registers into a typed value.
-    virtual QVariant       decode(QList<quint16> const& raw,
+    virtual QVariant       decode(core::RegisterWords const& raw,
                                   dp::PortRef const&     ref) = 0;
 
     // Encode a typed value into raw Modbus registers ready to be written.
-    virtual QList<quint16> encode(QVariant const&        value,
+    virtual core::RegisterWords encode(QVariant const&        value,
                                   dp::PortRef const&     ref) = 0;
 };
 

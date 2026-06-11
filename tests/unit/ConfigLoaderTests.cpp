@@ -318,7 +318,7 @@ policy = "ContinuousMirror"
     REQUIRE(s.heartbeats.size() == 1);
     REQUIRE(s.heartbeats.first().address == 999);
     REQUIRE(s.heartbeats.first().values.size() == 1);
-    REQUIRE(s.heartbeats.first().values.first() == 1);
+    REQUIRE(s.heartbeats.first().values.front() == 1);
 
     REQUIRE(s.ackWatches.size() == 1);
     REQUIRE(s.ackWatches.first().dp == "feedback");

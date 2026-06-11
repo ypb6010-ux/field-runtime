@@ -79,7 +79,7 @@ TEST_CASE("Server writeBatch updates the table observable by clients",
     REQUIRE(client.connect().has_value());
     auto r = client.read({core::RegisterTable::HoldingRegister, 10, 3});
     REQUIRE(r.ok);
-    REQUIRE(r.values == QList<quint16>{0x1111, 0x2222, 0x3333});
+    REQUIRE(r.values == core::RegisterWords{0x1111, 0x2222, 0x3333});
 }
 
 TEST_CASE("Server publishes ServerWriteEvent on dataWritten",
@@ -117,7 +117,7 @@ TEST_CASE("Server publishes ServerWriteEvent on dataWritten",
     std::lock_guard lk(capMtx);
     REQUIRE(captured.transportId == "server.test");
     REQUIRE(captured.startAddress == 5);
-    REQUIRE(captured.values == QList<quint16>{0xAAAA, 0xBBBB});
+    REQUIRE(captured.values == core::RegisterWords{0xAAAA, 0xBBBB});
     REQUIRE(captured.table == core::RegisterTable::HoldingRegister);
 }
 
@@ -131,5 +131,5 @@ TEST_CASE("Server read returns its own current table values",
     srv.writeBatch({core::RegisterTable::HoldingRegister, 20, {0xDEAD, 0xBEEF}});
     auto r = srv.read({core::RegisterTable::HoldingRegister, 20, 2});
     REQUIRE(r.ok);
-    REQUIRE(r.values == QList<quint16>{0xDEAD, 0xBEEF});
+    REQUIRE(r.values == core::RegisterWords{0xDEAD, 0xBEEF});
 }

@@ -281,10 +281,10 @@ PollRangeConfig parsePollRange(toml::table const& t,
     return c;
 }
 
-QList<quint16> parseU16Array(toml::array const& arr) {
-    QList<quint16> out;
+core::RegisterWords parseU16Array(toml::array const& arr) {
+    core::RegisterWords out;
     for (auto&& n : arr) {
-        if (auto i = n.value<int64_t>()) out.append(quint16(*i));
+        if (auto i = n.value<int64_t>()) out.push_back(quint16(*i));
     }
     return out;
 }
@@ -335,9 +335,9 @@ HeartbeatConfig parseHeartbeat(toml::table const& t,
     if (auto arr = t["values"].as_array()) {
         c.values = parseU16Array(*arr);
     } else if (auto v = getInt(t, "value")) {
-        c.values.append(quint16(*v));
+        c.values.push_back(quint16(*v));
     }
-    if (c.values.isEmpty()) {
+    if (c.values.empty()) {
         errs.push_back({section, "values",
                         QStringLiteral("heartbeat requires non-empty values"),
                         int(t.source().begin.line)});

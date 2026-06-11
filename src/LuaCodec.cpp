@@ -137,7 +137,7 @@ std::shared_ptr<LuaCodec> LuaCodec::fromFile(QString const& id,
     return std::shared_ptr<LuaCodec>(new LuaCodec(std::move(impl)));
 }
 
-QVariant LuaCodec::decode(QList<quint16> const& raw, dp::PortRef const& ref) {
+QVariant LuaCodec::decode(core::RegisterWords const& raw, dp::PortRef const& ref) {
     std::lock_guard lk(m_impl->mtx);
     sol::table luaRaw = m_impl->lua.create_table(int(raw.size()), 0);
     for (int i = 0; i < raw.size(); ++i)
@@ -150,7 +150,7 @@ QVariant LuaCodec::decode(QList<quint16> const& raw, dp::PortRef const& ref) {
     return fromLua(o);
 }
 
-QList<quint16> LuaCodec::encode(QVariant const& value, dp::PortRef const& ref) {
+core::RegisterWords LuaCodec::encode(QVariant const& value, dp::PortRef const& ref) {
     std::lock_guard lk(m_impl->mtx);
     sol::object luaVal = toLua(m_impl->lua, value);
     sol::protected_function_result r =
@@ -160,13 +160,13 @@ QList<quint16> LuaCodec::encode(QVariant const& value, dp::PortRef const& ref) {
     if (o.get_type() != sol::type::table) return {};
 
     sol::table t = o;
-    QList<quint16> out;
+    core::RegisterWords out;
     for (std::size_t i = 1;; ++i) {
         sol::object e = t[i];
         // Stop at the first hole / non-numeric entry; go through double so a
         // float value can't throw the way as<integer>() would under safeties.
         if (e.get_type() != sol::type::number) break;
-        out.append(quint16(quint32(e.as<double>()) & 0xFFFFu));
+        out.push_back(quint16(quint32(e.as<double>()) & 0xFFFFu));
     }
     return out;
 }
@@ -192,8 +192,8 @@ std::shared_ptr<LuaCodec> LuaCodec::fromFile(QString const&, QString const&,
     return nullptr;
 }
 
-QVariant       LuaCodec::decode(QList<quint16> const&, dp::PortRef const&) { return {}; }
-QList<quint16> LuaCodec::encode(QVariant const&, dp::PortRef const&)       { return {}; }
+QVariant       LuaCodec::decode(core::RegisterWords const&, dp::PortRef const&) { return {}; }
+core::RegisterWords LuaCodec::encode(QVariant const&, dp::PortRef const&)       { return {}; }
 
 } // namespace core::codec
 

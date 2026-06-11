@@ -4,7 +4,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <QList>
 #include <QString>
 
 #include "core/base/RegisterTable.h"
@@ -29,7 +28,7 @@ public:
         QString                       moduleId;
         core::RegisterTable           table     = core::RegisterTable::HoldingRegister;
         int                           address   = 0;
-        QList<quint16>                values;
+        core::RegisterWords                values;
         int                           periodMs  = 0;
         sched::Priority               priority  = sched::Priority::Low;
     };

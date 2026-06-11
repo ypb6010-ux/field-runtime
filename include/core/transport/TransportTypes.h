@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include <QList>
 #include <QString>
 
 #include "core/base/RegisterTable.h"
@@ -36,12 +35,12 @@ struct ReadRequest {
 struct WriteBatch {
     core::RegisterTable           table = core::RegisterTable::HoldingRegister;
     int                           startAddress = 0;
-    QList<quint16>                values;
+    core::RegisterWords                values;
 };
 
 struct ReadResult {
     bool            ok = false;
-    QList<quint16>  values;
+    core::RegisterWords  values;
     int             startAddress = 0;
     QString         errorMessage;
 };

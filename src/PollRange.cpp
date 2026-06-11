@@ -57,7 +57,8 @@ void PollRange::applyResult(transport::ReadResult const& result) {
             b.dp->setState(dp::DpState::Error);
             continue;
         }
-        auto const sub = result.values.mid(b.offset, rc);
+        core::RegisterWords const sub(result.values.begin() + b.offset,
+                                      result.values.begin() + b.offset + rc);
         // The codec needs a PortRef for word-order / mask / scale / bit
         // metadata. We expect the datapoint's `source` to carry it; if a
         // datapoint somehow ended up here without a source the binding is

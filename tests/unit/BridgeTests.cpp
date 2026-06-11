@@ -244,7 +244,7 @@ TEST_CASE("Bridge mirrors PLC reads into the server table and forwards operator 
         [&swCount](bus::ServerWriteEvent const&) { swCount.fetch_add(1); });
 
     auto w = opbox.writeBatch({core::RegisterTable::HoldingRegister, 0,
-                               QList<quint16>{0xABCD, 0x0F0F}});
+                               core::RegisterWords{0xABCD, 0x0F0F}});
     REQUIRE(w.ok);
 
     bool forwarded = false;

@@ -27,9 +27,9 @@ public:
     explicit BuiltinScalarCodec(dp::ScalarType type);
 
     QString        id() const override;
-    QVariant       decode(QList<quint16> const& raw,
+    QVariant       decode(core::RegisterWords const& raw,
                           dp::PortRef const&     ref) override;
-    QList<quint16> encode(QVariant const&        value,
+    core::RegisterWords encode(QVariant const&        value,
                           dp::PortRef const&     ref) override;
 
     dp::ScalarType scalarType() const noexcept { return m_type; }
@@ -48,9 +48,9 @@ public:
     EnumU16Codec(QString id, std::unordered_map<quint16, QString> map);
 
     QString        id() const override;
-    QVariant       decode(QList<quint16> const& raw,
+    QVariant       decode(core::RegisterWords const& raw,
                           dp::PortRef const&     ref) override;
-    QList<quint16> encode(QVariant const&        value,
+    core::RegisterWords encode(QVariant const&        value,
                           dp::PortRef const&     ref) override;
 
 private:

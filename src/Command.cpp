@@ -27,7 +27,7 @@ sched::SubmitResult Command::execute() {
         transport::WriteBatch batch;
         batch.table        = e.table;
         batch.startAddress = e.address;
-        batch.values       = QList<quint16>{e.value};
+        batch.values       = core::RegisterWords{e.value};
 
         sched::RequestTag tag;
         tag.moduleId      = m_id;
@@ -53,7 +53,7 @@ void Command::executeAsync() {
         transport::WriteBatch batch;
         batch.table        = e.table;
         batch.startAddress = e.address;
-        batch.values       = QList<quint16>{e.value};
+        batch.values       = core::RegisterWords{e.value};
 
         sched::RequestTag tag;
         tag.moduleId      = m_id;

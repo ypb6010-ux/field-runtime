@@ -183,7 +183,7 @@ ReadResult OpcUaClientTransport::read(ReadRequest const& req) {
         result.errorMessage = QStringLiteral("not connected");
         return result;
     }
-    QList<quint16> out;
+    core::RegisterWords out;
     out.reserve(req.count);
     for (int i = 0; i < req.count; ++i) {
         QString const nodeId = m_impl->cfg.nodeIdTemplate.arg(req.startAddress + i);
@@ -215,7 +215,7 @@ ReadResult OpcUaClientTransport::read(ReadRequest const& req) {
             result.errorMessage = QStringLiteral("OPC UA read failed @ %1").arg(nodeId);
             return result;
         }
-        out.append(quint16(value.toUInt()));
+        out.push_back(quint16(value.toUInt()));
     }
     result.ok     = true;
     result.values = std::move(out);
@@ -279,7 +279,7 @@ void OpcUaClientTransport::readAsync(ReadRequest const& req, ReadDone done) {
     struct Chain {
         ReadRequest    req;
         ReadDone       done;
-        QList<quint16> out;
+        core::RegisterWords out;
         int            i = 0;
         bool           completed = false;
         // `step` is owned by the Chain but captures only client/tpl (never the
@@ -330,7 +330,7 @@ void OpcUaClientTransport::readAsync(ReadRequest const& req, ReadDone done) {
                     if (self->completed) { node->deleteLater(); return; }
                     bool const ok = attrs.testFlag(QOpcUa::NodeAttribute::Value);
                     if (ok) {
-                        self->out.append(quint16(
+                        self->out.push_back(quint16(
                             node->attribute(QOpcUa::NodeAttribute::Value).toUInt()));
                     }
                     node->deleteLater();

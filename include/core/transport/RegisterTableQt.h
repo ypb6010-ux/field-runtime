@@ -26,6 +26,11 @@ inline QModbusDataUnit::RegisterType toQModbus(RegisterTable t) {
     return QModbusDataUnit::Invalid;
 }
 
+// QList<quint16> (Qt SerialBus read result) -> Qt-free RegisterWords payload.
+inline RegisterWords fromQtWords(QList<quint16> const& q) {
+    return RegisterWords(q.cbegin(), q.cend());
+}
+
 inline RegisterTable fromQModbus(QModbusDataUnit::RegisterType t) {
     switch(t){
         case QModbusDataUnit::DiscreteInputs:   return RegisterTable::DiscreteInput;

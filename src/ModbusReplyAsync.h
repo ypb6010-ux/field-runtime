@@ -46,7 +46,7 @@ inline void modbusReadAsync(QModbusClient* client, int slaveId,
                     r.errorMessage = reply->errorString();
                 } else {
                     r.ok     = true;
-                    r.values = reply->result().values();
+                    r.values = core::fromQtWords(reply->result().values());
                 }
                 reply->deleteLater();
                 done(std::move(r));
@@ -60,7 +60,7 @@ inline void modbusReadAsync(QModbusClient* client, int slaveId,
 inline void modbusWriteAsync(QModbusClient* client, int slaveId,
                              WriteBatch const& batch,
                              std::function<void(WriteResult)> done) {
-    if (batch.values.isEmpty()) { done(WriteResult{true, {}}); return; }
+    if (batch.values.empty()) { done(WriteResult{true, {}}); return; }
     QMetaObject::invokeMethod(client,
         [client, slaveId, batch, done = std::move(done)]() mutable {
             QModbusDataUnit unit(core::toQModbus(batch.table), batch.startAddress, batch.values.size());
