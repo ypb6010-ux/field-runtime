@@ -19,42 +19,34 @@ namespace core::codec {
 
 namespace {
 
-// QVariant -> Lua object, preserving the natural Lua type so scripts get an
+// dp::Value -> Lua object, preserving the natural Lua type so scripts get an
 // integer / number / boolean / string rather than always a string.
-sol::object toLua(sol::state& lua, QVariant const& v) {
-    switch (v.typeId()) {
-        case QMetaType::Bool:
-            return sol::make_object(lua, v.toBool());
-        case QMetaType::Int:
-        case QMetaType::UInt:
-        case QMetaType::Long:
-        case QMetaType::LongLong:
-            return sol::make_object(lua, static_cast<int64_t>(v.toLongLong()));
-        case QMetaType::ULong:
-        case QMetaType::ULongLong:
-            return sol::make_object(lua, static_cast<int64_t>(v.toULongLong()));
-        case QMetaType::Float:
-        case QMetaType::Double:
-            return sol::make_object(lua, v.toDouble());
-        case QMetaType::QString:
-            return sol::make_object(lua, v.toString().toStdString());
-        default:
-            return sol::make_object(lua, v.toString().toStdString());
-    }
+sol::object toLua(sol::state& lua, dp::Value const& v) {
+    return std::visit([&lua](auto const& x) -> sol::object {
+        using T = std::decay_t<decltype(x)>;
+        if constexpr (std::is_same_v<T, std::monostate>)
+            return sol::make_object(lua, sol::nil);
+        else if constexpr (std::is_same_v<T, std::string>)
+            return sol::make_object(lua, x);
+        else if constexpr (std::is_same_v<T, std::uint64_t>)
+            return sol::make_object(lua, static_cast<int64_t>(x));
+        else
+            return sol::make_object(lua, x);   // bool / int64_t / double
+    }, v);
 }
 
-// Lua return value -> QVariant. Integers stay integral (Lua 5.4 distinguishes
+// Lua return value -> dp::Value. Integers stay integral (Lua 5.4 distinguishes
 // them) so a decoded register count / enum doesn't become 3.0.
-QVariant fromLua(sol::object const& o) {
+dp::Value fromLua(sol::object const& o) {
     switch (o.get_type()) {
         case sol::type::boolean:
             return o.as<bool>();
         case sol::type::number:
             if (o.is<int64_t>())
-                return QVariant::fromValue<qlonglong>(o.as<int64_t>());
+                return std::int64_t(o.as<int64_t>());
             return o.as<double>();
         case sol::type::string:
-            return QString::fromStdString(o.as<std::string>());
+            return o.as<std::string>();
         default:
             return {};
     }
@@ -137,7 +129,7 @@ std::shared_ptr<LuaCodec> LuaCodec::fromFile(QString const& id,
     return std::shared_ptr<LuaCodec>(new LuaCodec(std::move(impl)));
 }
 
-QVariant LuaCodec::decode(core::RegisterWords const& raw, dp::PortRef const& ref) {
+dp::Value LuaCodec::decode(core::RegisterWords const& raw, dp::PortRef const& ref) {
     std::lock_guard lk(m_impl->mtx);
     sol::table luaRaw = m_impl->lua.create_table(int(raw.size()), 0);
     for (int i = 0; i < raw.size(); ++i)
@@ -150,7 +142,7 @@ QVariant LuaCodec::decode(core::RegisterWords const& raw, dp::PortRef const& ref
     return fromLua(o);
 }
 
-core::RegisterWords LuaCodec::encode(QVariant const& value, dp::PortRef const& ref) {
+core::RegisterWords LuaCodec::encode(dp::Value const& value, dp::PortRef const& ref) {
     std::lock_guard lk(m_impl->mtx);
     sol::object luaVal = toLua(m_impl->lua, value);
     sol::protected_function_result r =
@@ -192,8 +184,8 @@ std::shared_ptr<LuaCodec> LuaCodec::fromFile(QString const&, QString const&,
     return nullptr;
 }
 
-QVariant       LuaCodec::decode(core::RegisterWords const&, dp::PortRef const&) { return {}; }
-core::RegisterWords LuaCodec::encode(QVariant const&, dp::PortRef const&)       { return {}; }
+dp::Value       LuaCodec::decode(core::RegisterWords const&, dp::PortRef const&) { return {}; }
+core::RegisterWords LuaCodec::encode(dp::Value const&, dp::PortRef const&)       { return {}; }
 
 } // namespace core::codec
 

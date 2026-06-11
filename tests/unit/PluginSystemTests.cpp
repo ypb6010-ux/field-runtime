@@ -9,6 +9,7 @@
 #include "core/bus/EventBus.h"
 #include "core/dp/Datapoint.h"
 #include "core/dp/DatapointRegistry.h"
+#include "core/dp/ValueQt.h"
 #include "core/plugin/InPort.h"
 #include "core/plugin/OutPort.h"
 #include "core/plugin/PluginRegistry.h"
@@ -61,7 +62,7 @@ TEST_CASE("PortRegistry.bindOut writes an OutPort value to its datapoint",
         specFor("x.cmd", dp::Kind::Command, dp::ScalarType::U16));
     QVariant written;
     int writes = 0;
-    cmd->setWriter([&](QVariant const& v) { written = v; ++writes; });
+    cmd->setWriter([&](core::dp::Value const& v) { written = core::dp::toQVariant(v); ++writes; });
     dps.registerDp(cmd);
 
     plugin::PortRegistry reg(dps, bus);

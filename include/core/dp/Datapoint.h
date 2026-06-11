@@ -12,6 +12,7 @@
 #include "core/core_global.h"
 #include "core/dp/PortRef.h"
 #include "core/dp/ScalarType.h"
+#include "core/dp/Value.h"
 
 namespace core::dp {
 
@@ -52,7 +53,7 @@ class CORE_EXPORT Datapoint : public QObject {
     Q_PROPERTY(QDateTime  ts        READ timestamp NOTIFY valueChanged)
     Q_PROPERTY(QString    state     READ stateText NOTIFY stateChanged)
 public:
-    using Writer = std::function<void(QVariant const&)>;
+    using Writer = std::function<void(Value const&)>;
 
     explicit Datapoint(QObject* parent = nullptr);
     explicit Datapoint(DatapointSpec spec, QObject* parent = nullptr);
@@ -80,7 +81,7 @@ public:
     // only if (a) state transitions to Ok or (b) the value differs from the
     // current one. Thread-safe — emissions cross thread boundaries via Qt's
     // signal/slot machinery.
-    void setValue(QVariant v, QDateTime ts = QDateTime::currentDateTime());
+    void setValue(Value v, QDateTime ts = QDateTime::currentDateTime());
     void setState(DpState s);
 
     // Register a writer invoked by `write()`. The Core wires this to a

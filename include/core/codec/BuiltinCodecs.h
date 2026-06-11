@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <unordered_map>
+#include <QHash>   // std::hash<QString> specialisation for m_reverse map
 #include <QString>
 
 #include "core/core_global.h"
@@ -27,9 +28,9 @@ public:
     explicit BuiltinScalarCodec(dp::ScalarType type);
 
     QString        id() const override;
-    QVariant       decode(core::RegisterWords const& raw,
+    dp::Value       decode(core::RegisterWords const& raw,
                           dp::PortRef const&     ref) override;
-    core::RegisterWords encode(QVariant const&        value,
+    core::RegisterWords encode(dp::Value const&        value,
                           dp::PortRef const&     ref) override;
 
     dp::ScalarType scalarType() const noexcept { return m_type; }
@@ -48,9 +49,9 @@ public:
     EnumU16Codec(QString id, std::unordered_map<quint16, QString> map);
 
     QString        id() const override;
-    QVariant       decode(core::RegisterWords const& raw,
+    dp::Value       decode(core::RegisterWords const& raw,
                           dp::PortRef const&     ref) override;
-    core::RegisterWords encode(QVariant const&        value,
+    core::RegisterWords encode(dp::Value const&        value,
                           dp::PortRef const&     ref) override;
 
 private:

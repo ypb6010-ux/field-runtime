@@ -81,7 +81,7 @@ QString BuiltinScalarCodec::idFor(dp::ScalarType type) {
     return QStringLiteral("builtin.") + QString::fromUtf8(dp::scalarTypeName(type)).toLower();
 }
 
-QVariant BuiltinScalarCodec::decode(core::RegisterWords const& raw,
+dp::Value BuiltinScalarCodec::decode(core::RegisterWords const& raw,
                                      dp::PortRef const&     ref) {
     using dp::ScalarType;
     int const rc = dp::registerCountFor(m_type);
@@ -118,7 +118,7 @@ QVariant BuiltinScalarCodec::decode(core::RegisterWords const& raw,
     quint64 const concat = unpackInt(raw, rc, ref.wordOrder);
     quint64 const masked = (concat >> ref.shift) & ref.mask;
 
-    auto integerVariant = [&](auto signedT, auto unsignedT) -> QVariant {
+    auto integerVariant = [&](auto signedT, auto unsignedT) -> dp::Value {
         using S = decltype(signedT);
         using U = decltype(unsignedT);
         (void)signedT; (void)unsignedT;
@@ -128,13 +128,13 @@ QVariant BuiltinScalarCodec::decode(core::RegisterWords const& raw,
             if (hasLinearTransform(ref)) {
                 return double(v) * ref.scale + ref.offset;
             }
-            return QVariant::fromValue(v);
+            return std::int64_t(v);
         }
         U v = U(masked);
         if (hasLinearTransform(ref)) {
             return double(v) * ref.scale + ref.offset;
         }
-        return QVariant::fromValue(v);
+        return std::uint64_t(v);
     };
 
     switch (m_type) {
@@ -144,12 +144,12 @@ QVariant BuiltinScalarCodec::decode(core::RegisterWords const& raw,
         case ScalarType::S32:     return integerVariant(qint32(0),  quint32(0));
         case ScalarType::U64:     return integerVariant(qint64(0),  quint64(0));
         case ScalarType::S64:     return integerVariant(qint64(0),  quint64(0));
-        case ScalarType::EnumU16: return quint16(masked);   // wrapping codec maps it
+        case ScalarType::EnumU16: return std::uint64_t(quint16(masked));   // wrapping codec maps it
         default:                  return {};
     }
 }
 
-core::RegisterWords BuiltinScalarCodec::encode(QVariant const&    value,
+core::RegisterWords BuiltinScalarCodec::encode(dp::Value const&    value,
                                             dp::PortRef const& ref) {
     using dp::ScalarType;
     int const rc = dp::registerCountFor(m_type);
@@ -157,7 +157,7 @@ core::RegisterWords BuiltinScalarCodec::encode(QVariant const&    value,
 
     if (m_type == ScalarType::Bool) {
         core::RegisterWords out(rc, 0);
-        if (value.toBool()) {
+        if (dp::toBool(value)) {
             int bit = ref.bit.value_or(0);
             out[0]  = quint16(1u << bit);
         }
@@ -165,7 +165,7 @@ core::RegisterWords BuiltinScalarCodec::encode(QVariant const&    value,
     }
 
     if (m_type == ScalarType::F32) {
-        double  v    = value.toDouble();
+        double  v    = dp::toDouble(value);
         if (hasLinearTransform(ref)) v = (v - ref.offset) / ref.scale;
         float   f    = float(v);
         quint32 bits = 0;
@@ -173,7 +173,7 @@ core::RegisterWords BuiltinScalarCodec::encode(QVariant const&    value,
         return packInt(bits, rc, ref.wordOrder);
     }
     if (m_type == ScalarType::F64) {
-        double  v    = value.toDouble();
+        double  v    = dp::toDouble(value);
         if (hasLinearTransform(ref)) v = (v - ref.offset) / ref.scale;
         quint64 bits = 0;
         std::memcpy(&bits, &v, sizeof(v));
@@ -184,12 +184,12 @@ core::RegisterWords BuiltinScalarCodec::encode(QVariant const&    value,
     // a double round-trip would lose precision above 2^53.
     qint64 raw = 0;
     if (hasLinearTransform(ref)) {
-        double dval = (value.toDouble() - ref.offset) / ref.scale;
+        double dval = (dp::toDouble(value) - ref.offset) / ref.scale;
         raw         = qint64(std::llround(dval));
     } else if (m_type == ScalarType::U64) {
-        raw = qint64(value.toULongLong());
+        raw = qint64(dp::toUInt64(value));
     } else {
-        raw = value.toLongLong();
+        raw = dp::toInt64(value);
     }
     quint64 const masked  = quint64(raw) & ref.mask;
     quint64 const shifted = masked << ref.shift;
@@ -212,25 +212,25 @@ EnumU16Codec::EnumU16Codec(QString                              id,
 
 QString EnumU16Codec::id() const { return m_id; }
 
-QVariant EnumU16Codec::decode(core::RegisterWords const& raw,
+dp::Value EnumU16Codec::decode(core::RegisterWords const& raw,
                                dp::PortRef const&     ref) {
     if (raw.empty()) return {};
     quint16 const masked = quint16((raw[0] >> ref.shift) & quint16(ref.mask));
     auto it = m_forward.find(masked);
     if (it == m_forward.end()) {
-        return QStringLiteral("Unknown(%1)").arg(masked);
+        return std::string("Unknown(") + std::to_string(masked) + ")";
     }
-    return it->second;
+    return it->second.toStdString();
 }
 
-core::RegisterWords EnumU16Codec::encode(QVariant const&    value,
+core::RegisterWords EnumU16Codec::encode(dp::Value const&    value,
                                      dp::PortRef const& ref) {
-    QString const name = value.toString();
+    QString const name = QString::fromStdString(dp::toString(value));
     quint16       raw  = 0;
     if (auto it = m_reverse.find(name); it != m_reverse.end()) {
         raw = it->second;
     } else {
-        raw = quint16(value.toUInt());
+        raw = quint16(dp::toUInt64(value));
     }
     quint16 shifted = quint16((raw & quint16(ref.mask)) << ref.shift);
     return {shifted};

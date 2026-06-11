@@ -114,7 +114,7 @@ TEST_CASE("PollRange propagates transport errors to bound datapoints",
 
     auto spec = dpSpec("a", dp::ScalarType::U16, 0);
     auto dpt  = std::make_shared<dp::Datapoint>(spec);
-    dpt->setValue(quint16(5));   // pre-existing Ok state
+    dpt->setValue(core::dp::Value(std::uint64_t(5)));   // pre-existing Ok state
     REQUIRE(dpt->state() == dp::DpState::Ok);
 
     poll.bind(dpt, std::make_shared<codec::BuiltinScalarCodec>(dp::ScalarType::U16), 0);
@@ -158,7 +158,7 @@ TEST_CASE("PollRange marks datapoints Error when scheduler reports failure",
                            mock, readRange(0, 2), 100);
     auto spec = dpSpec("a", dp::ScalarType::U16, 0);
     auto dpt  = std::make_shared<dp::Datapoint>(spec);
-    dpt->setValue(quint16(1));
+    dpt->setValue(core::dp::Value(std::uint64_t(1)));
     poll.bind(dpt, std::make_shared<codec::BuiltinScalarCodec>(dp::ScalarType::U16), 0);
 
     auto r = poll.pollOnce();
@@ -274,7 +274,7 @@ TEST_CASE("PollRange.driveTick marks Stale and frees the guard when rejected",
                            mock, readRange(0, 1), 100);
     auto spec = dpSpec("a", dp::ScalarType::U16, 0);
     auto dpt  = std::make_shared<dp::Datapoint>(spec);
-    dpt->setValue(quint16(1));
+    dpt->setValue(core::dp::Value(std::uint64_t(1)));
     poll.bind(dpt, std::make_shared<codec::BuiltinScalarCodec>(dp::ScalarType::U16), 0);
 
     poll.driveTick();

@@ -5,12 +5,14 @@
 
 #include <cstring>
 #include <memory>
+#include <type_traits>
 #include <unordered_map>
 
 #include "core/codec/BuiltinCodecs.h"
 #include "core/codec/CodecRegistry.h"
 #include "core/dp/PortRef.h"
 #include "core/dp/ScalarType.h"
+#include "core/dp/Value.h"
 #include "core/dp/WordOrder.h"
 
 using namespace core::codec;
@@ -35,6 +37,17 @@ PortRef portFor(WordOrder wo               = WordOrder::ABCD,
     return r;
 }
 
+// Build a dp::Value from a typed literal, picking the exact variant alternative
+// (a bare int/quint16 would be an ambiguous variant construction).
+template <class T>
+Value V(T x) {
+    if constexpr (std::is_same_v<T, bool>)          return x;
+    else if constexpr (std::is_floating_point_v<T>) return double(x);
+    else if constexpr (std::is_signed_v<T>)         return std::int64_t(x);
+    else                                            return std::uint64_t(x);
+}
+inline Value V(QString const& s) { return s.toStdString(); }
+
 } // namespace
 
 // ===========================================================================
@@ -45,22 +58,22 @@ TEST_CASE("U16 round-trips raw register values", "[codec][u16]") {
     BuiltinScalarCodec c(ScalarType::U16);
     auto ref = portFor();
 
-    auto regs = c.encode(quint16(0xABCD), ref);
+    auto regs = c.encode(V(quint16(0xABCD)), ref);
     REQUIRE(regs == core::RegisterWords{0xABCD});
 
     auto v = c.decode(regs, ref);
-    REQUIRE(v.value<quint16>() == 0xABCD);
+    REQUIRE(toUInt64(v) == 0xABCD);
 }
 
 TEST_CASE("S16 sign-extends negative values", "[codec][s16]") {
     BuiltinScalarCodec c(ScalarType::S16);
     auto ref = portFor();
 
-    auto regs = c.encode(qint16(-2), ref);
+    auto regs = c.encode(V(qint16(-2)), ref);
     REQUIRE(regs == core::RegisterWords{0xFFFE});
 
     auto v = c.decode(core::RegisterWords{0xFFFE}, ref);
-    REQUIRE(v.value<qint16>() == -2);
+    REQUIRE(toInt64(v) == -2);
 }
 
 TEST_CASE("S16 applies scale and offset linear transform", "[codec][s16][scale]") {
@@ -69,10 +82,10 @@ TEST_CASE("S16 applies scale and offset linear transform", "[codec][s16][scale]"
 
     // raw 600 → 600 * 0.1 + (-40) = 20.0
     auto v = c.decode(core::RegisterWords{600}, ref);
-    REQUIRE_THAT(v.toDouble(), WithinAbs(20.0, 1e-9));
+    REQUIRE_THAT(toDouble(v), WithinAbs(20.0, 1e-9));
 
     // 20.0 → (20 - (-40)) / 0.1 = 600
-    auto regs = c.encode(20.0, ref);
+    auto regs = c.encode(V(20.0), ref);
     REQUIRE(regs == core::RegisterWords{600});
 }
 
@@ -83,10 +96,10 @@ TEST_CASE("U16 shift+mask isolates bit field", "[codec][u16][bits]") {
 
     // raw 0x00F0 → (0x00F0 >> 4) & 0x0F = 0x0F
     auto v = c.decode(core::RegisterWords{0x00F0}, ref);
-    REQUIRE(v.value<quint16>() == 0x0F);
+    REQUIRE(toUInt64(v) == 0x0F);
 
     // 0x0F → (0x0F & 0x0F) << 4 = 0x00F0
-    auto regs = c.encode(quint16(0x0F), ref);
+    auto regs = c.encode(V(quint16(0x0F)), ref);
     REQUIRE(regs == core::RegisterWords{0x00F0});
 }
 
@@ -98,53 +111,53 @@ TEST_CASE("U32 ABCD round-trips a known constant", "[codec][u32][abcd]") {
     BuiltinScalarCodec c(ScalarType::U32);
     auto ref = portFor(WordOrder::ABCD);
 
-    auto regs = c.encode(quint32(0x12345678u), ref);
+    auto regs = c.encode(V(quint32(0x12345678u)), ref);
     REQUIRE(regs == core::RegisterWords{0x1234, 0x5678});
 
     auto v = c.decode(regs, ref);
-    REQUIRE(v.value<quint32>() == 0x12345678u);
+    REQUIRE(toUInt64(v) == 0x12345678u);
 }
 
 TEST_CASE("U32 CDAB swaps the word pair", "[codec][u32][cdab]") {
     BuiltinScalarCodec c(ScalarType::U32);
     auto ref = portFor(WordOrder::CDAB);
 
-    auto regs = c.encode(quint32(0x12345678u), ref);
+    auto regs = c.encode(V(quint32(0x12345678u)), ref);
     REQUIRE(regs == core::RegisterWords{0x5678, 0x1234});
 
     auto v = c.decode(regs, ref);
-    REQUIRE(v.value<quint32>() == 0x12345678u);
+    REQUIRE(toUInt64(v) == 0x12345678u);
 }
 
 TEST_CASE("U32 BADC swaps bytes within each word", "[codec][u32][badc]") {
     BuiltinScalarCodec c(ScalarType::U32);
     auto ref = portFor(WordOrder::BADC);
 
-    auto regs = c.encode(quint32(0x12345678u), ref);
+    auto regs = c.encode(V(quint32(0x12345678u)), ref);
     REQUIRE(regs == core::RegisterWords{0x3412, 0x7856});
 
     auto v = c.decode(regs, ref);
-    REQUIRE(v.value<quint32>() == 0x12345678u);
+    REQUIRE(toUInt64(v) == 0x12345678u);
 }
 
 TEST_CASE("U32 DCBA fully reverses bytes", "[codec][u32][dcba]") {
     BuiltinScalarCodec c(ScalarType::U32);
     auto ref = portFor(WordOrder::DCBA);
 
-    auto regs = c.encode(quint32(0x12345678u), ref);
+    auto regs = c.encode(V(quint32(0x12345678u)), ref);
     REQUIRE(regs == core::RegisterWords{0x7856, 0x3412});
 
     auto v = c.decode(regs, ref);
-    REQUIRE(v.value<quint32>() == 0x12345678u);
+    REQUIRE(toUInt64(v) == 0x12345678u);
 }
 
 TEST_CASE("S32 sign-extends after permutation", "[codec][s32]") {
     BuiltinScalarCodec c(ScalarType::S32);
     auto ref = portFor(WordOrder::CDAB);
 
-    auto regs = c.encode(qint32(-1), ref);
+    auto regs = c.encode(V(qint32(-1)), ref);
     auto v    = c.decode(regs, ref);
-    REQUIRE(v.value<qint32>() == -1);
+    REQUIRE(toInt64(v) == -1);
 }
 
 // ===========================================================================
@@ -156,24 +169,24 @@ TEST_CASE("F32 ABCD round-trips with IEEE bit pattern", "[codec][f32]") {
     auto ref = portFor(WordOrder::ABCD);
 
     // 23.5 → 0x41BC0000 IEEE-754
-    auto regs = c.encode(23.5, ref);
+    auto regs = c.encode(V(23.5), ref);
     REQUIRE(regs.size() == 2);
     REQUIRE(regs[0] == 0x41BC);
     REQUIRE(regs[1] == 0x0000);
 
     auto v = c.decode(regs, ref);
-    REQUIRE_THAT(v.toDouble(), WithinAbs(23.5, 1e-6));
+    REQUIRE_THAT(toDouble(v), WithinAbs(23.5, 1e-6));
 }
 
 TEST_CASE("F32 CDAB places the high word second", "[codec][f32][cdab]") {
     BuiltinScalarCodec c(ScalarType::F32);
     auto ref = portFor(WordOrder::CDAB);
 
-    auto regs = c.encode(23.5, ref);
+    auto regs = c.encode(V(23.5), ref);
     REQUIRE(regs == core::RegisterWords{0x0000, 0x41BC});
 
     auto v = c.decode(regs, ref);
-    REQUIRE_THAT(v.toDouble(), WithinAbs(23.5, 1e-6));
+    REQUIRE_THAT(toDouble(v), WithinAbs(23.5, 1e-6));
 }
 
 TEST_CASE("F32 with scale handles milli-unit physical sensors", "[codec][f32][scale]") {
@@ -181,9 +194,9 @@ TEST_CASE("F32 with scale handles milli-unit physical sensors", "[codec][f32][sc
     auto ref = portFor(WordOrder::CDAB, std::nullopt, 0, 0xFFFFFFFFu,
                        /*scale*/0.001, /*offset*/0.0);
 
-    auto raw  = c.encode(7.234, ref);   // expressed as milli-unit on the wire
+    auto raw  = c.encode(V(7.234), ref);   // expressed as milli-unit on the wire
     auto back = c.decode(raw,  ref);
-    REQUIRE_THAT(back.toDouble(), WithinAbs(7.234, 1e-4));
+    REQUIRE_THAT(toDouble(back), WithinAbs(7.234, 1e-4));
 }
 
 // ===========================================================================
@@ -194,20 +207,20 @@ TEST_CASE("F64 round-trips with ABCD ordering", "[codec][f64]") {
     BuiltinScalarCodec c(ScalarType::F64);
     auto ref = portFor(WordOrder::ABCD);
 
-    auto regs = c.encode(3.141592653589793, ref);
+    auto regs = c.encode(V(3.141592653589793), ref);
     REQUIRE(regs.size() == 4);
 
     auto v = c.decode(regs, ref);
-    REQUIRE_THAT(v.toDouble(), WithinAbs(3.141592653589793, 1e-12));
+    REQUIRE_THAT(toDouble(v), WithinAbs(3.141592653589793, 1e-12));
 }
 
 TEST_CASE("U64 round-trips with CDAB ordering", "[codec][u64]") {
     BuiltinScalarCodec c(ScalarType::U64);
     auto ref = portFor(WordOrder::CDAB);
 
-    auto regs = c.encode(QVariant::fromValue<quint64>(0x0123456789ABCDEFull), ref);
+    auto regs = c.encode(V(quint64(0x0123456789ABCDEFull)), ref);
     auto v    = c.decode(regs, ref);
-    REQUIRE(v.value<quint64>() == 0x0123456789ABCDEFull);
+    REQUIRE(toUInt64(v) == 0x0123456789ABCDEFull);
 }
 
 // ===========================================================================
@@ -218,14 +231,14 @@ TEST_CASE("Bool encodes only the requested bit", "[codec][bool]") {
     BuiltinScalarCodec c(ScalarType::Bool);
     auto ref = portFor(WordOrder::ABCD, /*bit*/3);
 
-    auto regs = c.encode(true, ref);
+    auto regs = c.encode(V(true), ref);
     REQUIRE(regs == core::RegisterWords{0x0008});
 
     auto v = c.decode(core::RegisterWords{0x0008}, ref);
-    REQUIRE(v.toBool());
+    REQUIRE(toBool(v));
 
     auto v0 = c.decode(core::RegisterWords{0x0000}, ref);
-    REQUIRE_FALSE(v0.toBool());
+    REQUIRE_FALSE(toBool(v0));
 }
 
 TEST_CASE("Bool decodes from a register with multiple bits set",
@@ -235,8 +248,8 @@ TEST_CASE("Bool decodes from a register with multiple bits set",
     auto refB7 = portFor(WordOrder::ABCD, /*bit*/7);
 
     auto src = core::RegisterWords{0x0088};   // bits 3 and 7 set
-    REQUIRE(c.decode(src, refB3).toBool());
-    REQUIRE(c.decode(src, refB7).toBool());
+    REQUIRE(toBool(c.decode(src, refB3)));
+    REQUIRE(toBool(c.decode(src, refB7)));
 }
 
 // ===========================================================================
@@ -252,12 +265,12 @@ TEST_CASE("EnumU16Codec maps raw values to names", "[codec][enum]") {
     });
     auto ref = portFor();
 
-    REQUIRE(c.decode(core::RegisterWords{0}, ref).toString() == "Stopped");
-    REQUIRE(c.decode(core::RegisterWords{2}, ref).toString() == "Running");
-    REQUIRE(c.decode(core::RegisterWords{4}, ref).toString() == "Fault");
+    REQUIRE(toString(c.decode(core::RegisterWords{0}, ref)) == "Stopped");
+    REQUIRE(toString(c.decode(core::RegisterWords{2}, ref)) == "Running");
+    REQUIRE(toString(c.decode(core::RegisterWords{4}, ref)) == "Fault");
 
     // Unknown keys produce a stable placeholder, never empty.
-    REQUIRE(c.decode(core::RegisterWords{99}, ref).toString() == "Unknown(99)");
+    REQUIRE(toString(c.decode(core::RegisterWords{99}, ref)) == "Unknown(99)");
 }
 
 TEST_CASE("EnumU16Codec encodes by name and by numeric fallback",
@@ -268,11 +281,11 @@ TEST_CASE("EnumU16Codec encodes by name and by numeric fallback",
     });
     auto ref = portFor();
 
-    REQUIRE(c.encode(QStringLiteral("Running"), ref) == core::RegisterWords{2});
-    REQUIRE(c.encode(QStringLiteral("Stopped"), ref) == core::RegisterWords{0});
+    REQUIRE(c.encode(V(QStringLiteral("Running")), ref) == core::RegisterWords{2});
+    REQUIRE(c.encode(V(QStringLiteral("Stopped")), ref) == core::RegisterWords{0});
 
-    // Unknown name → fallback to numeric coercion of the QVariant
-    REQUIRE(c.encode(7, ref) == core::RegisterWords{7});
+    // Unknown name → fallback to numeric coercion of the value
+    REQUIRE(c.encode(V(7), ref) == core::RegisterWords{7});
 }
 
 TEST_CASE("EnumU16Codec masks before lookup", "[codec][enum][mask]") {
@@ -282,8 +295,8 @@ TEST_CASE("EnumU16Codec masks before lookup", "[codec][enum][mask]") {
     });
     auto ref = portFor(WordOrder::ABCD, std::nullopt, 0, 0x000Fu);
 
-    REQUIRE(c.decode(core::RegisterWords{0xFFF0}, ref).toString() == "Idle");
-    REQUIRE(c.decode(core::RegisterWords{0x00F1}, ref).toString() == "Run");
+    REQUIRE(toString(c.decode(core::RegisterWords{0xFFF0}, ref)) == "Idle");
+    REQUIRE(toString(c.decode(core::RegisterWords{0x00F1}, ref)) == "Run");
 }
 
 // ===========================================================================

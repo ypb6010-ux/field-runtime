@@ -46,9 +46,9 @@ public:
     ~LuaCodec() override;
 
     QString        id() const override;
-    QVariant       decode(core::RegisterWords const& raw,
+    dp::Value       decode(core::RegisterWords const& raw,
                           dp::PortRef const&     ref) override;
-    core::RegisterWords encode(QVariant const&        value,
+    core::RegisterWords encode(dp::Value const&        value,
                           dp::PortRef const&     ref) override;
 
 private:

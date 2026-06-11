@@ -67,8 +67,8 @@ void PollRange::applyResult(transport::ReadResult const& result) {
             b.dp->setState(dp::DpState::Error);
             continue;
         }
-        QVariant decoded = b.codec->decode(sub, b.dp->source().value());
-        if (!decoded.isValid()) {
+        dp::Value decoded = b.codec->decode(sub, b.dp->source().value());
+        if (dp::isNull(decoded)) {
             b.dp->setState(dp::DpState::Error);
             continue;
         }

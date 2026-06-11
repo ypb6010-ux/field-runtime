@@ -52,8 +52,8 @@ TEST_CASE("LuaCodec bcd_datetime decode", "[codec][lua]") {
     if (!codec) SKIP("Lua disabled: " + err.toStdString());
 
     PortRef ref;
-    QVariant const v = codec->decode(kRaw, ref);
-    REQUIRE(v.toString() == kStr);
+    auto const v = codec->decode(kRaw, ref);
+    REQUIRE(QString::fromStdString(core::dp::toString(v)) == kStr);
 }
 
 TEST_CASE("LuaCodec bcd_datetime encode round-trips", "[codec][lua]") {
@@ -62,10 +62,10 @@ TEST_CASE("LuaCodec bcd_datetime encode round-trips", "[codec][lua]") {
     if (!codec) SKIP("Lua disabled: " + err.toStdString());
 
     PortRef ref;
-    core::RegisterWords const back = codec->encode(kStr, ref);
+    core::RegisterWords const back = codec->encode(core::dp::Value(kStr.toStdString()), ref);
     REQUIRE(back == kRaw);
     // decode(encode(x)) == x
-    REQUIRE(codec->decode(back, ref).toString() == kStr);
+    REQUIRE(QString::fromStdString(core::dp::toString(codec->decode(back, ref))) == kStr);
 }
 
 TEST_CASE("LuaCodec tolerates malformed input without crashing", "[codec][lua]") {
@@ -74,10 +74,10 @@ TEST_CASE("LuaCodec tolerates malformed input without crashing", "[codec][lua]")
     if (!codec) SKIP("Lua disabled: " + err.toStdString());
 
     PortRef ref;
-    // Too few registers → script returns nil → invalid QVariant.
-    REQUIRE_FALSE(codec->decode(core::RegisterWords{0x0024}, ref).isValid());
+    // Too few registers → script returns nil → null Value.
+    REQUIRE(core::dp::isNull(codec->decode(core::RegisterWords{0x0024}, ref)));
     // Unparseable datetime string → script returns {} → empty register list.
-    REQUIRE(codec->encode(QStringLiteral("not-a-date"), ref).empty());
+    REQUIRE(codec->encode(core::dp::Value(std::string("not-a-date")), ref).empty());
 }
 
 TEST_CASE("LuaCodec.fromFile reports a missing script", "[codec][lua]") {
@@ -108,6 +108,6 @@ TEST_CASE("LuaCodec passes the config arg to the script as ctx.arg",
     if (!hi) SKIP("Lua disabled: " + err.toStdString());
 
     PortRef ref;
-    REQUIRE(hi->decode(core::RegisterWords{0}, ref).toString() == QStringLiteral("high"));
-    REQUIRE(lo->decode(core::RegisterWords{0}, ref).toString() == QStringLiteral("low"));
+    REQUIRE(QString::fromStdString(core::dp::toString(hi->decode(core::RegisterWords{0}, ref))) == QStringLiteral("high"));
+    REQUIRE(QString::fromStdString(core::dp::toString(lo->decode(core::RegisterWords{0}, ref))) == QStringLiteral("low"));
 }

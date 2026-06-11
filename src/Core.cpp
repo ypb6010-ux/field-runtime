@@ -840,7 +840,7 @@ private:
                 && datapoint->sink().has_value()
                 && !datapoint->sink()->window.isEmpty()) {
                 QString const windowId = datapoint->sink()->window;
-                datapoint->setWriter([this, weak, windowId](QVariant v) {
+                datapoint->setWriter([this, weak, windowId](core::dp::Value const& v) {
                     auto sp = weak.lock();
                     if (!sp || !sp->sink().has_value()) return;
                     auto sink = *sp->sink();

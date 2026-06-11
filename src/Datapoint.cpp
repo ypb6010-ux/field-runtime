@@ -6,13 +6,15 @@
 #include <QMutexLocker>
 #include <utility>
 
+#include "core/dp/ValueQt.h"
+
 namespace core::dp {
 
 class Datapoint::Impl {
 public:
     mutable QMutex mtx;
     DatapointSpec  spec;
-    QVariant       value;
+    Value          value;
     DpState        state = DpState::Missing;
     QDateTime      timestamp;
     Writer         writer;
@@ -40,7 +42,7 @@ QString Datapoint::id() const {
 
 QVariant Datapoint::value() const {
     QMutexLocker lk(&m_impl->mtx);
-    return m_impl->value;
+    return toQVariant(m_impl->value);
 }
 
 bool Datapoint::valid() const {
@@ -76,7 +78,7 @@ QString    Datapoint::persistTag() const { QMutexLocker lk(&m_impl->mtx); return
 std::optional<PortRef> const& Datapoint::source() const { return m_impl->spec.source; }
 std::optional<PortRef> const& Datapoint::sink()   const { return m_impl->spec.sink; }
 
-void Datapoint::setValue(QVariant v, QDateTime ts) {
+void Datapoint::setValue(Value v, QDateTime ts) {
     bool valueChangedFlag = false;
     bool stateChangedFlag = false;
     {
@@ -127,7 +129,7 @@ void Datapoint::write(QVariant v) {
         QMutexLocker lk(&m_impl->mtx);
         cb = m_impl->writer;
     }
-    if (cb) cb(v);
+    if (cb) cb(fromQVariant(v));
 }
 
 } // namespace core::dp

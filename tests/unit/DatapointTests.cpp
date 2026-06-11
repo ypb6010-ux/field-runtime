@@ -7,6 +7,7 @@
 
 #include "core/dp/Datapoint.h"
 #include "core/dp/DatapointRegistry.h"
+#include "core/dp/ValueQt.h"
 
 using namespace core::dp;
 
@@ -83,7 +84,7 @@ TEST_CASE("Datapoint.write invokes the registered writer", "[dp][write]") {
 
     QVariant received;
     int calls = 0;
-    d.setWriter([&](QVariant const& v) { received = v; ++calls; });
+    d.setWriter([&](core::dp::Value const& v) { received = core::dp::toQVariant(v); ++calls; });
 
     d.write(true);
     REQUIRE(calls == 1);
