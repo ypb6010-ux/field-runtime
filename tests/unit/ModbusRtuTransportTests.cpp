@@ -44,11 +44,11 @@ TEST_CASE("ModbusRtuTransport read/write on a disconnected port report "
     cfg.baudRate = 9600;
     ModbusRtuTransport t(cfg);
 
-    auto rd = t.read({QModbusDataUnit::HoldingRegisters, 0, 4});
+    auto rd = t.read({core::RegisterTable::HoldingRegister, 0, 4});
     REQUIRE_FALSE(rd.ok);
     REQUIRE(rd.errorMessage.contains("not connected"));
 
-    auto wr = t.writeBatch({QModbusDataUnit::HoldingRegisters, 0, {0x1234}});
+    auto wr = t.writeBatch({core::RegisterTable::HoldingRegister, 0, {0x1234}});
     REQUIRE_FALSE(wr.ok);
     REQUIRE(wr.errorMessage.contains("not connected"));
 }

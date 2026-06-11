@@ -61,11 +61,11 @@ TEST_CASE("ICore loads a TOML config and polls a real Modbus server end-to-end",
 
     core::test::ModbusTestServer srv(port);
     REQUIRE(srv.listening());
-    srv.setData(QModbusDataUnit::HoldingRegisters, 0, 0x0042);   // U16 value
-    srv.setData(QModbusDataUnit::HoldingRegisters, 2, 600);      // S16 raw
+    srv.setData(core::RegisterTable::HoldingRegister, 0, 0x0042);   // U16 value
+    srv.setData(core::RegisterTable::HoldingRegister, 2, 600);      // S16 raw
     // F32 23.5 in CDAB lays out as [0x0000, 0x41BC]
-    srv.setData(QModbusDataUnit::HoldingRegisters, 4, 0x0000);
-    srv.setData(QModbusDataUnit::HoldingRegisters, 5, 0x41BC);
+    srv.setData(core::RegisterTable::HoldingRegister, 4, 0x0000);
+    srv.setData(core::RegisterTable::HoldingRegister, 5, 0x41BC);
 
     QTemporaryFile cfg;
     auto path = writeToml(QString(R"toml(
@@ -255,7 +255,7 @@ policy = "ContinuousMirror"
     transport::ModbusTcpClientTransport opbox(opCfg);
     REQUIRE(opbox.connect().has_value());
 
-    auto w = opbox.writeBatch({QModbusDataUnit::HoldingRegisters, 0,
+    auto w = opbox.writeBatch({core::RegisterTable::HoldingRegister, 0,
                                 {0x1234}});
     REQUIRE(w.ok);
 
@@ -282,7 +282,7 @@ policy = "ContinuousMirror"
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
     quint16 raw = 0;
     while (std::chrono::steady_clock::now() < deadline) {
-        raw = plc.getData(QModbusDataUnit::HoldingRegisters, 100);
+        raw = plc.getData(core::RegisterTable::HoldingRegister, 100);
         if (raw == 0x1234) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }

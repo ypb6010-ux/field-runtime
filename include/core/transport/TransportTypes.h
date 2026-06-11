@@ -4,8 +4,8 @@
 
 #include <QList>
 #include <QString>
-#include <QtSerialBus/QModbusDataUnit>
 
+#include "core/base/RegisterTable.h"
 #include "core/core_global.h"
 
 namespace core::transport {
@@ -28,13 +28,13 @@ enum class TransportKind {
 };
 
 struct ReadRequest {
-    QModbusDataUnit::RegisterType table;
+    core::RegisterTable           table = core::RegisterTable::HoldingRegister;
     int                           startAddress = 0;
     int                           count        = 0;
 };
 
 struct WriteBatch {
-    QModbusDataUnit::RegisterType table;
+    core::RegisterTable           table = core::RegisterTable::HoldingRegister;
     int                           startAddress = 0;
     QList<quint16>                values;
 };
@@ -52,7 +52,7 @@ struct WriteResult {
 };
 
 struct WatchRange {
-    QModbusDataUnit::RegisterType table;
+    core::RegisterTable table = core::RegisterTable::HoldingRegister;
     int  startAddress = 0;
     int  size         = 0;
 };

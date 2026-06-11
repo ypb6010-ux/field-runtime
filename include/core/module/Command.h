@@ -4,8 +4,8 @@
 
 #include <QList>
 #include <QString>
-#include <QtSerialBus/QModbusDataUnit>
 
+#include "core/base/RegisterTable.h"
 #include "core/core_global.h"
 #include "core/module/FunctionalModule.h"
 #include "core/sched/RequestScheduler.h"
@@ -23,7 +23,7 @@ namespace core::module {
 class CORE_EXPORT Command : public FunctionalModule {
 public:
     struct Entry {
-        QModbusDataUnit::RegisterType table = QModbusDataUnit::HoldingRegisters;
+        core::RegisterTable table = core::RegisterTable::HoldingRegister;
         int     address = 0;
         quint16 value   = 0;
     };

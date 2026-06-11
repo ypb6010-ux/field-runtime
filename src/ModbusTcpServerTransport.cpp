@@ -19,6 +19,7 @@
 #include "core/bus/BusEvents.h"
 #include "core/bus/EventBus.h"
 #include "core/sched/SerialScheduler.h"
+#include "core/transport/RegisterTableQt.h"
 
 namespace core::transport {
 
@@ -84,7 +85,7 @@ public:
                 values.append(v);
             }
             busPtr->publish(bus::ServerWriteEvent{
-                cfg.id, table, address, std::move(values)});
+                cfg.id, core::fromQModbus(table), address, std::move(values)});
         });
     }
 
@@ -139,15 +140,16 @@ bool applyListenConfig(QModbusTcpServer*                       server,
                        ModbusTcpServerTransport::Config const&  cfg) {
     QHash<QModbusDataUnit::RegisterType, QPair<int, int>> bounds;
     for (auto const& r : cfg.listenRanges) {
+        auto const qt   = core::toQModbus(r.table);
         int const start = r.startAddress;
         int const end   = r.startAddress + r.size - 1;
-        if (bounds.contains(r.table)) {
-            auto cur = bounds.value(r.table);
+        if (bounds.contains(qt)) {
+            auto cur = bounds.value(qt);
             cur.first  = std::min(cur.first,  start);
             cur.second = std::max(cur.second, end);
-            bounds[r.table] = cur;
+            bounds[qt] = cur;
         } else {
-            bounds.insert(r.table, qMakePair(start, end));
+            bounds.insert(qt, qMakePair(start, end));
         }
     }
     QModbusDataUnitMap map;
@@ -243,7 +245,7 @@ ReadResult ModbusTcpServerTransport::read(ReadRequest const& req) {
         out.reserve(req.count);
         for (int i = 0; i < req.count; ++i) {
             quint16 v = 0;
-            if (!m_impl->server->data(req.table, req.startAddress + i, &v)) {
+            if (!m_impl->server->data(core::toQModbus(req.table), req.startAddress + i, &v)) {
                 result.ok           = false;
                 result.errorMessage = QStringLiteral("address out of range");
                 return;
@@ -260,7 +262,7 @@ WriteResult ModbusTcpServerTransport::writeBatch(WriteBatch const& batch) {
     WriteResult result;
     QMetaObject::invokeMethod(m_impl->server, [this, batch, &result] {
         for (int i = 0; i < batch.values.size(); ++i) {
-            if (!m_impl->server->setData(batch.table,
+            if (!m_impl->server->setData(core::toQModbus(batch.table),
                                           batch.startAddress + i,
                                           batch.values.at(i))) {
                 result.ok           = false;

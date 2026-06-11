@@ -15,8 +15,8 @@ TEST_CASE("Command.execute writes each configured entry exactly once",
     cfg.moduleId = "cmd.estop";
     cfg.priority = sched::Priority::Critical;
     cfg.writes = {
-        {QModbusDataUnit::HoldingRegisters, 400, 0xDEAD},
-        {QModbusDataUnit::HoldingRegisters, 401, 0xBEEF},
+        {core::RegisterTable::HoldingRegister, 400, 0xDEAD},
+        {core::RegisterTable::HoldingRegister, 401, 0xBEEF},
     };
     module::Command cmd(cfg, mock);
 
@@ -37,9 +37,9 @@ TEST_CASE("Command.execute reports the first failure but continues other writes"
     module::Command::Config cfg;
     cfg.moduleId = "cmd";
     cfg.writes = {
-        {QModbusDataUnit::HoldingRegisters, 1, 1},
-        {QModbusDataUnit::HoldingRegisters, 2, 2},
-        {QModbusDataUnit::HoldingRegisters, 3, 3},
+        {core::RegisterTable::HoldingRegister, 1, 1},
+        {core::RegisterTable::HoldingRegister, 2, 2},
+        {core::RegisterTable::HoldingRegister, 3, 3},
     };
     module::Command cmd(cfg, mock);
 
@@ -61,8 +61,8 @@ TEST_CASE("Command.executeAsync writes each entry via the async scheduler path",
     cfg.moduleId = "cmd.async";
     cfg.priority = sched::Priority::Critical;
     cfg.writes = {
-        {QModbusDataUnit::HoldingRegisters, 400, 0xDEAD},
-        {QModbusDataUnit::HoldingRegisters, 401, 0xBEEF},
+        {core::RegisterTable::HoldingRegister, 400, 0xDEAD},
+        {core::RegisterTable::HoldingRegister, 401, 0xBEEF},
     };
     module::Command cmd(cfg, mock);
 

@@ -41,9 +41,9 @@ TEST_CASE("OpcUaClientTransport.read/writeBatch on disconnected report "
     cfg.requestTimeoutMs = 200;
     OpcUaClientTransport t(cfg);
 
-    auto rd = t.read({QModbusDataUnit::HoldingRegisters, 0, 4});
+    auto rd = t.read({core::RegisterTable::HoldingRegister, 0, 4});
     REQUIRE_FALSE(rd.ok);
 
-    auto wr = t.writeBatch({QModbusDataUnit::HoldingRegisters, 0, {0x1234}});
+    auto wr = t.writeBatch({core::RegisterTable::HoldingRegister, 0, {0x1234}});
     REQUIRE_FALSE(wr.ok);
 }

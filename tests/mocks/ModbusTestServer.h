@@ -13,6 +13,8 @@
 #include <QtSerialBus/QModbusDataUnitMap>
 #include <QtSerialBus/QModbusTcpServer>
 
+#include "core/transport/RegisterTableQt.h"
+
 namespace core::test {
 
 // Header-only QModbusTcpServer fixture for integration tests. Spins the
@@ -85,16 +87,18 @@ public:
     int     slaveId()   const noexcept { return m_slaveId; }
     bool    listening() const noexcept { return m_listening.load(); }
 
-    void setData(QModbusDataUnit::RegisterType table, int address, quint16 value) {
-        QMetaObject::invokeMethod(m_server, [this, table, address, value] {
-            m_server->setData(table, address, value);
+    void setData(core::RegisterTable table, int address, quint16 value) {
+        auto const qt = core::toQModbus(table);
+        QMetaObject::invokeMethod(m_server, [this, qt, address, value] {
+            m_server->setData(qt, address, value);
         }, Qt::BlockingQueuedConnection);
     }
 
-    quint16 getData(QModbusDataUnit::RegisterType table, int address) const {
+    quint16 getData(core::RegisterTable table, int address) const {
         quint16 v = 0;
-        QMetaObject::invokeMethod(m_server, [this, table, address, &v] {
-            m_server->data(table, address, &v);
+        auto const qt = core::toQModbus(table);
+        QMetaObject::invokeMethod(m_server, [this, qt, address, &v] {
+            m_server->data(qt, address, &v);
         }, Qt::BlockingQueuedConnection);
         return v;
     }

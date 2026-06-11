@@ -5,8 +5,8 @@
 #include <memory>
 #include <optional>
 #include <QString>
-#include <QtSerialBus/QModbusDataUnit>
 
+#include "core/base/RegisterTable.h"
 #include "core/core_global.h"
 #include "core/dp/WordOrder.h"
 
@@ -20,7 +20,7 @@ namespace core::dp {
 // scale, offset, optional custom codec).
 struct PortRef {
     QString                            transport;
-    QModbusDataUnit::RegisterType      table = QModbusDataUnit::HoldingRegisters;
+    core::RegisterTable                table = core::RegisterTable::HoldingRegister;
     int                                address = 0;
     std::optional<int>                 bit;
     WordOrder                          wordOrder = WordOrder::ABCD;

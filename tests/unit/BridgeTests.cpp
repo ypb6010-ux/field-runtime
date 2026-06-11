@@ -197,8 +197,8 @@ TEST_CASE("Bridge mirrors PLC reads into the server table and forwards operator 
 
     core::test::ModbusTestServer plc(plcPort);
     REQUIRE(plc.listening());
-    plc.setData(QModbusDataUnit::HoldingRegisters, 50, 0x1234);
-    plc.setData(QModbusDataUnit::HoldingRegisters, 51, 0x5678);
+    plc.setData(core::RegisterTable::HoldingRegister, 50, 0x1234);
+    plc.setData(core::RegisterTable::HoldingRegister, 51, 0x5678);
 
     QTemporaryFile temp;
     auto path = writeToml(bridgeToml(plcPort, serverPort), temp);
@@ -221,7 +221,7 @@ TEST_CASE("Bridge mirrors PLC reads into the server table and forwards operator 
         internal::mirrorBridgesOnce(*core);
         QCoreApplication::processEvents();
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        transport::ReadRequest req{QModbusDataUnit::HoldingRegisters, 50, 2};
+        transport::ReadRequest req{core::RegisterTable::HoldingRegister, 50, 2};
         auto res = server->read(req);
         if (res.ok && res.values.size() == 2
          && res.values[0] == 0x1234 && res.values[1] == 0x5678) { mirrored = true; break; }
@@ -243,7 +243,7 @@ TEST_CASE("Bridge mirrors PLC reads into the server table and forwards operator 
     auto swSub = core->bus().subscribe<bus::ServerWriteEvent>(
         [&swCount](bus::ServerWriteEvent const&) { swCount.fetch_add(1); });
 
-    auto w = opbox.writeBatch({QModbusDataUnit::HoldingRegisters, 0,
+    auto w = opbox.writeBatch({core::RegisterTable::HoldingRegister, 0,
                                QList<quint16>{0xABCD, 0x0F0F}});
     REQUIRE(w.ok);
 
@@ -253,8 +253,8 @@ TEST_CASE("Bridge mirrors PLC reads into the server table and forwards operator 
         internal::tickSinkWindowsOnce(*core);   // 刷 bridge 转发 SinkWindow → PLC
         QCoreApplication::processEvents();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        if (plc.getData(QModbusDataUnit::HoldingRegisters, 0) == 0xABCD
-         && plc.getData(QModbusDataUnit::HoldingRegisters, 1) == 0x0F0F) { forwarded = true; break; }
+        if (plc.getData(core::RegisterTable::HoldingRegister, 0) == 0xABCD
+         && plc.getData(core::RegisterTable::HoldingRegister, 1) == 0x0F0F) { forwarded = true; break; }
     }
     INFO("serverWriteEvents=" << swCount.load());
     REQUIRE(forwarded);

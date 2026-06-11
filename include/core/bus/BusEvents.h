@@ -6,8 +6,8 @@
 #include <QList>
 #include <QString>
 #include <QVariant>
-#include <QtSerialBus/QModbusDataUnit>
 
+#include "core/base/RegisterTable.h"
 #include "core/core_global.h"
 #include "core/sched/SchedulerTypes.h"
 
@@ -48,7 +48,7 @@ struct CoreStopping {};
 // staging) use it to mirror operator intent into PLC-bound Transports.
 struct ServerWriteEvent {
     QString                            transportId;   // the server's id
-    QModbusDataUnit::RegisterType      table;
+    core::RegisterTable                table = core::RegisterTable::HoldingRegister;
     int                                startAddress;
     QList<quint16>                     values;
 };

@@ -229,7 +229,7 @@ ReadResult ModbusRtuTransport::read(ReadRequest const& req) {
     }
     QSemaphore done(0);
     QMetaObject::invokeMethod(m_impl->client, [this, req, &result, &done] {
-        QModbusDataUnit unit(req.table, req.startAddress, req.count);
+        QModbusDataUnit unit(core::toQModbus(req.table), req.startAddress, req.count);
         auto* reply = m_impl->client->sendReadRequest(unit, m_impl->cfg.slaveId);
         if (!reply) {
             result.errorMessage = m_impl->client->errorString();
@@ -276,7 +276,7 @@ WriteResult ModbusRtuTransport::writeBatch(WriteBatch const& batch) {
 
     QSemaphore done(0);
     QMetaObject::invokeMethod(m_impl->client, [this, batch, &result, &done] {
-        QModbusDataUnit unit(batch.table, batch.startAddress, batch.values.size());
+        QModbusDataUnit unit(core::toQModbus(batch.table), batch.startAddress, batch.values.size());
         for (int i = 0; i < batch.values.size(); ++i) unit.setValue(i, batch.values.at(i));
         auto* reply = m_impl->client->sendWriteRequest(unit, m_impl->cfg.slaveId);
         if (!reply) {

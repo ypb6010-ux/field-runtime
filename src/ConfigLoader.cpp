@@ -213,15 +213,15 @@ TransportConfig parseTransport(toml::table const& t,
                 transport::WatchRange r;
                 QString const tbl = getStr(*wt, "table", QStringLiteral("HR"));
                 if (tbl == "HR" || tbl == "HoldingRegisters")
-                    r.table = QModbusDataUnit::HoldingRegisters;
+                    r.table = core::RegisterTable::HoldingRegister;
                 else if (tbl == "IR" || tbl == "InputRegisters")
-                    r.table = QModbusDataUnit::InputRegisters;
+                    r.table = core::RegisterTable::InputRegister;
                 else if (tbl == "Coil" || tbl == "Coils")
-                    r.table = QModbusDataUnit::Coils;
+                    r.table = core::RegisterTable::Coil;
                 else if (tbl == "DI" || tbl == "DiscreteInputs")
-                    r.table = QModbusDataUnit::DiscreteInputs;
+                    r.table = core::RegisterTable::DiscreteInput;
                 else
-                    r.table = QModbusDataUnit::HoldingRegisters;
+                    r.table = core::RegisterTable::HoldingRegister;
                 if (auto arr = (*wt)["range"].as_array(); arr && arr->size() == 2) {
                     r.startAddress = int(arr->at(0).value<int64_t>().value_or(0));
                     r.size         = int(arr->at(1).value<int64_t>().value_or(0));

@@ -17,6 +17,7 @@
 #include <QtSerialBus/QModbusReply>
 
 #include "core/transport/TransportTypes.h"
+#include "core/transport/RegisterTableQt.h"
 
 namespace core::transport::detail {
 
@@ -26,7 +27,7 @@ inline void modbusReadAsync(QModbusClient* client, int slaveId,
     QMetaObject::invokeMethod(client,
         [client, slaveId, req, done = std::move(done)]() mutable {
             auto* reply = client->sendReadRequest(
-                QModbusDataUnit(req.table, req.startAddress, req.count), slaveId);
+                QModbusDataUnit(core::toQModbus(req.table), req.startAddress, req.count), slaveId);
             if (!reply) {
                 ReadResult r;
                 r.startAddress = req.startAddress;
@@ -62,7 +63,7 @@ inline void modbusWriteAsync(QModbusClient* client, int slaveId,
     if (batch.values.isEmpty()) { done(WriteResult{true, {}}); return; }
     QMetaObject::invokeMethod(client,
         [client, slaveId, batch, done = std::move(done)]() mutable {
-            QModbusDataUnit unit(batch.table, batch.startAddress, batch.values.size());
+            QModbusDataUnit unit(core::toQModbus(batch.table), batch.startAddress, batch.values.size());
             for (int i = 0; i < batch.values.size(); ++i)
                 unit.setValue(i, batch.values.at(i));
             auto* reply = client->sendWriteRequest(unit, slaveId);

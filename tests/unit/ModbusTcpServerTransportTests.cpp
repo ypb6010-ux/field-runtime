@@ -28,8 +28,8 @@ transport::ModbusTcpServerTransport::Config serverCfg(quint16 port) {
     c.listenPort    = port;
     c.slaveId       = 1;
     c.listenRanges  = {
-        {QModbusDataUnit::HoldingRegisters, 0, 100},
-        {QModbusDataUnit::InputRegisters,   0, 50},
+        {core::RegisterTable::HoldingRegister, 0, 100},
+        {core::RegisterTable::InputRegister,   0, 50},
     };
     return c;
 }
@@ -71,13 +71,13 @@ TEST_CASE("Server writeBatch updates the table observable by clients",
     transport::ModbusTcpServerTransport srv(serverCfg(port), bus);
     REQUIRE(srv.connect().has_value());
 
-    auto w = srv.writeBatch({QModbusDataUnit::HoldingRegisters, 10,
+    auto w = srv.writeBatch({core::RegisterTable::HoldingRegister, 10,
                               {0x1111, 0x2222, 0x3333}});
     REQUIRE(w.ok);
 
     transport::ModbusTcpClientTransport client(clientCfg(port));
     REQUIRE(client.connect().has_value());
-    auto r = client.read({QModbusDataUnit::HoldingRegisters, 10, 3});
+    auto r = client.read({core::RegisterTable::HoldingRegister, 10, 3});
     REQUIRE(r.ok);
     REQUIRE(r.values == QList<quint16>{0x1111, 0x2222, 0x3333});
 }
@@ -102,7 +102,7 @@ TEST_CASE("Server publishes ServerWriteEvent on dataWritten",
     transport::ModbusTcpClientTransport client(clientCfg(port));
     REQUIRE(client.connect().has_value());
 
-    auto w = client.writeBatch({QModbusDataUnit::HoldingRegisters, 5,
+    auto w = client.writeBatch({core::RegisterTable::HoldingRegister, 5,
                                   {0xAAAA, 0xBBBB}});
     REQUIRE(w.ok);
 
@@ -118,7 +118,7 @@ TEST_CASE("Server publishes ServerWriteEvent on dataWritten",
     REQUIRE(captured.transportId == "server.test");
     REQUIRE(captured.startAddress == 5);
     REQUIRE(captured.values == QList<quint16>{0xAAAA, 0xBBBB});
-    REQUIRE(captured.table == QModbusDataUnit::HoldingRegisters);
+    REQUIRE(captured.table == core::RegisterTable::HoldingRegister);
 }
 
 TEST_CASE("Server read returns its own current table values",
@@ -128,8 +128,8 @@ TEST_CASE("Server read returns its own current table values",
     transport::ModbusTcpServerTransport srv(serverCfg(port), bus);
     REQUIRE(srv.connect().has_value());
 
-    srv.writeBatch({QModbusDataUnit::HoldingRegisters, 20, {0xDEAD, 0xBEEF}});
-    auto r = srv.read({QModbusDataUnit::HoldingRegisters, 20, 2});
+    srv.writeBatch({core::RegisterTable::HoldingRegister, 20, {0xDEAD, 0xBEEF}});
+    auto r = srv.read({core::RegisterTable::HoldingRegister, 20, 2});
     REQUIRE(r.ok);
     REQUIRE(r.values == QList<quint16>{0xDEAD, 0xBEEF});
 }

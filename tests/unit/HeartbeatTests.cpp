@@ -19,7 +19,7 @@ module::Heartbeat::Config cfgFor(QString const& id = "hb",
                                   QList<quint16> values = {0xA5A5}) {
     module::Heartbeat::Config c;
     c.moduleId = id;
-    c.table    = QModbusDataUnit::HoldingRegisters;
+    c.table    = core::RegisterTable::HoldingRegister;
     c.address  = 500;
     c.values   = std::move(values);
     c.periodMs = periodMs;

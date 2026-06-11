@@ -8,8 +8,8 @@
 #include <mutex>
 #include <QList>
 #include <QString>
-#include <QtSerialBus/QModbusDataUnit>
 
+#include "core/base/RegisterTable.h"
 #include "core/core_global.h"
 #include "core/module/FunctionalModule.h"
 #include "core/sched/RequestScheduler.h"
@@ -31,7 +31,7 @@ class CORE_EXPORT SinkWindow : public FunctionalModule {
 public:
     struct Config {
         QString                       moduleId;
-        QModbusDataUnit::RegisterType table        = QModbusDataUnit::HoldingRegisters;
+        core::RegisterTable           table        = core::RegisterTable::HoldingRegister;
         int                           startAddress = 0;
         int                           size         = 0;
         sched::Priority               priority     = sched::Priority::High;

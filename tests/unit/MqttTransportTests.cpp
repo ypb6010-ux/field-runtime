@@ -40,7 +40,7 @@ TEST_CASE("Qt Mqtt transport.read on disconnected returns 'not connected'",
     cfg.brokerUri = "tcp://127.0.0.1:65535";
     MqttClientTransport t(cfg);
 
-    auto rd = t.read({QModbusDataUnit::HoldingRegisters, 0, 2});
+    auto rd = t.read({core::RegisterTable::HoldingRegister, 0, 2});
     REQUIRE_FALSE(rd.ok);
     REQUIRE(rd.errorMessage.contains("not connected"));
 }

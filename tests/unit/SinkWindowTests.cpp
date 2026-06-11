@@ -19,7 +19,7 @@ module::SinkWindow::Config baseCfg(QString const& id   = "win",
                                    int            size  = 4) {
     module::SinkWindow::Config c;
     c.moduleId      = id;
-    c.table         = QModbusDataUnit::HoldingRegisters;
+    c.table         = core::RegisterTable::HoldingRegister;
     c.startAddress  = start;
     c.size          = size;
     c.priority      = sched::Priority::High;

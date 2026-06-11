@@ -30,7 +30,7 @@ dp::DatapointSpec dpSpec(QString const& id,
     spec.type = type;
     dp::PortRef src;
     src.transport = "mock";
-    src.table     = QModbusDataUnit::HoldingRegisters;
+    src.table     = core::RegisterTable::HoldingRegister;
     src.address   = address;
     src.bit       = bit;
     src.wordOrder = wo;
@@ -39,7 +39,7 @@ dp::DatapointSpec dpSpec(QString const& id,
 }
 
 transport::ReadRequest readRange(int start, int count) {
-    return {QModbusDataUnit::HoldingRegisters, start, count};
+    return {core::RegisterTable::HoldingRegister, start, count};
 }
 
 } // namespace

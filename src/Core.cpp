@@ -13,7 +13,6 @@
 #include <QHash>
 #include <QQmlContext>
 #include <QTimer>
-#include <QtSerialBus/QModbusDataUnit>
 
 #include "core/bus/EventBus.h"
 #include "core/bus/BusEvents.h"
@@ -53,18 +52,18 @@ namespace core {
 
 namespace {
 
-QModbusDataUnit::RegisterType tableFromString(QString const& s) {
-    static const QHash<QString, QModbusDataUnit::RegisterType> map = {
-        {"HR",                QModbusDataUnit::HoldingRegisters},
-        {"HoldingRegisters",  QModbusDataUnit::HoldingRegisters},
-        {"IR",                QModbusDataUnit::InputRegisters},
-        {"InputRegisters",    QModbusDataUnit::InputRegisters},
-        {"Coil",              QModbusDataUnit::Coils},
-        {"Coils",             QModbusDataUnit::Coils},
-        {"DI",                QModbusDataUnit::DiscreteInputs},
-        {"DiscreteInputs",    QModbusDataUnit::DiscreteInputs},
+core::RegisterTable tableFromString(QString const& s) {
+    static const QHash<QString, core::RegisterTable> map = {
+        {"HR",                core::RegisterTable::HoldingRegister},
+        {"HoldingRegisters",  core::RegisterTable::HoldingRegister},
+        {"IR",                core::RegisterTable::InputRegister},
+        {"InputRegisters",    core::RegisterTable::InputRegister},
+        {"Coil",              core::RegisterTable::Coil},
+        {"Coils",             core::RegisterTable::Coil},
+        {"DI",                core::RegisterTable::DiscreteInput},
+        {"DiscreteInputs",    core::RegisterTable::DiscreteInput},
     };
-    return map.value(s, QModbusDataUnit::HoldingRegisters);
+    return map.value(s, core::RegisterTable::HoldingRegister);
 }
 
 dp::WordOrder wordOrderFromString(QString const& s) {
@@ -453,7 +452,7 @@ private:
                 auto const& src = dp->source();
                 if (!src.has_value()) continue;
                 if (src->transport != b.plc) continue;
-                if (src->table != QModbusDataUnit::HoldingRegisters) continue;
+                if (src->table != core::RegisterTable::HoldingRegister) continue;
                 int const a = src->address;
                 if (a < b.mirrorStart || a >= b.mirrorStart + b.mirrorCount) continue;
                 list.emplace_back(a, dp);
@@ -465,7 +464,7 @@ private:
                 if (auto* plc = transport(b.plc)) {
                     module::SinkWindow::Config cfg;
                     cfg.moduleId       = QStringLiteral("bridge.fwd.") + b.server;
-                    cfg.table          = QModbusDataUnit::HoldingRegisters;
+                    cfg.table          = core::RegisterTable::HoldingRegister;
                     cfg.startAddress   = b.writeStart - b.offset;
                     cfg.size           = b.writeCount;
                     cfg.priority       = sched::Priority::High;
@@ -484,7 +483,7 @@ private:
     // 操作箱写 server → 写区子段 stage 到 PLC 侧 SinkWindow(server 地址 - offset)。
     // stageRegister 线程安全,可直接在 server transport 线程调用;刷写由 TickDriver 做。
     void forwardBridges(bus::ServerWriteEvent const& e) {
-        if (e.table != QModbusDataUnit::HoldingRegisters) return;
+        if (e.table != core::RegisterTable::HoldingRegister) return;
         for (int i = 0; i < m_bridges.size(); ++i) {
             auto const& b = m_bridges[i];
             if (b.server != e.transportId) continue;
@@ -529,7 +528,7 @@ public:
                 if (idx >= 0 && idx < b.mirrorCount) values[idx] = quint16(dp->value().toUInt());
             }
             transport::WriteBatch batch;
-            batch.table        = QModbusDataUnit::HoldingRegisters;
+            batch.table        = core::RegisterTable::HoldingRegister;
             batch.startAddress = b.mirrorStart + b.offset;
             batch.values       = std::move(values);
             sched::RequestTag tag;
