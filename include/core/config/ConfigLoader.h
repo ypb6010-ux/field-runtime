@@ -3,7 +3,7 @@
 #pragma once
 
 #include <expected>
-#include <QString>
+#include <string>
 
 #include "core/core_global.h"
 #include "core/config/ConfigSchema.h"
@@ -16,7 +16,7 @@ public:
     // Parse a TOML file and run the full schema validation. On failure
     // returns the full list of validation errors.
     std::expected<ConfigSchema, ValidationErrors>
-        loadFromToml(QString const& path);
+        loadFromToml(std::string const& path);
 
     std::expected<void, ValidationErrors>
         validate(ConfigSchema const& schema);

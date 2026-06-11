@@ -2,58 +2,64 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include <QList>
-#include <QString>
-#include <QVariant>
+#include <cstdint>
+#include <map>
+#include <string>
+#include <vector>
 
 #include "core/core_global.h"
 #include "core/sched/SchedulerTypes.h"
 #include "core/dp/ScalarType.h"
 #include "core/dp/WordOrder.h"
+#include "core/dp/Value.h"
 #include "core/transport/TransportTypes.h"
 
 namespace core::config {
 
 // Raw, parsed-from-TOML config records. Validation transforms these into
 // concrete runtime objects (Transport, FunctionalModule, Datapoint, ...).
+//
+// This is the Qt-free configuration IR: a pure-std representation shared by the
+// Qt HMI assembly (Core), the without-Qt gateway, and a future Web 组态 backend.
+// Keep it free of QtCore types.
 
 struct MetaConfig {
-    QString project;
-    QString version;
-    QString generated;
-    QString logLevel;   // trace|debug|info|warn|error|critical; empty = default
+    std::string project;
+    std::string version;
+    std::string generated;
+    std::string logLevel;   // trace|debug|info|warn|error|critical; empty = default
 };
 
 struct TransportConfig {
-    QString                    id;
+    std::string                id;
     transport::TransportKind   kind;
     // ─── modbus_tcp_client / opc_ua_client / mqtt_client / s7_client ────
-    QString                    host;
+    std::string                host;
     int                        port = 502;
     int                        slaveId = 1;
     // ─── modbus_tcp_server ──────────────────────────────────────────
-    QString                    listenAddress;
+    std::string                listenAddress;
     int                        listenPort = 502;
     int                        maxClients = 1;
-    QList<transport::WatchRange> listenRanges;
+    std::vector<transport::WatchRange> listenRanges;
     // ─── modbus_rtu ─────────────────────────────────────────────────
-    QString                    portName;            // e.g. "COM3", "/dev/ttyUSB0"
+    std::string                portName;            // e.g. "COM3", "/dev/ttyUSB0"
     int                        baudRate    = 9600;
     int                        dataBits    = 8;
     int                        stopBits    = 1;
-    QString                    parity      = QStringLiteral("none");  // none / even / odd
+    std::string                parity      = "none";  // none / even / odd
     // ─── opc_ua_client ──────────────────────────────────────────────
-    QString                    endpointUrl;         // opc.tcp://host:port/path
-    QString                    securityPolicy = QStringLiteral("None");
-    QString                    username;
-    QString                    password;
-    QString                    opcuaBackend  = QStringLiteral("open62541");
-    QString                    nodeIdTemplate = QStringLiteral("ns=2;s=Var_%1");
+    std::string                endpointUrl;         // opc.tcp://host:port/path
+    std::string                securityPolicy = "None";
+    std::string                username;
+    std::string                password;
+    std::string                opcuaBackend  = "open62541";
+    std::string                nodeIdTemplate = "ns=2;s=Var_%1";
     // ─── mqtt_qt_client / mqtt_paho_client ──────────────────────────
-    QString                    clientId;
-    QString                    brokerUri;           // tcp://host:port or ssl://...
-    QString                    topicPrefix;
-    QString                    topicTemplate = QStringLiteral("reg/%1");
+    std::string                clientId;
+    std::string                brokerUri;           // tcp://host:port or ssl://...
+    std::string                topicPrefix;
+    std::string                topicTemplate = "reg/%1";
     int                        qos      = 1;
     bool                       cleanSession = true;
     // ─── s7_client ──────────────────────────────────────────────────
@@ -67,17 +73,17 @@ struct TransportConfig {
 };
 
 struct CodecConfig {
-    QString                    id;
-    QString                    kind;       // "enum_u16" / "lua" / ...
-    QVariantMap                map;        // for enum_u16
-    QString                    script;     // for lua
-    QString                    arg;        // for lua: opaque selector passed as ctx.arg
+    std::string                          id;
+    std::string                          kind;    // "enum_u16" / "lua" / ...
+    std::map<std::string, dp::Value>     map;     // for enum_u16 (key = register value)
+    std::string                          script;  // for lua
+    std::string                          arg;     // for lua: opaque selector passed as ctx.arg
 };
 
 struct PollRangeConfig {
-    QString moduleId;
-    QString transport;
-    QString table;
+    std::string moduleId;
+    std::string transport;
+    std::string table;
     int     startAddress = 0;
     int     count        = 0;
     int     periodMs     = 0;
@@ -92,9 +98,9 @@ struct SinkWindowFlushConfig {
 };
 
 struct SinkWindowConfig {
-    QString moduleId;
-    QString transport;
-    QString table;
+    std::string moduleId;
+    std::string transport;
+    std::string table;
     int     startAddress = 0;
     int     size         = 0;
     sched::Priority       priority = sched::Priority::High;
@@ -103,87 +109,87 @@ struct SinkWindowConfig {
 };
 
 struct HeartbeatConfig {
-    QString moduleId;
-    QString transport;
-    QString table;
+    std::string moduleId;
+    std::string transport;
+    std::string table;
     int     address       = 0;
     core::RegisterWords values;
     int     periodMs      = 0;
     sched::Priority priority = sched::Priority::Low;
-    QString incrementer;   // "none" / "u16_inc" / "timestamp"
+    std::string incrementer;   // "none" / "u16_inc" / "timestamp"
 };
 
 struct AckWatchConfig {
-    QString  moduleId;
-    QString  dp;
-    QVariant expected;
-    int      timeoutMs = 3000;
+    std::string  moduleId;
+    std::string  dp;
+    dp::Value    expected;
+    int          timeoutMs = 3000;
 };
 
 struct CommandWriteEntry {
-    QString table;
-    int     address = 0;
-    quint16 value   = 0;
+    std::string table;
+    int         address = 0;
+    uint16_t    value   = 0;
 };
 
 struct CommandConfig {
-    QString moduleId;
-    QString transport;
+    std::string moduleId;
+    std::string transport;
     sched::Priority priority = sched::Priority::High;
     bool    interruptable    = false;
-    QString trigger;
-    QList<CommandWriteEntry> writes;
+    std::string trigger;
+    std::vector<CommandWriteEntry> writes;
 };
 
 struct PortRefConfig {
-    QString  port;
-    QString  table;
-    int      address  = 0;
-    int      bit      = -1;             // -1 = unset
-    QString  wordOrder;                 // empty = default
-    int      shift    = 0;
-    quint64  mask     = 0xFFFFFFFFFFFFFFFFull;
-    double   scale    = 1.0;
-    double   offset   = 0.0;
-    QString  codec;
-    QString  dedupe;                    // "none" / "selflock"
+    std::string  port;
+    std::string  table;
+    int          address  = 0;
+    int          bit      = -1;             // -1 = unset
+    std::string  wordOrder;                 // empty = default
+    int          shift    = 0;
+    uint64_t     mask     = 0xFFFFFFFFFFFFFFFFull;
+    double       scale    = 1.0;
+    double       offset   = 0.0;
+    std::string  codec;
+    std::string  dedupe;                    // "none" / "selflock"
 
     // Sink-only window reference (mutually exclusive with `port`)
-    QString  window;
+    std::string  window;
 };
 
 struct DatapointAckRef {
-    QString  dp;
-    QVariant expected;
-    int      timeoutMs = 3000;
+    std::string  dp;
+    dp::Value    expected;
+    int          timeoutMs = 3000;
 };
 
 struct DatapointConfig {
-    QString          id;
-    QString          kind;    // "Status" / "Command" / "Bidirectional"
+    std::string      id;
+    std::string      kind;    // "Status" / "Command" / "Bidirectional"
     dp::ScalarType   type     = dp::ScalarType::U16;
     PortRefConfig    source;
     PortRefConfig    sink;
     bool             hasSource = false;
     bool             hasSink   = false;
-    QString          policy;   // "ContinuousMirror" / "EdgeOnce" / ...
+    std::string      policy;   // "ContinuousMirror" / "EdgeOnce" / ...
     DatapointAckRef  ack;
     bool             hasAck    = false;
-    QString          ui;
-    QString          persist;
+    std::string      ui;
+    std::string      persist;
 };
 
 struct RouteConfig {
-    QString name;
-    QString from;       // dp id
-    QString to;         // dp id
-    QString policy;
+    std::string name;
+    std::string from;       // dp id
+    std::string to;         // dp id
+    std::string policy;
 };
 
 struct PluginConfig {
-    QString name;
-    QString dllPath;
-    QString config;
+    std::string name;
+    std::string dllPath;
+    std::string config;
 };
 
 // 整段桥接(替代旧 ModbusServer 中继):把操作箱连的 server transport 与 PLC client
@@ -191,8 +197,8 @@ struct PluginConfig {
 // PLC;读区 [mirror_start, mirror_start+mirror_count) 的 PLC 数据周期镜像回 server 寄存器
 // 供操作箱读取。server 地址 = PLC 地址 + offset。
 struct BridgeConfig {
-    QString server;
-    QString plc;
+    std::string server;
+    std::string plc;
     int     offset         = 0;
     int     writeStart     = 0;
     int     writeCount     = 0;
@@ -202,18 +208,18 @@ struct BridgeConfig {
 };
 
 struct ConfigSchema {
-    MetaConfig                meta;
-    QList<TransportConfig>    transports;
-    QList<CodecConfig>        codecs;
-    QList<PollRangeConfig>    pollRanges;
-    QList<SinkWindowConfig>   sinkWindows;
-    QList<HeartbeatConfig>    heartbeats;
-    QList<AckWatchConfig>     ackWatches;
-    QList<CommandConfig>      commands;
-    QList<DatapointConfig>    datapoints;
-    QList<RouteConfig>        routes;
-    QList<BridgeConfig>       bridges;
-    QList<PluginConfig>       plugins;
+    MetaConfig                     meta;
+    std::vector<TransportConfig>   transports;
+    std::vector<CodecConfig>       codecs;
+    std::vector<PollRangeConfig>   pollRanges;
+    std::vector<SinkWindowConfig>  sinkWindows;
+    std::vector<HeartbeatConfig>   heartbeats;
+    std::vector<AckWatchConfig>    ackWatches;
+    std::vector<CommandConfig>     commands;
+    std::vector<DatapointConfig>   datapoints;
+    std::vector<RouteConfig>       routes;
+    std::vector<BridgeConfig>      bridges;
+    std::vector<PluginConfig>      plugins;
 };
 
 } // namespace core::config

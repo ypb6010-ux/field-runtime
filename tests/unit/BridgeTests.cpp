@@ -143,11 +143,11 @@ mirror_count = 0
 )toml"), temp);
 
     ConfigLoader loader;
-    auto schema = loader.loadFromToml(path);
+    auto schema = loader.loadFromToml(path.toStdString());
     REQUIRE_FALSE(schema.has_value());
     bool flagged = false;
     for (auto const& e : schema.error()) {
-        if (e.section.startsWith("bridge") && e.field == "server") flagged = true;
+        if (e.section.starts_with("bridge") && e.field == "server") flagged = true;
     }
     REQUIRE(flagged);
 }
@@ -181,11 +181,11 @@ mirror_count = 4
 )toml"), temp);
 
     ConfigLoader loader;
-    auto schema = loader.loadFromToml(path);
+    auto schema = loader.loadFromToml(path.toStdString());
     REQUIRE_FALSE(schema.has_value());
     bool flagged = false;
     for (auto const& e : schema.error()) {
-        if (e.section.startsWith("bridge") && e.field == "mirror") flagged = true;
+        if (e.section.starts_with("bridge") && e.field == "mirror") flagged = true;
     }
     REQUIRE(flagged);
 }

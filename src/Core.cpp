@@ -27,6 +27,7 @@
 #include "core/dp/Datapoint.h"
 #include "core/dp/DatapointRegistry.h"
 #include "core/dp/PortRef.h"
+#include "core/dp/ValueQt.h"
 #include "core/log/Logger.h"
 #include "core/log/Sinks.h"
 #include "core/qml/LogBridge.h"
@@ -51,6 +52,11 @@
 namespace core {
 
 namespace {
+
+// Marshal the Qt-free config IR strings into the QString-based runtime types the
+// Qt HMI assembly still uses. The config schema (core::config) is Qt-free; this
+// is the adapter edge.
+inline QString qs(std::string const& s) { return QString::fromStdString(s); }
 
 core::RegisterTable tableFromString(QString const& s) {
     static const QHash<QString, core::RegisterTable> map = {
@@ -82,17 +88,17 @@ dp::Kind kindFromString(QString const& s) {
 dp::PortRef makePortRef(config::PortRefConfig const& pc,
                          std::shared_ptr<codec::Codec> codec) {
     dp::PortRef p;
-    p.transport = pc.port;
-    p.table     = tableFromString(pc.table);
+    p.transport = qs(pc.port);
+    p.table     = tableFromString(qs(pc.table));
     p.address   = pc.address;
     if (pc.bit >= 0) p.bit = pc.bit;
-    p.wordOrder = wordOrderFromString(pc.wordOrder);
+    p.wordOrder = wordOrderFromString(qs(pc.wordOrder));
     p.shift     = pc.shift;
     p.mask      = pc.mask;
     p.scale     = pc.scale;
     p.offset    = pc.offset;
     p.codec     = std::move(codec);
-    p.window    = pc.window;
+    p.window    = qs(pc.window);
     return p;
 }
 
@@ -160,18 +166,18 @@ public:
     std::expected<void, config::ValidationErrors>
     loadConfig(QString const& path) override {
         config::ConfigLoader loader;
-        auto schema = loader.loadFromToml(path);
+        auto schema = loader.loadFromToml(path.toStdString());
         if (!schema.has_value()) {
             for (auto const& err : schema.error()) {
                 m_logger->logf(log::LogLevel::Error,
                                QStringLiteral("config"), path,
-                               err.message);
+                               qs(err.message));
             }
             return std::unexpected(schema.error());
         }
 
-        if (!schema->meta.logLevel.isEmpty()) {
-            m_logger->setThreshold(log::levelFromString(schema->meta.logLevel));
+        if (!schema->meta.logLevel.empty()) {
+            m_logger->setThreshold(log::levelFromString(qs(schema->meta.logLevel)));
         }
         // Resolve config-relative paths (e.g. lua codec scripts) against the
         // config file's directory.
@@ -301,15 +307,15 @@ private:
     // exist), then notify all that Core is wired. dll paths resolve against the
     // config dir when relative.
     void loadPlugins(config::ConfigSchema const& schema) {
-        if (schema.plugins.isEmpty()) return;
+        if (schema.plugins.empty()) return;
         m_ports = std::make_unique<plugin::PortRegistry>(*m_dps, *m_bus);
         for (auto const& pc : schema.plugins) {
-            QString dll = pc.dllPath;
+            QString dll = qs(pc.dllPath);
             if (QFileInfo(dll).isRelative() && !m_configDir.isEmpty())
                 dll = QDir(m_configDir).filePath(dll);
             if (!m_plugins->load(dll)) {
                 m_logger->logf(log::LogLevel::Error, QStringLiteral("plugin"), dll,
-                               QStringLiteral("failed to load plugin '%1'").arg(pc.name));
+                               QStringLiteral("failed to load plugin '%1'").arg(qs(pc.name)));
             }
         }
         m_plugins->registerAllPorts(*m_ports);
@@ -396,8 +402,8 @@ private:
         // whose source address falls within the written range, then call
         // stageRegister on the SinkWindow associated with the `to` datapoint.
         for (auto const& r : m_routes) {
-            auto fromIt = m_datapointById.find(r.from);
-            auto toIt   = m_datapointById.find(r.to);
+            auto fromIt = m_datapointById.find(qs(r.from));
+            auto toIt   = m_datapointById.find(qs(r.to));
             if (fromIt == m_datapointById.end() || toIt == m_datapointById.end()) continue;
             auto const& fromDp = fromIt->second;
             auto const& toDp   = toIt->second;
@@ -443,15 +449,15 @@ private:
     // ——— 整段桥接(替代旧 ModbusServer 中继) ———
     void buildBridges(config::ConfigSchema const& schema) {
         m_bridges = schema.bridges;
-        m_bridgeMirrors.assign(size_t(m_bridges.size()), {});
-        m_bridgeFwdSinks.assign(size_t(m_bridges.size()), nullptr);
-        for (int i = 0; i < m_bridges.size(); ++i) {
-            auto const& b = m_bridges[i];
+        m_bridgeMirrors.assign(m_bridges.size(), {});
+        m_bridgeFwdSinks.assign(m_bridges.size(), nullptr);
+        for (int i = 0; i < int(m_bridges.size()); ++i) {
+            auto const& b = m_bridges[size_t(i)];
             auto& list = m_bridgeMirrors[size_t(i)];
             for (auto const& dp : m_dps->all()) {
                 auto const& src = dp->source();
                 if (!src.has_value()) continue;
-                if (src->transport != b.plc) continue;
+                if (src->transport != qs(b.plc)) continue;
                 if (src->table != core::RegisterTable::HoldingRegister) continue;
                 int const a = src->address;
                 if (a < b.mirrorStart || a >= b.mirrorStart + b.mirrorCount) continue;
@@ -461,9 +467,9 @@ private:
             // 由 TickDriver 在生命周期线程带重试/coalesce 地刷到 PLC —— 避免单次
             // submitAsync 在调度器繁忙时被丢弃。
             if (b.writeCount > 0) {
-                if (auto* plc = transport(b.plc)) {
+                if (auto* plc = transport(qs(b.plc))) {
                     module::SinkWindow::Config cfg;
-                    cfg.moduleId       = QStringLiteral("bridge.fwd.") + b.server;
+                    cfg.moduleId       = QStringLiteral("bridge.fwd.") + qs(b.server);
                     cfg.table          = core::RegisterTable::HoldingRegister;
                     cfg.startAddress   = b.writeStart - b.offset;
                     cfg.size           = b.writeCount;
@@ -484,9 +490,9 @@ private:
     // stageRegister 线程安全,可直接在 server transport 线程调用;刷写由 TickDriver 做。
     void forwardBridges(bus::ServerWriteEvent const& e) {
         if (e.table != core::RegisterTable::HoldingRegister) return;
-        for (int i = 0; i < m_bridges.size(); ++i) {
-            auto const& b = m_bridges[i];
-            if (b.server != e.transportId) continue;
+        for (int i = 0; i < int(m_bridges.size()); ++i) {
+            auto const& b = m_bridges[size_t(i)];
+            if (qs(b.server) != e.transportId) continue;
             auto* sink = m_bridgeFwdSinks[size_t(i)];
             if (!sink) continue;
             int const eStart = e.startAddress;
@@ -502,9 +508,9 @@ private:
     // 关闭转发瞬间:把该 server 桥接的整个转发写区在 PLC 侧 SinkWindow 内置 0,
     // 由 TickDriver 下发 —— 取消尚未写入 PLC 的操作箱指令。
     void zeroBridgeForward(QString const& server) {
-        for (int i = 0; i < m_bridges.size(); ++i) {
-            auto const& b = m_bridges[i];
-            if (b.server != server) continue;
+        for (int i = 0; i < int(m_bridges.size()); ++i) {
+            auto const& b = m_bridges[size_t(i)];
+            if (qs(b.server) != server) continue;
             auto* sink = m_bridgeFwdSinks[size_t(i)];
             if (!sink) continue;
             for (int a = b.writeStart; a < b.writeStart + b.writeCount; ++a) {
@@ -517,10 +523,10 @@ public:
     // 周期把 PLC 读区数据整段镜像回 server 自己的寄存器表(操作箱即可读到)。
     // 也是测试入口(internal::mirrorBridgesOnce)。
     void mirrorBridgesOnce() {
-        for (int i = 0; i < m_bridges.size(); ++i) {
-            auto const& b = m_bridges[i];
+        for (int i = 0; i < int(m_bridges.size()); ++i) {
+            auto const& b = m_bridges[size_t(i)];
             if (b.mirrorCount <= 0) continue;
-            auto* server = transport(b.server);
+            auto* server = transport(qs(b.server));
             if (!server) continue;
             core::RegisterWords values(b.mirrorCount, quint16(0));
             for (auto const& [addr, dp] : m_bridgeMirrors[size_t(i)]) {
@@ -532,7 +538,7 @@ public:
             batch.startAddress = b.mirrorStart + b.offset;
             batch.values       = std::move(values);
             sched::RequestTag tag;
-            tag.moduleId = QStringLiteral("bridge.mirror.") + b.server;
+            tag.moduleId = QStringLiteral("bridge.mirror.") + qs(b.server);
             tag.priority = sched::Priority::Low;
             tag.coalesce = true;
             server->scheduler().submitAsync(tag, [server, batch](sched::AsyncDone done) {
@@ -569,20 +575,20 @@ private:
         for (auto const& cc : schema.codecs) {
             if (cc.kind == "enum_u16") {
                 std::unordered_map<quint16, QString> map;
-                for (auto it = cc.map.constBegin(); it != cc.map.constEnd(); ++it) {
-                    bool ok = false;
-                    quint16 raw = quint16(it.key().toUInt(&ok));
-                    if (!ok) continue;
-                    map.emplace(raw, it.value().toString());
+                for (auto const& [k, v] : cc.map) {
+                    try {
+                        quint16 raw = quint16(std::stoul(k));
+                        map.emplace(raw, qs(dp::toString(v)));
+                    } catch (...) { /* skip non-numeric enum keys */ }
                 }
                 m_codecs->registerCodec(
-                    std::make_shared<codec::EnumU16Codec>(cc.id, std::move(map)));
-            } else if (cc.kind == QStringLiteral("lua")) {
-                QString script = cc.script;
+                    std::make_shared<codec::EnumU16Codec>(qs(cc.id), std::move(map)));
+            } else if (cc.kind == "lua") {
+                QString script = qs(cc.script);
                 if (QFileInfo(script).isRelative() && !m_configDir.isEmpty())
                     script = QDir(m_configDir).filePath(script);
                 QString err;
-                auto lc = codec::LuaCodec::fromFile(cc.id, script, cc.arg, &err);
+                auto lc = codec::LuaCodec::fromFile(qs(cc.id), script, qs(cc.arg), &err);
                 if (lc) {
                     m_codecs->registerCodec(std::move(lc));
                 } else {
@@ -600,35 +606,37 @@ private:
         for (auto const& tc : schema.transports) {
             if (tc.kind == transport::TransportKind::ModbusTcpClient) {
                 transport::ModbusTcpClientTransport::Config cfg;
-                cfg.id                   = tc.id;
-                cfg.host                 = tc.host;
+                cfg.id                   = qs(tc.id);
+                cfg.host                 = qs(tc.host);
                 cfg.port                 = quint16(tc.port);
                 cfg.slaveId              = tc.slaveId;
                 cfg.connectTimeoutMs     = tc.connectTimeoutMs;
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
                 cfg.scheduler            = tc.scheduler;
                 m_transports.emplace(
-                    tc.id,
+                    qs(tc.id),
                     std::make_unique<transport::ModbusTcpClientTransport>(
                         std::move(cfg), m_bus.get()));
             } else if (tc.kind == transport::TransportKind::ModbusTcpServer) {
                 transport::ModbusTcpServerTransport::Config cfg;
-                cfg.id                   = tc.id;
-                cfg.listenAddress        = tc.listenAddress;
+                cfg.id                   = qs(tc.id);
+                cfg.listenAddress        = qs(tc.listenAddress);
                 cfg.listenPort           = quint16(tc.listenPort);
                 cfg.slaveId              = tc.slaveId;
                 cfg.maxClients           = tc.maxClients;
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
-                cfg.listenRanges         = tc.listenRanges;
+                cfg.listenRanges         = QList<transport::WatchRange>(
+                                               tc.listenRanges.begin(),
+                                               tc.listenRanges.end());
                 cfg.scheduler            = tc.scheduler;
                 m_transports.emplace(
-                    tc.id,
+                    qs(tc.id),
                     std::make_unique<transport::ModbusTcpServerTransport>(
                         std::move(cfg), *m_bus));
             } else if (tc.kind == transport::TransportKind::ModbusRtu) {
                 transport::ModbusRtuTransport::Config cfg;
-                cfg.id                   = tc.id;
-                cfg.portName             = tc.portName;
+                cfg.id                   = qs(tc.id);
+                cfg.portName             = qs(tc.portName);
                 cfg.baudRate             = tc.baudRate;
                 cfg.dataBits             = tc.dataBits;
                 cfg.stopBits             = tc.stopBits;
@@ -641,35 +649,35 @@ private:
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
                 cfg.scheduler            = tc.scheduler;
                 m_transports.emplace(
-                    tc.id,
+                    qs(tc.id),
                     std::make_unique<transport::ModbusRtuTransport>(
                         std::move(cfg), m_bus.get()));
             } else if (tc.kind == transport::TransportKind::OpcUaClient) {
                 transport::OpcUaClientTransport::Config cfg;
-                cfg.id                   = tc.id;
-                cfg.endpointUrl          = tc.endpointUrl;
-                cfg.securityPolicy       = tc.securityPolicy;
-                cfg.username             = tc.username;
-                cfg.password             = tc.password;
-                cfg.backend              = tc.opcuaBackend;
-                cfg.nodeIdTemplate       = tc.nodeIdTemplate;
+                cfg.id                   = qs(tc.id);
+                cfg.endpointUrl          = qs(tc.endpointUrl);
+                cfg.securityPolicy       = qs(tc.securityPolicy);
+                cfg.username             = qs(tc.username);
+                cfg.password             = qs(tc.password);
+                cfg.backend              = qs(tc.opcuaBackend);
+                cfg.nodeIdTemplate       = qs(tc.nodeIdTemplate);
                 cfg.connectTimeoutMs     = tc.connectTimeoutMs;
                 cfg.requestTimeoutMs     = tc.requestTimeoutMs;
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
                 cfg.scheduler            = tc.scheduler;
                 m_transports.emplace(
-                    tc.id,
+                    qs(tc.id),
                     std::make_unique<transport::OpcUaClientTransport>(
                         std::move(cfg), m_bus.get()));
             } else if (tc.kind == transport::TransportKind::MqttClient) {
                 transport::MqttClientTransport::Config cfg;
-                cfg.id                   = tc.id;
-                cfg.brokerUri            = tc.brokerUri;
-                cfg.clientId             = tc.clientId;
-                cfg.username             = tc.username;
-                cfg.password             = tc.password;
-                cfg.topicPrefix          = tc.topicPrefix;
-                cfg.topicTemplate        = tc.topicTemplate;
+                cfg.id                   = qs(tc.id);
+                cfg.brokerUri            = qs(tc.brokerUri);
+                cfg.clientId             = qs(tc.clientId);
+                cfg.username             = qs(tc.username);
+                cfg.password             = qs(tc.password);
+                cfg.topicPrefix          = qs(tc.topicPrefix);
+                cfg.topicTemplate        = qs(tc.topicTemplate);
                 cfg.qos                  = tc.qos;
                 cfg.cleanSession         = tc.cleanSession;
                 cfg.connectTimeoutMs     = tc.connectTimeoutMs;
@@ -677,18 +685,18 @@ private:
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
                 cfg.scheduler            = tc.scheduler;
                 m_transports.emplace(
-                    tc.id,
+                    qs(tc.id),
                     std::make_unique<transport::MqttClientTransport>(
                         std::move(cfg), m_bus.get()));
             } else if (tc.kind == transport::TransportKind::MqttPahoClient) {
                 transport::MqttPahoTransport::Config cfg;
-                cfg.id                   = tc.id;
-                cfg.brokerUri            = tc.brokerUri;
-                cfg.clientId             = tc.clientId;
-                cfg.username             = tc.username;
-                cfg.password             = tc.password;
-                cfg.topicPrefix          = tc.topicPrefix;
-                cfg.topicTemplate        = tc.topicTemplate;
+                cfg.id                   = qs(tc.id);
+                cfg.brokerUri            = qs(tc.brokerUri);
+                cfg.clientId             = qs(tc.clientId);
+                cfg.username             = qs(tc.username);
+                cfg.password             = qs(tc.password);
+                cfg.topicPrefix          = qs(tc.topicPrefix);
+                cfg.topicTemplate        = qs(tc.topicTemplate);
                 cfg.qos                  = tc.qos;
                 cfg.cleanSession         = tc.cleanSession;
                 cfg.connectTimeoutMs     = tc.connectTimeoutMs;
@@ -696,13 +704,13 @@ private:
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
                 cfg.scheduler            = tc.scheduler;
                 m_transports.emplace(
-                    tc.id,
+                    qs(tc.id),
                     std::make_unique<transport::MqttPahoTransport>(
                         std::move(cfg), m_bus.get()));
             } else if (tc.kind == transport::TransportKind::S7Client) {
                 transport::S7ClientTransport::Config cfg;
-                cfg.id                   = tc.id;
-                cfg.host                 = tc.host;
+                cfg.id                   = qs(tc.id);
+                cfg.host                 = qs(tc.host);
                 cfg.port                 = tc.port;
                 cfg.rack                 = tc.rack;
                 cfg.slot                 = tc.slot;
@@ -711,7 +719,7 @@ private:
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
                 cfg.scheduler            = tc.scheduler;
                 m_transports.emplace(
-                    tc.id,
+                    qs(tc.id),
                     std::make_unique<transport::S7ClientTransport>(
                         std::move(cfg), m_bus.get()));
             }
@@ -722,11 +730,11 @@ private:
 
     void buildSinkWindows(config::ConfigSchema const& schema) {
         for (auto const& sc : schema.sinkWindows) {
-            auto* t = transport(sc.transport);
+            auto* t = transport(qs(sc.transport));
             if (!t) continue;
             module::SinkWindow::Config cfg;
-            cfg.moduleId          = sc.moduleId;
-            cfg.table             = tableFromString(sc.table);
+            cfg.moduleId          = qs(sc.moduleId);
+            cfg.table             = tableFromString(qs(sc.table));
             cfg.startAddress      = sc.startAddress;
             cfg.size              = sc.size;
             cfg.priority          = sc.priority;
@@ -743,11 +751,11 @@ private:
 
     void buildHeartbeats(config::ConfigSchema const& schema) {
         for (auto const& hc : schema.heartbeats) {
-            auto* t = transport(hc.transport);
+            auto* t = transport(qs(hc.transport));
             if (!t) continue;
             module::Heartbeat::Config cfg;
-            cfg.moduleId = hc.moduleId;
-            cfg.table    = tableFromString(hc.table);
+            cfg.moduleId = qs(hc.moduleId);
+            cfg.table    = tableFromString(qs(hc.table));
             cfg.address  = hc.address;
             cfg.values   = hc.values;
             cfg.periodMs = hc.periodMs;
@@ -760,9 +768,9 @@ private:
     void buildAckWatches(config::ConfigSchema const& schema) {
         for (auto const& ac : schema.ackWatches) {
             module::AckWatch::Config cfg;
-            cfg.moduleId  = ac.moduleId;
-            cfg.dpId      = ac.dp;
-            cfg.expected  = ac.expected;
+            cfg.moduleId  = qs(ac.moduleId);
+            cfg.dpId      = qs(ac.dp);
+            cfg.expected  = dp::toQVariant(ac.expected);
             cfg.timeoutMs = ac.timeoutMs;
             m_modules->registerModule(
                 std::make_unique<module::AckWatch>(std::move(cfg), *m_bus));
@@ -771,15 +779,15 @@ private:
 
     void buildCommands(config::ConfigSchema const& schema) {
         for (auto const& cc : schema.commands) {
-            auto* t = transport(cc.transport);
+            auto* t = transport(qs(cc.transport));
             if (!t) continue;
             module::Command::Config cfg;
-            cfg.moduleId      = cc.moduleId;
+            cfg.moduleId      = qs(cc.moduleId);
             cfg.priority      = cc.priority;
             cfg.interruptable = cc.interruptable;
             for (auto const& w : cc.writes) {
                 module::Command::Entry e;
-                e.table   = tableFromString(w.table);
+                e.table   = tableFromString(qs(w.table));
                 e.address = w.address;
                 e.value   = w.value;
                 cfg.writes.append(e);
@@ -794,8 +802,8 @@ private:
         for (auto const& dc : schema.datapoints) {
             std::shared_ptr<codec::Codec> sourceCodec;
             if (dc.hasSource) {
-                if (!dc.source.codec.isEmpty()) {
-                    sourceCodec = m_codecs->find(dc.source.codec);
+                if (!dc.source.codec.empty()) {
+                    sourceCodec = m_codecs->find(qs(dc.source.codec));
                 }
                 if (!sourceCodec) {
                     sourceCodec = m_codecs->find(
@@ -804,21 +812,21 @@ private:
             }
 
             dp::DatapointSpec spec;
-            spec.id         = dc.id;
-            spec.kind       = kindFromString(dc.kind);
+            spec.id         = qs(dc.id);
+            spec.kind       = kindFromString(qs(dc.kind));
             spec.type       = dc.type;
             if (dc.hasSource) spec.source = makePortRef(dc.source, sourceCodec);
             if (dc.hasSink) {
                 spec.sink = makePortRef(dc.sink,
                     m_codecs->find(codec::BuiltinScalarCodec::idFor(dc.type)));
             }
-            spec.uiBinding  = dc.ui;
-            spec.persistTag = dc.persist;
+            spec.uiBinding  = qs(dc.ui);
+            spec.persistTag = qs(dc.persist);
 
             auto datapoint = std::make_shared<dp::Datapoint>(std::move(spec));
             m_dps->registerDp(datapoint);
-            out.emplace(dc.id, datapoint);
-            m_datapointById.emplace(dc.id, datapoint);
+            out.emplace(qs(dc.id), datapoint);
+            m_datapointById.emplace(qs(dc.id), datapoint);
 
             // Auto-publish DpChanged on every value change so plugins /
             // database / dashboard subscribers don't need to poll.
@@ -867,15 +875,15 @@ private:
     void buildPollRanges(config::ConfigSchema const& schema,
                           DpById const&                byId) {
         for (auto const& pc : schema.pollRanges) {
-            auto* t = transport(pc.transport);
+            auto* t = transport(qs(pc.transport));
             if (!t) continue;
             transport::ReadRequest req;
-            req.table        = tableFromString(pc.table);
+            req.table        = tableFromString(qs(pc.table));
             req.startAddress = pc.startAddress;
             req.count        = pc.count;
 
             auto poll = std::make_unique<module::PollRange>(
-                pc.moduleId, *t, req, pc.periodMs, pc.priority);
+                qs(pc.moduleId), *t, req, pc.periodMs, pc.priority);
             wireBindings(*poll, schema, byId, pc.transport, req);
 
             auto* raw = poll.get();
@@ -887,21 +895,21 @@ private:
     void wireBindings(module::PollRange&            poll,
                        config::ConfigSchema const&    schema,
                        DpById const&                   byId,
-                       QString const&                  transportId,
+                       std::string const&              transportId,
                        transport::ReadRequest const&   req) {
         for (auto const& dc : schema.datapoints) {
             if (!dc.hasSource) continue;
             if (dc.source.port != transportId) continue;
-            if (tableFromString(dc.source.table) != req.table) continue;
+            if (tableFromString(qs(dc.source.table)) != req.table) continue;
             int const rc     = dp::registerCountFor(dc.type);
             int const offset = dc.source.address - req.startAddress;
             if (offset < 0 || offset + rc > req.count) continue;
-            auto itDp = byId.find(dc.id);
+            auto itDp = byId.find(qs(dc.id));
             if (itDp == byId.end()) continue;
 
-            auto codec = m_codecs->find(dc.source.codec.isEmpty()
+            auto codec = m_codecs->find(dc.source.codec.empty()
                 ? codec::BuiltinScalarCodec::idFor(dc.type)
-                : dc.source.codec);
+                : qs(dc.source.codec));
             if (!codec) continue;
             poll.bind(itDp->second, codec, offset);
         }
@@ -924,8 +932,8 @@ private:
     std::vector<module::PollRange*>                             m_pollRangePtrs;
     std::vector<module::SinkWindow*>                            m_sinkWindowPtrs;
     std::map<QString, std::shared_ptr<dp::Datapoint>>           m_datapointById;
-    QList<config::RouteConfig>                                  m_routes;
-    QList<config::BridgeConfig>                                 m_bridges;
+    std::vector<config::RouteConfig>                            m_routes;
+    std::vector<config::BridgeConfig>                           m_bridges;
     std::vector<std::vector<std::pair<int, std::shared_ptr<dp::Datapoint>>>> m_bridgeMirrors;
     std::vector<module::SinkWindow*>                            m_bridgeFwdSinks;
     mutable std::mutex                                          m_forwardMtx;

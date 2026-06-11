@@ -7,6 +7,7 @@
 
 #include "core/config/ConfigLoader.h"
 #include "core/dp/ScalarType.h"
+#include "core/dp/Value.h"
 
 using namespace core::config;
 using core::dp::ScalarType;
@@ -15,11 +16,11 @@ namespace {
 
 // Drop a TOML snippet to a temp file and return its path. The QTemporaryFile
 // outlives the test scope only because Catch2 RAII keeps the lambda block.
-QString writeTomlFile(QString const& contents, QTemporaryFile& f) {
+std::string writeTomlFile(QString const& contents, QTemporaryFile& f) {
     REQUIRE(f.open());
     f.write(contents.toUtf8());
     f.flush();
-    return f.fileName();
+    return f.fileName().toStdString();
 }
 
 } // namespace
@@ -72,16 +73,16 @@ source = { port="tcp1", table="HR", addr=2, scale=0.1, offset=-40.0 }
     auto const& s = result.value();
     REQUIRE(s.meta.project == "demo");
     REQUIRE(s.transports.size() == 1);
-    REQUIRE(s.transports.first().id == "tcp1");
-    REQUIRE(s.transports.first().port == 51500);
-    REQUIRE(s.transports.first().scheduler.interRequestGapMs == 5);
-    REQUIRE(s.transports.first().scheduler.maxQueueDepth == 64);
+    REQUIRE(s.transports.front().id == "tcp1");
+    REQUIRE(s.transports.front().port == 51500);
+    REQUIRE(s.transports.front().scheduler.interRequestGapMs == 5);
+    REQUIRE(s.transports.front().scheduler.maxQueueDepth == 64);
 
     REQUIRE(s.pollRanges.size() == 1);
-    REQUIRE(s.pollRanges.first().moduleId == "poll.tcp1.hr");
-    REQUIRE(s.pollRanges.first().startAddress == 0);
-    REQUIRE(s.pollRanges.first().count == 4);
-    REQUIRE(s.pollRanges.first().periodMs == 200);
+    REQUIRE(s.pollRanges.front().moduleId == "poll.tcp1.hr");
+    REQUIRE(s.pollRanges.front().startAddress == 0);
+    REQUIRE(s.pollRanges.front().count == 4);
+    REQUIRE(s.pollRanges.front().periodMs == 200);
 
     REQUIRE(s.datapoints.size() == 2);
     REQUIRE(s.datapoints[0].id == "a");
@@ -214,8 +215,8 @@ project = "demo
     ConfigLoader loader;
     auto result = loader.loadFromToml(path);
     REQUIRE_FALSE(result.has_value());
-    REQUIRE(!result.error().isEmpty());
-    REQUIRE(result.error().first().field == "toml");
+    REQUIRE(!result.error().empty());
+    REQUIRE(result.error().front().field == "toml");
 }
 
 TEST_CASE("ConfigLoader parses the full schema (sink_window / heartbeat / "
@@ -305,32 +306,32 @@ policy = "ContinuousMirror"
     REQUIRE(s.transports.size() == 2);
     REQUIRE(s.transports[0].reconnectIntervalMs == 4000);
     REQUIRE(s.transports[1].listenRanges.size() == 1);
-    REQUIRE(s.transports[1].listenRanges.first().size == 64);
+    REQUIRE(s.transports[1].listenRanges.front().size == 64);
 
     REQUIRE(s.sinkWindows.size() == 1);
-    REQUIRE(s.sinkWindows.first().moduleId == "sink.tcp1.hr");
-    REQUIRE(s.sinkWindows.first().startAddress == 100);
-    REQUIRE(s.sinkWindows.first().size == 4);
-    REQUIRE(s.sinkWindows.first().flush.debounceMs == 30);
-    REQUIRE(s.sinkWindows.first().flush.keepaliveMs == 5000);
-    REQUIRE(s.sinkWindows.first().initial.size() == 4);
+    REQUIRE(s.sinkWindows.front().moduleId == "sink.tcp1.hr");
+    REQUIRE(s.sinkWindows.front().startAddress == 100);
+    REQUIRE(s.sinkWindows.front().size == 4);
+    REQUIRE(s.sinkWindows.front().flush.debounceMs == 30);
+    REQUIRE(s.sinkWindows.front().flush.keepaliveMs == 5000);
+    REQUIRE(s.sinkWindows.front().initial.size() == 4);
 
     REQUIRE(s.heartbeats.size() == 1);
-    REQUIRE(s.heartbeats.first().address == 999);
-    REQUIRE(s.heartbeats.first().values.size() == 1);
-    REQUIRE(s.heartbeats.first().values.front() == 1);
+    REQUIRE(s.heartbeats.front().address == 999);
+    REQUIRE(s.heartbeats.front().values.size() == 1);
+    REQUIRE(s.heartbeats.front().values.front() == 1);
 
     REQUIRE(s.ackWatches.size() == 1);
-    REQUIRE(s.ackWatches.first().dp == "feedback");
-    REQUIRE(s.ackWatches.first().expected.toLongLong() == 1);
+    REQUIRE(s.ackWatches.front().dp == "feedback");
+    REQUIRE(core::dp::toInt64(s.ackWatches.front().expected) == 1);
 
     REQUIRE(s.commands.size() == 1);
-    REQUIRE(s.commands.first().writes.size() == 1);
-    REQUIRE(s.commands.first().writes.first().address == 200);
+    REQUIRE(s.commands.front().writes.size() == 1);
+    REQUIRE(s.commands.front().writes.front().address == 200);
 
     REQUIRE(s.routes.size() == 1);
-    REQUIRE(s.routes.first().from == "feedback");
-    REQUIRE(s.routes.first().to   == "feedback");
+    REQUIRE(s.routes.front().from == "feedback");
+    REQUIRE(s.routes.front().to   == "feedback");
 }
 
 TEST_CASE("ConfigLoader rejects module_id collisions across sections",
@@ -395,7 +396,7 @@ policy = "ContinuousMirror"
     REQUIRE_FALSE(result.has_value());
     bool found = false;
     for (auto const& e : result.error()) {
-        if (e.section.startsWith("route") && e.field == "from"
+        if (e.section.starts_with("route") && e.field == "from"
          && e.message.contains("ghost")) {
             found = true; break;
         }
@@ -418,7 +419,7 @@ expected  = 1
     REQUIRE_FALSE(result.has_value());
     bool found = false;
     for (auto const& e : result.error()) {
-        if (e.section.startsWith("ack_watch") && e.field == "dp") {
+        if (e.section.starts_with("ack_watch") && e.field == "dp") {
             found = true; break;
         }
     }
@@ -446,7 +447,7 @@ range     = [0, 200]
     REQUIRE_FALSE(result.has_value());
     bool found = false;
     for (auto const& e : result.error()) {
-        if (e.section.startsWith("sink_window") && e.field == "range"
+        if (e.section.starts_with("sink_window") && e.field == "range"
          && e.message.contains("FC16")) { found = true; break; }
     }
     REQUIRE(found);
@@ -645,10 +646,10 @@ map  = { 0 = "Stopped", 1 = "Starting", 2 = "Running" }
     auto result = loader.loadFromToml(path);
     REQUIRE(result.has_value());
     REQUIRE(result.value().codecs.size() == 1);
-    auto const& c = result.value().codecs.first();
+    auto const& c = result.value().codecs.front();
     REQUIRE(c.id == "belt_state");
     REQUIRE(c.kind == "enum_u16");
     REQUIRE(c.map.size() == 3);
-    REQUIRE(c.map.value("0").toString() == "Stopped");
-    REQUIRE(c.map.value("2").toString() == "Running");
+    REQUIRE(core::dp::toString(c.map.at("0")) == "Stopped");
+    REQUIRE(core::dp::toString(c.map.at("2")) == "Running");
 }

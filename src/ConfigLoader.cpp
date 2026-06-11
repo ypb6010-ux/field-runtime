@@ -3,12 +3,14 @@
 #include "core/config/ConfigLoader.h"
 
 #include <fstream>
+#include <iterator>
+#include <optional>
 #include <set>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
-#include <QFile>
-#include <QTextStream>
 #include <toml++/toml.hpp>
 
 #include "core/dp/ScalarType.h"
@@ -19,22 +21,22 @@ namespace core::config {
 
 namespace {
 
-QString tomlValueLine(toml::node const& n) {
-    auto const& src = n.source();
-    return src.begin.line > 0 ? QString::number(int(src.begin.line)) : QStringLiteral("?");
+std::string idx(std::string_view base, int index) {
+    return std::string(base) + '[' + std::to_string(index) + ']';
 }
 
-QString qstr(std::string_view s) {
-    return QString::fromUtf8(s.data(), int(s.size()));
+std::string toHexLower(uint64_t v) {
+    std::ostringstream os;
+    os << std::hex << v;
+    return os.str();
 }
 
-std::optional<QString> getStr(toml::table const& t, std::string_view key) {
-    if (auto v = t[key].value<std::string>()) return qstr(*v);
-    return std::nullopt;
+std::optional<std::string> getStr(toml::table const& t, std::string_view key) {
+    return t[key].value<std::string>();
 }
 
-QString getStr(toml::table const& t, std::string_view key, QString const& dflt) {
-    return getStr(t, key).value_or(dflt);
+std::string getStr(toml::table const& t, std::string_view key, std::string const& dflt) {
+    return t[key].value<std::string>().value_or(dflt);
 }
 
 std::optional<int> getInt(toml::table const& t, std::string_view key) {
@@ -62,21 +64,21 @@ std::optional<bool> getBool(toml::table const& t, std::string_view key) {
 }
 
 void requireStr(toml::table const& t, std::string_view key,
-                 QString const& section, QString& out,
+                 std::string const& section, std::string& out,
                  ValidationErrors& errs) {
     auto v = getStr(t, key);
     if (!v) {
-        errs.push_back({section, qstr(key),
-                        QStringLiteral("missing required string field"),
+        errs.push_back({section, std::string(key),
+                        "missing required string field",
                         int(t.source().begin.line)});
         return;
     }
     out = *v;
 }
 
-dp::ScalarType parseScalarType(QString const& s, bool& ok) {
+dp::ScalarType parseScalarType(std::string const& s, bool& ok) {
     ok = true;
-    static const QHash<QString, dp::ScalarType> map = {
+    static const std::unordered_map<std::string, dp::ScalarType> map = {
         {"Bool",    dp::ScalarType::Bool},
         {"U16",     dp::ScalarType::U16},
         {"S16",     dp::ScalarType::S16},
@@ -91,12 +93,12 @@ dp::ScalarType parseScalarType(QString const& s, bool& ok) {
     };
     auto it = map.find(s);
     if (it == map.end()) { ok = false; return dp::ScalarType::U16; }
-    return *it;
+    return it->second;
 }
 
-dp::WordOrder parseWordOrder(QString const& s, bool& ok) {
+dp::WordOrder parseWordOrder(std::string const& s, bool& ok) {
     ok = true;
-    if (s.isEmpty() || s == "ABCD") return dp::WordOrder::ABCD;
+    if (s.empty() || s == "ABCD") return dp::WordOrder::ABCD;
     if (s == "CDAB") return dp::WordOrder::CDAB;
     if (s == "BADC") return dp::WordOrder::BADC;
     if (s == "DCBA") return dp::WordOrder::DCBA;
@@ -104,20 +106,20 @@ dp::WordOrder parseWordOrder(QString const& s, bool& ok) {
     return dp::WordOrder::ABCD;
 }
 
-sched::Priority parsePriority(QString const& s) {
+sched::Priority parsePriority(std::string const& s) {
     if (s == "Low")      return sched::Priority::Low;
     if (s == "High")     return sched::Priority::High;
     if (s == "Critical") return sched::Priority::Critical;
     return sched::Priority::Normal;
 }
 
-sched::SchedulerKind parseSchedulerKind(QString const& s) {
+sched::SchedulerKind parseSchedulerKind(std::string const& s) {
     if (s == "credit")   return sched::SchedulerKind::Credit;
     if (s == "priority") return sched::SchedulerKind::Priority;
     return sched::SchedulerKind::Serial;
 }
 
-transport::TransportKind parseTransportKind(QString const& s, bool& ok) {
+transport::TransportKind parseTransportKind(std::string const& s, bool& ok) {
     ok = true;
     if (s == "modbus_tcp_client") return transport::TransportKind::ModbusTcpClient;
     if (s == "modbus_tcp_server") return transport::TransportKind::ModbusTcpServer;
@@ -148,24 +150,24 @@ MetaConfig parseMeta(toml::table const& root, ValidationErrors& /*errs*/) {
 TransportConfig parseTransport(toml::table const& t,
                                 int                index,
                                 ValidationErrors&   errs) {
-    auto const section = QStringLiteral("transport[%1]").arg(index);
+    auto const section = idx("transport", index);
     TransportConfig c;
     requireStr(t, "id",   section, c.id,   errs);
 
-    QString kindStr;
+    std::string kindStr;
     requireStr(t, "kind", section, kindStr, errs);
     bool ok = true;
     c.kind = parseTransportKind(kindStr, ok);
-    if (!ok && !kindStr.isEmpty()) {
+    if (!ok && !kindStr.empty()) {
         errs.push_back({section, "kind",
-                        QStringLiteral("unknown transport kind '%1'").arg(kindStr),
+                        "unknown transport kind '" + kindStr + "'",
                         int(t.source().begin.line)});
     }
 
     c.host           = getStr(t, "host", {});
-    c.port           = quint16(getInt(t, "port", 502));
+    c.port           = uint16_t(getInt(t, "port", 502));
     c.slaveId        = getInt(t, "slave_id", 1);
-    c.listenAddress  = getStr(t, "listen_address", QStringLiteral("0.0.0.0"));
+    c.listenAddress  = getStr(t, "listen_address", "0.0.0.0");
     c.listenPort     = getInt(t, "listen_port", 502);
     c.maxClients     = getInt(t, "max_clients", 1);
     // Modbus RTU
@@ -173,19 +175,19 @@ TransportConfig parseTransport(toml::table const& t,
     c.baudRate       = getInt(t, "baud_rate",  9600);
     c.dataBits       = getInt(t, "data_bits",  8);
     c.stopBits       = getInt(t, "stop_bits",  1);
-    c.parity         = getStr(t, "parity",     QStringLiteral("none"));
+    c.parity         = getStr(t, "parity",     "none");
     // OPC UA
     c.endpointUrl    = getStr(t, "endpoint_url",    {});
-    c.securityPolicy = getStr(t, "security_policy", QStringLiteral("None"));
+    c.securityPolicy = getStr(t, "security_policy", "None");
     c.username       = getStr(t, "username",        {});
     c.password       = getStr(t, "password",        {});
-    c.opcuaBackend   = getStr(t, "backend",         QStringLiteral("open62541"));
-    c.nodeIdTemplate = getStr(t, "node_id_template", QStringLiteral("ns=2;s=Var_%1"));
+    c.opcuaBackend   = getStr(t, "backend",         "open62541");
+    c.nodeIdTemplate = getStr(t, "node_id_template", "ns=2;s=Var_%1");
     // MQTT
     c.clientId       = getStr(t, "client_id",     {});
     c.brokerUri      = getStr(t, "broker_uri",    {});
     c.topicPrefix    = getStr(t, "topic_prefix",  {});
-    c.topicTemplate  = getStr(t, "topic_template", QStringLiteral("reg/%1"));
+    c.topicTemplate  = getStr(t, "topic_template", "reg/%1");
     c.qos            = getInt(t, "qos",           1);
     c.cleanSession   = getBool(t, "clean_session").value_or(true);
     // S7
@@ -211,7 +213,7 @@ TransportConfig parseTransport(toml::table const& t,
         for (auto&& n : *lr) {
             if (auto wt = n.as_table()) {
                 transport::WatchRange r;
-                QString const tbl = getStr(*wt, "table", QStringLiteral("HR"));
+                std::string const tbl = getStr(*wt, "table", "HR");
                 if (tbl == "HR" || tbl == "HoldingRegisters")
                     r.table = core::RegisterTable::HoldingRegister;
                 else if (tbl == "IR" || tbl == "InputRegisters")
@@ -226,7 +228,7 @@ TransportConfig parseTransport(toml::table const& t,
                     r.startAddress = int(arr->at(0).value<int64_t>().value_or(0));
                     r.size         = int(arr->at(1).value<int64_t>().value_or(0));
                 }
-                c.listenRanges.append(r);
+                c.listenRanges.push_back(r);
             }
         }
     }
@@ -236,7 +238,7 @@ TransportConfig parseTransport(toml::table const& t,
 CodecConfig parseCodec(toml::table const& t,
                         int                index,
                         ValidationErrors&   errs) {
-    auto const section = QStringLiteral("codec[%1]").arg(index);
+    auto const section = idx("codec", index);
     CodecConfig c;
     requireStr(t, "id",   section, c.id,   errs);
     requireStr(t, "kind", section, c.kind, errs);
@@ -244,12 +246,11 @@ CodecConfig parseCodec(toml::table const& t,
     c.arg    = getStr(t, "arg", {});
     if (auto m = t["map"].as_table()) {
         for (auto&& [k, v] : *m) {
-            auto key = qstr(k.str());
-            QVariant val;
-            if (auto sv = v.value<std::string>())   val = qstr(*sv);
-            else if (auto iv = v.value<int64_t>())  val = QVariant(qint64(*iv));
+            dp::Value val;
+            if (auto sv = v.value<std::string>())   val = *sv;
+            else if (auto iv = v.value<int64_t>())  val = std::int64_t(*iv);
             else if (auto bv = v.value<bool>())     val = *bv;
-            c.map.insert(key, val);
+            c.map.emplace(std::string(k.str()), std::move(val));
         }
     }
     return c;
@@ -258,7 +259,7 @@ CodecConfig parseCodec(toml::table const& t,
 PollRangeConfig parsePollRange(toml::table const& t,
                                  int                index,
                                  ValidationErrors&   errs) {
-    auto const section = QStringLiteral("poll_range[%1]").arg(index);
+    auto const section = idx("poll_range", index);
     PollRangeConfig c;
     requireStr(t, "module_id", section, c.moduleId,  errs);
     requireStr(t, "transport", section, c.transport, errs);
@@ -268,13 +269,13 @@ PollRangeConfig parsePollRange(toml::table const& t,
         c.count        = int(arr->at(1).value<int64_t>().value_or(0));
     } else {
         errs.push_back({section, "range",
-                        QStringLiteral("expected [start, count] array"),
+                        "expected [start, count] array",
                         int(t.source().begin.line)});
     }
     c.periodMs = getInt(t, "period_ms", 0);
     if (c.periodMs <= 0) {
         errs.push_back({section, "period_ms",
-                        QStringLiteral("period_ms must be > 0"),
+                        "period_ms must be > 0",
                         int(t.source().begin.line)});
     }
     c.priority = parsePriority(getStr(t, "priority", "Normal"));
@@ -284,7 +285,7 @@ PollRangeConfig parsePollRange(toml::table const& t,
 core::RegisterWords parseU16Array(toml::array const& arr) {
     core::RegisterWords out;
     for (auto&& n : arr) {
-        if (auto i = n.value<int64_t>()) out.push_back(quint16(*i));
+        if (auto i = n.value<int64_t>()) out.push_back(uint16_t(*i));
     }
     return out;
 }
@@ -292,7 +293,7 @@ core::RegisterWords parseU16Array(toml::array const& arr) {
 SinkWindowConfig parseSinkWindow(toml::table const& t,
                                    int                index,
                                    ValidationErrors&   errs) {
-    auto const section = QStringLiteral("sink_window[%1]").arg(index);
+    auto const section = idx("sink_window", index);
     SinkWindowConfig c;
     requireStr(t, "module_id", section, c.moduleId,  errs);
     requireStr(t, "transport", section, c.transport, errs);
@@ -302,12 +303,12 @@ SinkWindowConfig parseSinkWindow(toml::table const& t,
         c.size         = int(arr->at(1).value<int64_t>().value_or(0));
     } else {
         errs.push_back({section, "range",
-                        QStringLiteral("expected [start, size] array"),
+                        "expected [start, size] array",
                         int(t.source().begin.line)});
     }
     if (c.size <= 0) {
         errs.push_back({section, "range",
-                        QStringLiteral("size must be > 0"),
+                        "size must be > 0",
                         int(t.source().begin.line)});
     }
     c.priority = parsePriority(getStr(t, "priority", "High"));
@@ -326,45 +327,45 @@ SinkWindowConfig parseSinkWindow(toml::table const& t,
 HeartbeatConfig parseHeartbeat(toml::table const& t,
                                  int                index,
                                  ValidationErrors&   errs) {
-    auto const section = QStringLiteral("heartbeat[%1]").arg(index);
+    auto const section = idx("heartbeat", index);
     HeartbeatConfig c;
     requireStr(t, "module_id", section, c.moduleId,  errs);
     requireStr(t, "transport", section, c.transport, errs);
-    c.table       = getStr(t, "table", QStringLiteral("HR"));
+    c.table       = getStr(t, "table", "HR");
     c.address     = getInt(t, "address", 0);
     if (auto arr = t["values"].as_array()) {
         c.values = parseU16Array(*arr);
     } else if (auto v = getInt(t, "value")) {
-        c.values.push_back(quint16(*v));
+        c.values.push_back(uint16_t(*v));
     }
     if (c.values.empty()) {
         errs.push_back({section, "values",
-                        QStringLiteral("heartbeat requires non-empty values"),
+                        "heartbeat requires non-empty values",
                         int(t.source().begin.line)});
     }
     c.periodMs    = getInt(t, "period_ms", 0);
     if (c.periodMs <= 0) {
         errs.push_back({section, "period_ms",
-                        QStringLiteral("period_ms must be > 0"),
+                        "period_ms must be > 0",
                         int(t.source().begin.line)});
     }
     c.priority    = parsePriority(getStr(t, "priority", "Low"));
-    c.incrementer = getStr(t, "incrementer", QStringLiteral("none"));
+    c.incrementer = getStr(t, "incrementer", "none");
     return c;
 }
 
 AckWatchConfig parseAckWatch(toml::table const& t,
                                int                index,
                                ValidationErrors&   errs) {
-    auto const section = QStringLiteral("ack_watch[%1]").arg(index);
+    auto const section = idx("ack_watch", index);
     AckWatchConfig c;
     requireStr(t, "module_id", section, c.moduleId, errs);
     requireStr(t, "dp",        section, c.dp,       errs);
     c.timeoutMs = getInt(t, "timeout_ms", 3000);
     if (auto v = t["expected"]; v) {
-        if (auto i = v.value<int64_t>())          c.expected = qint64(*i);
+        if (auto i = v.value<int64_t>())          c.expected = std::int64_t(*i);
         else if (auto b = v.value<bool>())        c.expected = *b;
-        else if (auto s = v.value<std::string>()) c.expected = qstr(*s);
+        else if (auto s = v.value<std::string>()) c.expected = *s;
         else if (auto d = v.value<double>())      c.expected = *d;
     }
     return c;
@@ -373,7 +374,7 @@ AckWatchConfig parseAckWatch(toml::table const& t,
 CommandConfig parseCommand(toml::table const& t,
                              int                index,
                              ValidationErrors&   errs) {
-    auto const section = QStringLiteral("command[%1]").arg(index);
+    auto const section = idx("command", index);
     CommandConfig c;
     requireStr(t, "module_id", section, c.moduleId,  errs);
     requireStr(t, "transport", section, c.transport, errs);
@@ -381,21 +382,19 @@ CommandConfig parseCommand(toml::table const& t,
     c.interruptable = getBool(t, "interruptable").value_or(false);
     c.trigger       = getStr(t, "trigger", {});
     if (auto arr = t["writes"].as_array()) {
-        int wi = 0;
         for (auto&& n : *arr) {
             if (auto wt = n.as_table()) {
                 CommandWriteEntry e;
-                e.table   = getStr(*wt, "table", QStringLiteral("HR"));
+                e.table   = getStr(*wt, "table", "HR");
                 e.address = getInt(*wt, "address", 0);
-                e.value   = quint16(getInt(*wt, "value", 0));
-                c.writes.append(e);
+                e.value   = uint16_t(getInt(*wt, "value", 0));
+                c.writes.push_back(e);
             }
-            ++wi;
         }
     }
-    if (c.writes.isEmpty()) {
+    if (c.writes.empty()) {
         errs.push_back({section, "writes",
-                        QStringLiteral("command requires non-empty writes"),
+                        "command requires non-empty writes",
                         int(t.source().begin.line)});
     }
     return c;
@@ -404,19 +403,19 @@ CommandConfig parseCommand(toml::table const& t,
 RouteConfig parseRoute(toml::table const& t,
                         int                index,
                         ValidationErrors&   errs) {
-    auto const section = QStringLiteral("route[%1]").arg(index);
+    auto const section = idx("route", index);
     RouteConfig c;
     c.name   = getStr(t, "name", {});
     requireStr(t, "from", section, c.from, errs);
     requireStr(t, "to",   section, c.to,   errs);
-    c.policy = getStr(t, "policy", QStringLiteral("ContinuousMirror"));
+    c.policy = getStr(t, "policy", "ContinuousMirror");
     return c;
 }
 
 BridgeConfig parseBridge(toml::table const& t,
                           int                index,
                           ValidationErrors&   errs) {
-    auto const section = QStringLiteral("bridge[%1]").arg(index);
+    auto const section = idx("bridge", index);
     BridgeConfig c;
     requireStr(t, "server", section, c.server, errs);
     requireStr(t, "plc",    section, c.plc,    errs);
@@ -432,7 +431,7 @@ BridgeConfig parseBridge(toml::table const& t,
 PluginConfig parsePlugin(toml::table const& t,
                           int                index,
                           ValidationErrors&   errs) {
-    auto const section = QStringLiteral("plugin[%1]").arg(index);
+    auto const section = idx("plugin", index);
     PluginConfig c;
     requireStr(t, "dll", section, c.dllPath, errs);
     c.name   = getStr(t, "name",   {});
@@ -441,7 +440,7 @@ PluginConfig parsePlugin(toml::table const& t,
 }
 
 PortRefConfig parsePortRef(toml::table const& t,
-                             QString const&     section,
+                             std::string const& section,
                              ValidationErrors&   errs) {
     PortRefConfig p;
     p.port    = getStr(t, "port",    {});
@@ -450,30 +449,30 @@ PortRefConfig parsePortRef(toml::table const& t,
     p.bit     = getInt(t, "bit",     -1);
     p.wordOrder = getStr(t, "wordOrder", {});
     p.shift   = getInt(t, "shift",   0);
-    if (auto m = getInt(t, "mask")) p.mask = quint64(*m);
+    if (auto m = getInt(t, "mask")) p.mask = uint64_t(*m);
     p.scale   = getDouble(t, "scale", 1.0);
     p.offset  = getDouble(t, "offset", 0.0);
     p.codec   = getStr(t, "codec", {});
     p.dedupe  = getStr(t, "dedupe", "none");
     p.window  = getStr(t, "window", {});
 
-    Q_UNUSED(section); Q_UNUSED(errs);
+    (void)section; (void)errs;
     return p;
 }
 
 DatapointConfig parseDatapoint(toml::table const& t,
                                  int                index,
                                  ValidationErrors&   errs) {
-    auto const section = QStringLiteral("datapoint[%1]").arg(index);
+    auto const section = idx("datapoint", index);
     DatapointConfig c;
     requireStr(t, "id",   section, c.id,   errs);
     c.kind = getStr(t, "kind", "Status");
-    QString typeStr = getStr(t, "type", "U16");
+    std::string typeStr = getStr(t, "type", "U16");
     bool typeOk = true;
     c.type = parseScalarType(typeStr, typeOk);
     if (!typeOk) {
         errs.push_back({section, "type",
-                        QStringLiteral("unknown ScalarType '%1'").arg(typeStr),
+                        "unknown ScalarType '" + typeStr + "'",
                         int(t.source().begin.line)});
     }
 
@@ -492,12 +491,11 @@ DatapointConfig parseDatapoint(toml::table const& t,
     if (auto a = t["ack"].as_table()) {
         c.ack.dp        = getStr(*a, "dp", {});
         c.ack.timeoutMs = getInt(*a, "timeout_ms", 3000);
-        // expected stays as QVariant via direct extraction
         if (auto v = (*a)["expected"]; v) {
-            if (auto i = v.value<int64_t>())       c.ack.expected = qint64(*i);
-            else if (auto b = v.value<bool>())     c.ack.expected = *b;
-            else if (auto s = v.value<std::string>()) c.ack.expected = qstr(*s);
-            else if (auto d = v.value<double>())   c.ack.expected = *d;
+            if (auto i = v.value<int64_t>())          c.ack.expected = std::int64_t(*i);
+            else if (auto b = v.value<bool>())        c.ack.expected = *b;
+            else if (auto s = v.value<std::string>()) c.ack.expected = *s;
+            else if (auto d = v.value<double>())      c.ack.expected = *d;
         }
         c.hasAck = true;
     }
@@ -506,12 +504,12 @@ DatapointConfig parseDatapoint(toml::table const& t,
 
 template <class Section, class Fn>
 void parseArray(toml::table const& root, std::string_view key,
-                 QList<Section>& out, Fn parseOne, ValidationErrors& errs) {
+                 std::vector<Section>& out, Fn parseOne, ValidationErrors& errs) {
     if (auto arr = root[key].as_array()) {
         int i = 0;
         for (auto&& node : *arr) {
             if (auto t = node.as_table()) {
-                out.append(parseOne(*t, i, errs));
+                out.push_back(parseOne(*t, i, errs));
             }
             ++i;
         }
@@ -520,22 +518,21 @@ void parseArray(toml::table const& root, std::string_view key,
 
 // ─── Validation ────────────────────────────────────────────────────────
 
-void checkUnique(QList<QString> const& ids, QString const& section,
-                  QString const& field, ValidationErrors& errs) {
-    std::set<QString> seen;
+void checkUnique(std::vector<std::string> const& ids, std::string const& section,
+                  std::string const& field, ValidationErrors& errs) {
+    std::set<std::string> seen;
     for (auto const& id : ids) {
         if (!seen.insert(id).second) {
             errs.push_back({section, field,
-                            QStringLiteral("duplicate id '%1'").arg(id), -1});
+                            "duplicate id '" + id + "'", -1});
         }
     }
 }
 
 // Built-in codec IDs that ConfigLoader::validate accepts without a [[codec]]
 // declaration — these are registered at CodecRegistry::loadBuiltins time.
-bool isBuiltinCodecId(QString const& id) {
-    if (id.startsWith(QStringLiteral("builtin."))) return true;
-    return false;
+bool isBuiltinCodecId(std::string const& id) {
+    return id.starts_with("builtin.");
 }
 
 // Maximum register count for a single Modbus write-multiple-registers (FC16)
@@ -560,89 +557,86 @@ int typeBitWidth(dp::ScalarType t) {
 }
 
 void validateRefs(ConfigSchema const& s, ValidationErrors& errs) {
-    std::set<QString> transports;
+    std::set<std::string> transports;
     for (auto const& t : s.transports) transports.insert(t.id);
 
-    std::set<QString> sinkWindowIds;
-    std::map<QString, SinkWindowConfig const*> sinkWindowById;
+    std::set<std::string> sinkWindowIds;
+    std::map<std::string, SinkWindowConfig const*> sinkWindowById;
     for (auto const& sw : s.sinkWindows) {
         sinkWindowIds.insert(sw.moduleId);
         sinkWindowById.emplace(sw.moduleId, &sw);
     }
 
-    std::set<QString> codecIds;
+    std::set<std::string> codecIds;
     for (auto const& c : s.codecs) codecIds.insert(c.id);
 
-    std::set<QString> datapointIds;
+    std::set<std::string> datapointIds;
     for (auto const& d : s.datapoints) datapointIds.insert(d.id);
 
-    auto checkTransportRef = [&](QString const& tid,
-                                  QString const& section,
-                                  QString const& field) {
-        if (!tid.isEmpty() && !transports.count(tid)) {
+    auto checkTransportRef = [&](std::string const& tid,
+                                  std::string const& section,
+                                  std::string const& field) {
+        if (!tid.empty() && !transports.count(tid)) {
             errs.push_back({section, field,
-                            QStringLiteral("references unknown transport '%1'").arg(tid),
-                            -1});
+                            "references unknown transport '" + tid + "'", -1});
         }
     };
 
-    auto checkPortRef = [&](PortRefConfig const& p, QString const& section) {
-        if (!p.port.isEmpty() && !transports.count(p.port)) {
+    auto checkPortRef = [&](PortRefConfig const& p, std::string const& section) {
+        if (!p.port.empty() && !transports.count(p.port)) {
             errs.push_back({section, "port",
-                            QStringLiteral("references unknown transport '%1'").arg(p.port),
-                            -1});
+                            "references unknown transport '" + p.port + "'", -1});
         }
     };
 
-    for (int i = 0; i < s.pollRanges.size(); ++i) {
+    for (size_t i = 0; i < s.pollRanges.size(); ++i) {
         checkTransportRef(s.pollRanges[i].transport,
-                          QStringLiteral("poll_range[%1]").arg(i), "transport");
+                          idx("poll_range", int(i)), "transport");
     }
-    for (int i = 0; i < s.sinkWindows.size(); ++i) {
+    for (size_t i = 0; i < s.sinkWindows.size(); ++i) {
         auto const& sw = s.sinkWindows[i];
-        auto const sec = QStringLiteral("sink_window[%1]").arg(i);
+        auto const sec = idx("sink_window", int(i));
         checkTransportRef(sw.transport, sec, "transport");
         if (sw.size > kMaxSinkWindowSize) {
             errs.push_back({sec, "range",
-                QStringLiteral("size %1 exceeds Modbus FC16 max (%2)")
-                    .arg(sw.size).arg(kMaxSinkWindowSize), -1});
+                "size " + std::to_string(sw.size) + " exceeds Modbus FC16 max ("
+                    + std::to_string(kMaxSinkWindowSize) + ")", -1});
         }
     }
-    for (int i = 0; i < s.heartbeats.size(); ++i) {
+    for (size_t i = 0; i < s.heartbeats.size(); ++i) {
         checkTransportRef(s.heartbeats[i].transport,
-                          QStringLiteral("heartbeat[%1]").arg(i), "transport");
+                          idx("heartbeat", int(i)), "transport");
     }
-    for (int i = 0; i < s.commands.size(); ++i) {
+    for (size_t i = 0; i < s.commands.size(); ++i) {
         checkTransportRef(s.commands[i].transport,
-                          QStringLiteral("command[%1]").arg(i), "transport");
+                          idx("command", int(i)), "transport");
     }
 
     // Codec ref + kind / sink / source consistency.
-    auto checkCodecRef = [&](QString const& id, QString const& section) {
-        if (id.isEmpty() || codecIds.count(id) || isBuiltinCodecId(id)) return;
+    auto checkCodecRef = [&](std::string const& id, std::string const& section) {
+        if (id.empty() || codecIds.count(id) || isBuiltinCodecId(id)) return;
         errs.push_back({section, "codec",
-            QStringLiteral("references unknown codec '%1'").arg(id), -1});
+            "references unknown codec '" + id + "'", -1});
     };
 
-    for (int i = 0; i < s.datapoints.size(); ++i) {
+    for (size_t i = 0; i < s.datapoints.size(); ++i) {
         auto const& d  = s.datapoints[i];
-        auto const sec = QStringLiteral("datapoint[%1]").arg(i);
+        auto const sec = idx("datapoint", int(i));
         if (d.hasSource) {
             checkPortRef(d.source, sec + ".source");
             checkCodecRef(d.source.codec, sec + ".source");
         }
         if (d.hasSink) {
-            if (!d.sink.window.isEmpty() && !sinkWindowIds.count(d.sink.window)) {
+            if (!d.sink.window.empty() && !sinkWindowIds.count(d.sink.window)) {
                 errs.push_back({sec + ".sink", "window",
-                                QStringLiteral("references unknown sink_window '%1'")
-                                    .arg(d.sink.window),
+                                "references unknown sink_window '" + d.sink.window + "'",
                                 -1});
             }
             checkPortRef(d.sink, sec + ".sink");
             checkCodecRef(d.sink.codec, sec + ".sink");
 
             // sink.addr must fall within the referenced sink_window.
-            if (!d.sink.window.isEmpty()) {
+            if (!d.sink.window.empty()) {
                 auto it = sinkWindowById.find(d.sink.window);
                 if (it != sinkWindowById.end()) {
                     auto const* sw = it->second;
@@ -650,119 +644,110 @@ void validateRefs(ConfigSchema const& s, ValidationErrors& errs) {
                     int const hi = sw->startAddress + sw->size;
                     if (d.sink.address < lo || d.sink.address >= hi) {
                         errs.push_back({sec + ".sink", "addr",
-                            QStringLiteral("addr %1 outside sink_window '%2' [%3,%4)")
-                                .arg(d.sink.address).arg(d.sink.window)
-                                .arg(lo).arg(hi), -1});
+                            "addr " + std::to_string(d.sink.address)
+                                + " outside sink_window '" + d.sink.window + "' ["
+                                + std::to_string(lo) + "," + std::to_string(hi) + ")", -1});
                     }
                 }
             }
         }
-        if (dp::isMultiRegister(d.type) && d.hasSource && d.source.wordOrder.isEmpty()) {
+        if (dp::isMultiRegister(d.type) && d.hasSource && d.source.wordOrder.empty()) {
             errs.push_back({sec + ".source", "wordOrder",
-                            QStringLiteral("type=%1 requires wordOrder "
-                                            "(ABCD/CDAB/BADC/DCBA)")
-                                .arg(QString::fromUtf8(dp::scalarTypeName(d.type))),
-                            -1});
+                            "type=" + std::string(dp::scalarTypeName(d.type))
+                                + " requires wordOrder (ABCD/CDAB/BADC/DCBA)", -1});
         }
         if (d.type == dp::ScalarType::Bool && d.hasSource && d.source.bit < 0) {
             errs.push_back({sec + ".source", "bit",
-                            QStringLiteral("type=Bool requires bit (0..15)"),
-                            -1});
+                            "type=Bool requires bit (0..15)", -1});
         }
 
         // EnumU16 requires an explicit codec (no builtin enum codec exists).
         if (d.type == dp::ScalarType::EnumU16 && d.hasSource
-         && d.source.codec.isEmpty()) {
+         && d.source.codec.empty()) {
             errs.push_back({sec + ".source", "codec",
-                QStringLiteral("type=EnumU16 requires an explicit codec"), -1});
+                "type=EnumU16 requires an explicit codec", -1});
         }
 
         // Kind ↔ source/sink consistency.
         if (d.kind == "Status" && !d.hasSource) {
-            errs.push_back({sec, "kind",
-                QStringLiteral("kind=Status requires source"), -1});
+            errs.push_back({sec, "kind", "kind=Status requires source", -1});
         }
         if (d.kind == "Command" && !d.hasSink) {
-            errs.push_back({sec, "kind",
-                QStringLiteral("kind=Command requires sink"), -1});
+            errs.push_back({sec, "kind", "kind=Command requires sink", -1});
         }
         if (d.kind == "Bidirectional" && (!d.hasSource || !d.hasSink)) {
             errs.push_back({sec, "kind",
-                QStringLiteral("kind=Bidirectional requires both source and sink"),
-                -1});
+                "kind=Bidirectional requires both source and sink", -1});
         }
 
         // UntilAck policy needs an ack block; reuse hasAck flag set by parser.
         if (d.policy == "UntilAck" && !d.hasAck) {
             errs.push_back({sec, "policy",
-                QStringLiteral("policy=UntilAck requires [datapoint.ack]"), -1});
+                "policy=UntilAck requires [datapoint.ack]", -1});
         }
 
         // Mask must fit in the type's bit width.
-        auto checkMask = [&](PortRefConfig const& p, QString const& port_sec) {
+        auto checkMask = [&](PortRefConfig const& p, std::string const& port_sec) {
             int const width = typeBitWidth(d.type);
             if (width >= 64) return;   // String and 64-bit types: skip
-            quint64 const limit = (width >= 64)
-                ? ~quint64(0)
-                : ((quint64(1) << width) - 1);
-            if (p.mask != ~quint64(0) && (p.mask & ~limit) != 0) {
+            uint64_t const limit = ((uint64_t(1) << width) - 1);
+            if (p.mask != ~uint64_t(0) && (p.mask & ~limit) != 0) {
                 errs.push_back({port_sec, "mask",
-                    QStringLiteral("mask 0x%1 exceeds type=%2 bit width (%3)")
-                        .arg(p.mask, 0, 16)
-                        .arg(QString::fromUtf8(dp::scalarTypeName(d.type)))
-                        .arg(width), -1});
+                    "mask 0x" + toHexLower(p.mask) + " exceeds type="
+                        + std::string(dp::scalarTypeName(d.type))
+                        + " bit width (" + std::to_string(width) + ")", -1});
             }
         };
         if (d.hasSource) checkMask(d.source, sec + ".source");
         if (d.hasSink)   checkMask(d.sink,   sec + ".sink");
     }
 
-    for (int i = 0; i < s.ackWatches.size(); ++i) {
+    for (size_t i = 0; i < s.ackWatches.size(); ++i) {
         auto const& a   = s.ackWatches[i];
-        auto const sec  = QStringLiteral("ack_watch[%1]").arg(i);
-        if (!a.dp.isEmpty() && !datapointIds.count(a.dp)) {
+        auto const sec  = idx("ack_watch", int(i));
+        if (!a.dp.empty() && !datapointIds.count(a.dp)) {
             errs.push_back({sec, "dp",
-                QStringLiteral("references unknown datapoint '%1'").arg(a.dp), -1});
+                "references unknown datapoint '" + a.dp + "'", -1});
         }
     }
 
-    for (int i = 0; i < s.routes.size(); ++i) {
+    for (size_t i = 0; i < s.routes.size(); ++i) {
         auto const& r   = s.routes[i];
-        auto const sec  = QStringLiteral("route[%1]").arg(i);
-        if (!r.from.isEmpty() && !datapointIds.count(r.from)) {
+        auto const sec  = idx("route", int(i));
+        if (!r.from.empty() && !datapointIds.count(r.from)) {
             errs.push_back({sec, "from",
-                QStringLiteral("references unknown datapoint '%1'").arg(r.from), -1});
+                "references unknown datapoint '" + r.from + "'", -1});
         }
-        if (!r.to.isEmpty() && !datapointIds.count(r.to)) {
+        if (!r.to.empty() && !datapointIds.count(r.to)) {
             errs.push_back({sec, "to",
-                QStringLiteral("references unknown datapoint '%1'").arg(r.to), -1});
+                "references unknown datapoint '" + r.to + "'", -1});
         }
     }
 
-    for (int i = 0; i < s.bridges.size(); ++i) {
+    for (size_t i = 0; i < s.bridges.size(); ++i) {
         auto const& b   = s.bridges[i];
-        auto const sec  = QStringLiteral("bridge[%1]").arg(i);
+        auto const sec  = idx("bridge", int(i));
         checkTransportRef(b.server, sec, "server");
         checkTransportRef(b.plc,    sec, "plc");
         if (b.writeCount < 0 || b.mirrorCount < 0) {
             errs.push_back({sec, "count",
-                QStringLiteral("write_count / mirror_count must be >= 0"), -1});
+                "write_count / mirror_count must be >= 0", -1});
         }
         // 镜像区必须至少有一个来自 plc 的 HR datapoint,否则镜像恒为 0(配错的常见原因)。
         if (b.mirrorCount > 0 && transports.count(b.plc)) {
             bool anyDp = false;
             for (auto const& d : s.datapoints) {
                 if (!d.hasSource || d.source.port != b.plc) continue;
-                if (d.source.table != QStringLiteral("HR")
-                 && d.source.table != QStringLiteral("HoldingRegisters")) continue;
+                if (d.source.table != "HR" && d.source.table != "HoldingRegisters") continue;
                 int const a = d.source.address;
                 if (a >= b.mirrorStart && a < b.mirrorStart + b.mirrorCount) { anyDp = true; break; }
             }
             if (!anyDp) {
                 errs.push_back({sec, "mirror",
-                    QStringLiteral("mirror range [%1,%2) has no datapoint sourced from plc "
-                                   "'%3' (HR); mirror would be all zeros")
-                        .arg(b.mirrorStart).arg(b.mirrorStart + b.mirrorCount).arg(b.plc), -1});
+                    "mirror range [" + std::to_string(b.mirrorStart) + ","
+                        + std::to_string(b.mirrorStart + b.mirrorCount)
+                        + ") has no datapoint sourced from plc '" + b.plc
+                        + "' (HR); mirror would be all zeros", -1});
             }
         }
     }
@@ -773,25 +758,23 @@ void validateRefs(ConfigSchema const& s, ValidationErrors& errs) {
 // ───────────────────────────────────────────────────────────────────────
 
 std::expected<ConfigSchema, ValidationErrors>
-ConfigLoader::loadFromToml(QString const& path) {
+ConfigLoader::loadFromToml(std::string const& path) {
     ConfigSchema schema;
     ValidationErrors errs;
 
     toml::table root;
     try {
-        QFile f(path);
-        if (!f.open(QIODevice::ReadOnly)) {
-            errs.push_back({"meta", "path",
-                            QStringLiteral("cannot open '%1'").arg(path), -1});
+        std::ifstream in(path, std::ios::binary);
+        if (!in) {
+            errs.push_back({"meta", "path", "cannot open '" + path + "'", -1});
             return std::unexpected(std::move(errs));
         }
-        QByteArray bytes = f.readAll();
-        std::string_view sv(bytes.constData(), size_t(bytes.size()));
-        root = toml::parse(sv);
+        std::string content((std::istreambuf_iterator<char>(in)),
+                            std::istreambuf_iterator<char>());
+        root = toml::parse(content);
     } catch (toml::parse_error const& e) {
         errs.push_back({"meta", "toml",
-                        QString::fromUtf8(e.description().data(),
-                                          int(e.description().size())),
+                        std::string(e.description()),
                         int(e.source().begin.line)});
         return std::unexpected(std::move(errs));
     }
@@ -810,13 +793,11 @@ ConfigLoader::loadFromToml(QString const& path) {
     parseArray(root, "plugin",      schema.plugins,     parsePlugin,     errs);
 
     auto vErrs = validate(schema);
-    if (vErrs.has_value()) {
-        // success
-    } else {
-        for (auto const& e : vErrs.error()) errs.append(e);
+    if (!vErrs.has_value()) {
+        for (auto const& e : vErrs.error()) errs.push_back(e);
     }
 
-    if (!errs.isEmpty()) return std::unexpected(std::move(errs));
+    if (!errs.empty()) return std::unexpected(std::move(errs));
     return schema;
 }
 
@@ -824,30 +805,30 @@ std::expected<void, ValidationErrors>
 ConfigLoader::validate(ConfigSchema const& schema) {
     ValidationErrors errs;
 
-    QList<QString> tIds;
-    for (auto const& t : schema.transports) tIds.append(t.id);
+    std::vector<std::string> tIds;
+    for (auto const& t : schema.transports) tIds.push_back(t.id);
     checkUnique(tIds, "transport", "id", errs);
 
     // Module IDs are unique across all module-bearing sections.
-    QList<QString> mIds;
-    for (auto const& m : schema.pollRanges)  mIds.append(m.moduleId);
-    for (auto const& m : schema.sinkWindows) mIds.append(m.moduleId);
-    for (auto const& m : schema.heartbeats)  mIds.append(m.moduleId);
-    for (auto const& m : schema.ackWatches)  mIds.append(m.moduleId);
-    for (auto const& m : schema.commands)    mIds.append(m.moduleId);
+    std::vector<std::string> mIds;
+    for (auto const& m : schema.pollRanges)  mIds.push_back(m.moduleId);
+    for (auto const& m : schema.sinkWindows) mIds.push_back(m.moduleId);
+    for (auto const& m : schema.heartbeats)  mIds.push_back(m.moduleId);
+    for (auto const& m : schema.ackWatches)  mIds.push_back(m.moduleId);
+    for (auto const& m : schema.commands)    mIds.push_back(m.moduleId);
     checkUnique(mIds, "module", "module_id", errs);
 
-    QList<QString> dIds;
-    for (auto const& d : schema.datapoints) dIds.append(d.id);
+    std::vector<std::string> dIds;
+    for (auto const& d : schema.datapoints) dIds.push_back(d.id);
     checkUnique(dIds, "datapoint", "id", errs);
 
-    QList<QString> cIds;
-    for (auto const& c : schema.codecs) cIds.append(c.id);
+    std::vector<std::string> cIds;
+    for (auto const& c : schema.codecs) cIds.push_back(c.id);
     checkUnique(cIds, "codec", "id", errs);
 
     validateRefs(schema, errs);
 
-    if (!errs.isEmpty()) return std::unexpected(std::move(errs));
+    if (!errs.empty()) return std::unexpected(std::move(errs));
     return {};
 }
 

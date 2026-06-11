@@ -160,7 +160,7 @@ source = { port="nope", table="HR", addr=0 }
     auto core = ICore::create(nullptr);
     auto loaded = core->loadConfig(path);
     REQUIRE_FALSE(loaded.has_value());
-    REQUIRE_FALSE(loaded.error().isEmpty());
+    REQUIRE_FALSE(loaded.error().empty());
 }
 
 TEST_CASE("ICore registers builtin codecs at construction",

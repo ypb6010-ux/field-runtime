@@ -2,20 +2,20 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include <QList>
-#include <QString>
+#include <string>
+#include <vector>
 
 #include "core/core_global.h"
 
 namespace core::config {
 
 struct ValidationError {
-    QString section;    // e.g. "datapoint[3]"
-    QString field;      // e.g. "source.wordOrder"
-    QString message;
-    int     lineNumber = -1;
+    std::string section;    // e.g. "datapoint[3]"
+    std::string field;      // e.g. "source.wordOrder"
+    std::string message;
+    int         lineNumber = -1;
 };
 
-using ValidationErrors = QList<ValidationError>;
+using ValidationErrors = std::vector<ValidationError>;
 
 } // namespace core::config
