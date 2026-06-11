@@ -6,6 +6,7 @@
 #include <QMutexLocker>
 #include <utility>
 
+#include "core/dp/TimeQt.h"
 #include "core/dp/ValueQt.h"
 
 namespace core::dp {
@@ -14,9 +15,7 @@ class Datapoint::Impl {
 public:
     mutable QMutex mtx;
     DatapointSpec  spec;
-    Value          value;
-    DpState        state = DpState::Missing;
-    QDateTime      timestamp;
+    State          st;       // Qt-free value + state + timestamp
     Writer         writer;
 };
 
@@ -42,22 +41,22 @@ QString Datapoint::id() const {
 
 QVariant Datapoint::value() const {
     QMutexLocker lk(&m_impl->mtx);
-    return toQVariant(m_impl->value);
+    return toQVariant(m_impl->st.value);
 }
 
 bool Datapoint::valid() const {
     QMutexLocker lk(&m_impl->mtx);
-    return m_impl->state == DpState::Ok;
+    return m_impl->st.state == DpState::Ok;
 }
 
 QDateTime Datapoint::timestamp() const {
     QMutexLocker lk(&m_impl->mtx);
-    return m_impl->timestamp;
+    return toQDateTime(m_impl->st.timestamp);
 }
 
 DpState Datapoint::state() const {
     QMutexLocker lk(&m_impl->mtx);
-    return m_impl->state;
+    return m_impl->st.state;
 }
 
 QString Datapoint::stateText() const {
@@ -78,23 +77,23 @@ QString    Datapoint::persistTag() const { QMutexLocker lk(&m_impl->mtx); return
 std::optional<PortRef> const& Datapoint::source() const { return m_impl->spec.source; }
 std::optional<PortRef> const& Datapoint::sink()   const { return m_impl->spec.sink; }
 
-void Datapoint::setValue(Value v, QDateTime ts) {
+void Datapoint::setValue(Value v, Timestamp ts) {
     bool valueChangedFlag = false;
     bool stateChangedFlag = false;
     {
         QMutexLocker lk(&m_impl->mtx);
-        if (m_impl->state != DpState::Ok) {
-            m_impl->state    = DpState::Ok;
+        if (m_impl->st.state != DpState::Ok) {
+            m_impl->st.state = DpState::Ok;
             stateChangedFlag = true;
         }
-        if (m_impl->value != v) {
-            m_impl->value     = std::move(v);
-            m_impl->timestamp = std::move(ts);
-            valueChangedFlag  = true;
+        if (m_impl->st.value != v) {
+            m_impl->st.value     = std::move(v);
+            m_impl->st.timestamp = ts;
+            valueChangedFlag     = true;
         } else {
             // Refresh timestamp even when value is unchanged so consumers
             // that look at staleness see liveness.
-            m_impl->timestamp = std::move(ts);
+            m_impl->st.timestamp = ts;
         }
     }
     if (valueChangedFlag) emit valueChanged();
@@ -105,9 +104,9 @@ void Datapoint::setState(DpState s) {
     bool changed = false;
     {
         QMutexLocker lk(&m_impl->mtx);
-        if (m_impl->state != s) {
-            m_impl->state = s;
-            changed       = true;
+        if (m_impl->st.state != s) {
+            m_impl->st.state = s;
+            changed          = true;
         }
     }
     if (changed) {

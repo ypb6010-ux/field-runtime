@@ -12,7 +12,7 @@
 #include "core/core_global.h"
 #include "core/dp/PortRef.h"
 #include "core/dp/ScalarType.h"
-#include "core/dp/Value.h"
+#include "core/dp/State.h"
 
 namespace core::dp {
 
@@ -21,13 +21,7 @@ enum class Kind {
     Command,
     Bidirectional,
 };
-
-enum class DpState {
-    Ok,
-    Stale,
-    Error,
-    Missing,
-};
+// DpState and the Qt-free runtime State live in core/dp/State.h.
 
 // Static configuration captured at construction or via setSpec(). Once a
 // datapoint is wired into the runtime the spec does not change; mutable
@@ -81,7 +75,7 @@ public:
     // only if (a) state transitions to Ok or (b) the value differs from the
     // current one. Thread-safe — emissions cross thread boundaries via Qt's
     // signal/slot machinery.
-    void setValue(Value v, QDateTime ts = QDateTime::currentDateTime());
+    void setValue(Value v, Timestamp ts = std::chrono::system_clock::now());
     void setState(DpState s);
 
     // Register a writer invoked by `write()`. The Core wires this to a
