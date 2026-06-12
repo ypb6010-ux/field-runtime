@@ -198,8 +198,8 @@ TEST_CASE("EventBus is safe under concurrent publish from many threads",
     for (auto& t : ts) t.join();
 
     REQUIRE(count.load() == kThreads * kPerThread);
-    REQUIRE(bus.stats().totalPublished == quint64(kThreads * kPerThread));
-    REQUIRE(bus.stats().totalDelivered == quint64(kThreads * kPerThread));
+    REQUIRE(bus.stats().totalPublished == std::uint64_t(kThreads * kPerThread));
+    REQUIRE(bus.stats().totalDelivered == std::uint64_t(kThreads * kPerThread));
 }
 
 TEST_CASE("Subscriptions outlive other subscriptions independently",

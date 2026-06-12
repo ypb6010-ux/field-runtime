@@ -37,7 +37,6 @@ target_sources(Core PRIVATE
     LogBridge.cpp
     # Headers carrying Q_OBJECT must be listed for AUTOMOC to pick them up
     # when they live outside the .cpp's directory.
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include/core/bus/EventBus.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/core/qml/DatapointQmlBridge.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/core/qml/QtDatapoint.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/core/qml/LogBridge.h

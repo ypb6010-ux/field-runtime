@@ -326,10 +326,10 @@ private:
     void startStatsPump() {
         if (m_statsIntervalMs <= 0) return;
         if (m_statsTimer) return;
-        m_statsTimer = new QTimer(m_bus.get());
+        m_statsTimer = new QTimer(&m_pump);
         m_statsTimer->setInterval(m_statsIntervalMs);
         m_statsTimer->setSingleShot(false);
-        QObject::connect(m_statsTimer, &QTimer::timeout, m_bus.get(),
+        QObject::connect(m_statsTimer, &QTimer::timeout, &m_pump,
             [this]() { publishSchedulerStatsOnce(); });
         m_statsTimer->start();
     }
@@ -559,10 +559,10 @@ private:
             if (b.mirrorCount > 0) { any = true; period = std::min(period, std::max(20, b.mirrorPeriodMs)); }
         }
         if (!any) return;
-        m_mirrorTimer = new QTimer(m_bus.get());
+        m_mirrorTimer = new QTimer(&m_pump);
         m_mirrorTimer->setInterval(period);
         m_mirrorTimer->setSingleShot(false);
-        QObject::connect(m_mirrorTimer, &QTimer::timeout, m_bus.get(),
+        QObject::connect(m_mirrorTimer, &QTimer::timeout, &m_pump,
             [this]() { mirrorBridgesOnce(); });
         m_mirrorTimer->start();
     }
@@ -836,7 +836,7 @@ private:
             // transport worker thread, DpChanged is published on the bus thread.
             std::weak_ptr<dp::Datapoint> weak = datapoint;
             datapoint->setOnValueChanged([this, weak] {
-                QMetaObject::invokeMethod(m_bus.get(), [this, weak] {
+                QMetaObject::invokeMethod(&m_pump, [this, weak] {
                     auto sp = weak.lock();
                     if (!sp) return;
                     auto const snap = sp->snapshot();
@@ -923,6 +923,11 @@ private:
 
 private:
     QQmlContext*                                                m_qml;
+    // Qt-thread anchor for the (now Qt-free) EventBus: owns the stats/mirror
+    // QTimers and is the target for queued DpChanged publication, so value
+    // changes pushed on a transport worker thread are published on this (GUI)
+    // thread — the semantics the old QObject EventBus provided.
+    QObject                                                     m_pump;
     QString                                                     m_configDir;
     std::unique_ptr<log::Logger>                                m_logger;
     std::unique_ptr<qml::LogBridge>                             m_logBridge;

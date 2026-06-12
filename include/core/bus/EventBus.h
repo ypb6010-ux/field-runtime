@@ -2,13 +2,12 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <typeindex>
 #include <utility>
-
-#include <QObject>
 
 #include "core/core_global.h"
 #include "core/bus/Subscription.h"
@@ -17,21 +16,20 @@
 namespace core::bus {
 
 struct BusStats {
-    quint64 totalPublished    = 0;
-    quint64 totalDelivered    = 0;
-    int     activeSubscribers = 0;
+    std::uint64_t totalPublished    = 0;
+    std::uint64_t totalDelivered    = 0;
+    int           activeSubscribers = 0;
 };
 
 // EventBus is owned by Core; lifetime ends with Core. Publish is thread-safe
-// and may be called from any thread; in the Phase 1 implementation handlers
-// run synchronously on the publisher's thread (the worker-thread dispatch
-// design from spec §2.1 is a later optimization — the public API does not
-// change).
-class CORE_EXPORT EventBus : public QObject {
-    Q_OBJECT
+// and may be called from any thread; handlers run synchronously on the
+// publisher's thread. This is a Qt-free type (the dispatch is std::function +
+// std::type_index + mutex); the Qt assembly layer owns any thread-hopping it
+// needs (it posts to its own QObject, not to the bus).
+class CORE_EXPORT EventBus {
 public:
-    explicit EventBus(QObject* parent = nullptr);
-    ~EventBus() override;
+    EventBus();
+    ~EventBus();
 
     CORE_DISABLE_COPY_MOVE(EventBus)
 

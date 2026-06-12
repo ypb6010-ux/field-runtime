@@ -27,13 +27,12 @@ class EventBus::Impl {
 public:
     mutable std::mutex                                                       mutex;
     std::unordered_map<std::type_index, std::vector<std::weak_ptr<Entry>>>   channels;
-    std::atomic<quint64>                                                     totalPublished{0};
-    std::atomic<quint64>                                                     totalDelivered{0};
+    std::atomic<std::uint64_t>                                               totalPublished{0};
+    std::atomic<std::uint64_t>                                               totalDelivered{0};
 };
 
-EventBus::EventBus(QObject* parent)
-    : QObject(parent)
-    , m_impl(std::make_unique<Impl>()) {}
+EventBus::EventBus()
+    : m_impl(std::make_unique<Impl>()) {}
 
 EventBus::~EventBus() = default;
 
