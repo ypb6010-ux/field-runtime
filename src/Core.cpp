@@ -88,7 +88,7 @@ dp::Kind kindFromString(std::string const& s) {
 dp::PortRef makePortRef(config::PortRefConfig const& pc,
                          std::shared_ptr<codec::Codec> codec) {
     dp::PortRef p;
-    p.transport = qs(pc.port);
+    p.transport = pc.port;
     p.table     = tableFromString(qs(pc.table));
     p.address   = pc.address;
     if (pc.bit >= 0) p.bit = pc.bit;
@@ -98,7 +98,7 @@ dp::PortRef makePortRef(config::PortRefConfig const& pc,
     p.scale     = pc.scale;
     p.offset    = pc.offset;
     p.codec     = std::move(codec);
-    p.window    = qs(pc.window);
+    p.window    = pc.window;
     return p;
 }
 
@@ -411,7 +411,7 @@ private:
             auto const& toDp   = toIt->second;
             if (!fromDp->source().has_value()) continue;
             auto const& fromSrc = *fromDp->source();
-            if (fromSrc.transport != qs(e.transportId)) continue;
+            if (fromSrc.transport != e.transportId) continue;
             if (fromSrc.table     != e.table)       continue;
             int const offset = fromSrc.address - e.startAddress;
             if (offset < 0 || offset >= e.values.size()) continue;
@@ -423,14 +423,14 @@ private:
             module::SinkWindow* target = nullptr;
             // Look up by named window first, fall back to address-based match.
             for (auto* sw : m_sinkWindowPtrs) {
-                if (!sink.window.isEmpty() && sw->id() == sink.window) {
+                if (!sink.window.empty() && sw->id() == qs(sink.window)) {
                     target = sw;
                     break;
                 }
             }
-            if (!target && !sink.transport.isEmpty()) {
+            if (!target && !sink.transport.empty()) {
                 for (auto* sw : m_sinkWindowPtrs) {
-                    if (sw->transportId() != sink.transport) continue;
+                    if (sw->transportId() != qs(sink.transport)) continue;
                     int const addr = sink.address;
                     if (addr < sw->startAddress()
                      || addr >= sw->startAddress() + sw->size()) continue;
@@ -459,7 +459,7 @@ private:
             for (auto const& dp : m_dps->all()) {
                 auto const& src = dp->source();
                 if (!src.has_value()) continue;
-                if (src->transport != qs(b.plc)) continue;
+                if (src->transport != b.plc) continue;
                 if (src->table != core::RegisterTable::HoldingRegister) continue;
                 int const a = src->address;
                 if (a < b.mirrorStart || a >= b.mirrorStart + b.mirrorCount) continue;
@@ -851,10 +851,10 @@ private:
             // stages into the named SinkWindow. QML calls `dp.write(v)` and
             // the new value lands on the PLC at the next flush tick.
             if ((datapoint->kind() == dp::Kind::Command
-                 || datapoint->kind() == dp::Kind::Bidirectional)
+                || datapoint->kind() == dp::Kind::Bidirectional)
                 && datapoint->sink().has_value()
-                && !datapoint->sink()->window.isEmpty()) {
-                QString const windowId = datapoint->sink()->window;
+                && !datapoint->sink()->window.empty()) {
+                QString const windowId = qs(datapoint->sink()->window);
                 datapoint->setWriter([this, weak, windowId](core::dp::Value const& v) {
                     auto sp = weak.lock();
                     if (!sp || !sp->sink().has_value()) return;
