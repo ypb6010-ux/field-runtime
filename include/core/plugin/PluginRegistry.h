@@ -3,8 +3,8 @@
 #pragma once
 
 #include <memory>
-#include <QList>
-#include <QString>
+#include <string>
+#include <vector>
 
 #include "core/core_global.h"
 
@@ -20,10 +20,10 @@ public:
 
     CORE_DISABLE_COPY_MOVE(PluginRegistry)
 
-    bool             load(QString const& dllPath);
+    bool             load(std::string const& dllPath);
     void             unloadAll();
     void             registerAllPorts(PortRegistry& reg);
-    QList<Plugin*>   all() const;
+    std::vector<Plugin*> all() const;
 
 private:
     class Impl;

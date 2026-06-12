@@ -314,7 +314,7 @@ private:
             QString dll = qs(pc.dllPath);
             if (QFileInfo(dll).isRelative() && !m_configDir.isEmpty())
                 dll = QDir(m_configDir).filePath(dll);
-            if (!m_plugins->load(dll)) {
+            if (!m_plugins->load(dll.toStdString())) {
                 m_logger->logf(log::LogLevel::Error, QStringLiteral("plugin"), dll,
                                QStringLiteral("failed to load plugin '%1'").arg(qs(pc.name)));
             }

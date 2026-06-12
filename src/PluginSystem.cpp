@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <QLibrary>
+#include <QString>
 
 #include "core/bus/BusEvents.h"
 #include "core/bus/EventBus.h"
@@ -66,9 +67,9 @@ public:
 PluginRegistry::PluginRegistry()  : m_impl(std::make_unique<Impl>()) {}
 PluginRegistry::~PluginRegistry() { unloadAll(); }
 
-bool PluginRegistry::load(QString const& dllPath) {
+bool PluginRegistry::load(std::string const& dllPath) {
     using CreateFn = Plugin* (*)();
-    auto* lib = new QLibrary(dllPath);
+    auto* lib = new QLibrary(QString::fromStdString(dllPath));
     if (!lib->load()) { delete lib; return false; }
     auto create = reinterpret_cast<CreateFn>(lib->resolve("corePluginCreate"));
     if (!create) { lib->unload(); delete lib; return false; }
@@ -92,10 +93,10 @@ void PluginRegistry::registerAllPorts(PortRegistry& reg) {
     for (auto& l : m_impl->loaded) l.plugin->registerPorts(reg);
 }
 
-QList<Plugin*> PluginRegistry::all() const {
-    QList<Plugin*> out;
-    out.reserve(int(m_impl->loaded.size()));
-    for (auto& l : m_impl->loaded) out.append(l.plugin);
+std::vector<Plugin*> PluginRegistry::all() const {
+    std::vector<Plugin*> out;
+    out.reserve(m_impl->loaded.size());
+    for (auto& l : m_impl->loaded) out.push_back(l.plugin);
     return out;
 }
 

@@ -3,7 +3,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <memory>
-#include <QDateTime>
 
 #include "core/bus/BusEvents.h"
 #include "core/bus/EventBus.h"
@@ -74,6 +73,6 @@ TEST_CASE("PortRegistry.bindOut writes an OutPort value to its datapoint",
 
 TEST_CASE("PluginRegistry.load fails cleanly on a missing DLL", "[plugin]") {
     plugin::PluginRegistry reg;
-    REQUIRE_FALSE(reg.load(QStringLiteral("no_such_plugin_xyz")));
-    REQUIRE(reg.all().isEmpty());
+    REQUIRE_FALSE(reg.load("no_such_plugin_xyz"));
+    REQUIRE(reg.all().empty());
 }
