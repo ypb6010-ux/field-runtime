@@ -50,8 +50,8 @@ int main(int argc, char* argv[]) {
                                     : QStringLiteral(DASHBOARD_TOML);
     if (auto r = core->loadConfig(toml); !r.has_value()) {
         for (auto const& e : r.error())
-            qWarning("[config] %s.%s: %s", qPrintable(e.section),
-                     qPrintable(e.field), qPrintable(e.message));
+            qWarning("[config] %s.%s: %s", e.section.c_str(),
+                     e.field.c_str(), e.message.c_str());
         return 1;
     }
 

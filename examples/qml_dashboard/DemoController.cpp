@@ -8,6 +8,7 @@
 #include "core/dp/Datapoint.h"
 #include "core/dp/DatapointRegistry.h"
 #include "core/dp/PortRef.h"
+#include "core/dp/ValueQt.h"
 #include "core/log/Logger.h"
 #include "core/transport/Transport.h"
 #include "core/transport/TransportTypes.h"
@@ -82,9 +83,9 @@ void DemoController::refresh() {
             if (auto* t = m_core.transport(srcId)) srcKind = kindText(t->kind());
         }
         datapoints.append(QVariantMap{
-            {QStringLiteral("id"),         dp->id()},
-            {QStringLiteral("value"),      dp->value().toString()},
-            {QStringLiteral("state"),      dp->stateText()},
+            {QStringLiteral("id"),         QString::fromStdString(dp->id())},
+            {QStringLiteral("value"),      core::dp::toQVariant(dp->value())},
+            {QStringLiteral("state"),      QString::fromStdString(dp->stateText())},
             {QStringLiteral("sourceId"),   srcId},
             {QStringLiteral("sourceKind"), srcKind.isEmpty()
                                               ? QStringLiteral("—") : srcKind},
@@ -109,15 +110,16 @@ void DemoController::setLogLevel(int level) {
 
 void DemoController::emitOperation(QString action, QString target) {
     core::log::OperationRecord op;
-    op.actor  = QStringLiteral("ui:user");
-    op.action = std::move(action);
-    op.target = std::move(target);
-    op.result = QStringLiteral("ok");
+    op.actor  = "ui:user";
+    op.action = action.toStdString();
+    op.target = target.toStdString();
+    op.result = "ok";
     m_core.logger().logOperation(std::move(op));
 }
 
 void DemoController::writeDatapoint(QString id, QVariant value) {
-    if (auto dp = m_core.datapoints().find(id)) dp->write(std::move(value));
+    if (auto dp = m_core.datapoints().find(id.toStdString()))
+        dp->write(core::dp::fromQVariant(value));
 }
 
 void DemoController::appendLog(QVariantMap record) {

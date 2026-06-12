@@ -38,18 +38,18 @@ int main(int argc, char* argv[]) {
     auto loaded = core->loadConfig(path);
     if (!loaded.has_value()) {
         for (auto const& e : loaded.error()) {
-            out << "[config] " << e.section << "." << e.field
-                << ": " << e.message << "\n";
+            out << "[config] " << e.section.c_str() << "." << e.field.c_str()
+                << ": " << e.message.c_str() << "\n";
         }
         return 1;
     }
 
     auto subStats = core->bus().subscribe<core::bus::SchedulerStatsEvent>(
         [&out, &core](core::bus::SchedulerStatsEvent const& s) {
-            auto* t = core->transport(s.transportId);
+            auto* t = core->transport(QString::fromStdString(s.transportId));
             out << QStringLiteral("[%1] %2  q=%3  inflight=%4  p50=%5ms  "
                                    "p99=%6ms  done=%7  fail=%8  circuit=%9\n")
-                       .arg(s.transportId)
+                       .arg(QString::fromStdString(s.transportId))
                        .arg(t ? stateChar(t->state()) : QStringLiteral("?"))
                        .arg(s.stats.queueDepth)
                        .arg(s.stats.inflight)
@@ -69,7 +69,7 @@ int main(int argc, char* argv[]) {
                 case core::bus::TransportEventKind::Disconnected: kindStr = "Disconnected"; break;
                 default: kindStr = "Other"; break;
             }
-            out << "[event] " << e.transportId << " → " << kindStr << "\n";
+            out << "[event] " << e.transportId.c_str() << " → " << kindStr << "\n";
             out.flush();
         });
 

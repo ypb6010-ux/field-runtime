@@ -33,21 +33,21 @@ int main(int argc, char* argv[]) {
     auto loaded = core->loadConfig(path);
     if (!loaded.has_value()) {
         for (auto const& e : loaded.error()) {
-            out << "[config] " << e.section << "." << e.field
-                << ": " << e.message << "\n";
+            out << "[config] " << e.section.c_str() << "." << e.field.c_str()
+                << ": " << e.message.c_str() << "\n";
         }
         return 1;
     }
 
     auto subWrites = core->bus().subscribe<core::bus::ServerWriteEvent>(
         [&out](core::bus::ServerWriteEvent const& e) {
-            out << "[operator-box] write to " << e.transportId
+            out << "[operator-box] write to " << e.transportId.c_str()
                 << " @" << e.startAddress << " ×" << e.values.size() << "\n";
             out.flush();
         });
     auto subStats = core->bus().subscribe<core::bus::SchedulerStatsEvent>(
         [&out](core::bus::SchedulerStatsEvent const& s) {
-            out << "[stats] " << s.transportId
+            out << "[stats] " << s.transportId.c_str()
                 << "  queue=" << s.stats.queueDepth
                 << "  inflight=" << s.stats.inflight
                 << "  p99=" << s.stats.p99LatencyMs << "ms"

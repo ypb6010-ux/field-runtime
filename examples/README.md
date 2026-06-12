@@ -12,6 +12,7 @@ Qt 路径默认 `D:/developer/3rdparty/Qt/6.8.3/msvc2022_64`,不对就先 `! exp
 
 | 示例 | 命令 | 说明 |
 |---|---|---|
+| **Modbus 网关 HMI** | `run.sh example_modbus_hmi` | 连接参数配置 + 数据点配置 + 实时数据 + 协议转换控制(操作箱 Modbus server ↔ PLC 桥接)的 QML 演示,内置模拟 PLC。带窗口 GUI。无头自检:`QT_QPA_PLATFORM=offscreen HMI_SELFTEST=1 run.sh example_modbus_hmi`。详见 `modbus_hmi/README.md`。 |
 | **QML 面板** | `run.sh example_qml_dashboard` | 日志系统 + 数据库 + 多来源(Modbus/MQTT/OPC UA)的 QML 演示,内置模拟 PLC。带窗口 GUI。History 页需本地 Postgres(`jmj_core`,自动建表);不起也能看前两页。 |
 | **延迟诊断** | `run.sh diag_modbus_latency --inproc --port 5599` | 对比"主线程 vs worker 线程"的 modbus 读延迟(同进程内嵌 server)。控制台输出。 |
 | 延迟诊断(独立 server) | `run.sh diag_modbus_latency --serve --port 5599`<br>另开一个:`run.sh diag_modbus_latency --host 127.0.0.1 --port 5599` | 跨进程对照 |

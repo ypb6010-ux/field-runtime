@@ -13,6 +13,26 @@ target_link_libraries(example_stats_dashboard PRIVATE Core::Core Qt6::Core)
 add_executable(diag_modbus_latency diag_modbus_latency/main.cpp)
 target_link_libraries(diag_modbus_latency PRIVATE Core::Core Qt6::Core Qt6::SerialBus)
 
+# ── modbus_hmi: QML HMI — datapoint + connection config, live data, bridge ──
+if(CORE_BUILD_QML)
+    find_package(Qt6 REQUIRED COMPONENTS Gui Qml Quick QuickControls2 SerialBus)
+
+    qt_add_executable(example_modbus_hmi
+        modbus_hmi/main.cpp
+        modbus_hmi/GatewayController.cpp
+        modbus_hmi/GatewayController.h
+        modbus_hmi/SimulatedPlc.cpp
+        modbus_hmi/SimulatedPlc.h
+        modbus_hmi/UiLogSink.h
+        modbus_hmi/qml.qrc
+    )
+    set_target_properties(example_modbus_hmi PROPERTIES AUTOMOC ON AUTORCC ON)
+    target_include_directories(example_modbus_hmi PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/modbus_hmi)
+    target_link_libraries(example_modbus_hmi PRIVATE
+        Core::Core Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::SerialBus)
+endif()
+
 # ── qml_dashboard: QML showcase for the logging + persistence modules ──────
 if(CORE_BUILD_QML)
     find_package(Qt6 REQUIRED COMPONENTS Gui Qml Quick QuickControls2)

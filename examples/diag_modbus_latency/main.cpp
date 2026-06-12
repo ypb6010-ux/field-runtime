@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
         std::printf("connected to %s:%d (inproc=%d)\n", qPrintable(host), port, int(inproc));
 
         ReadRequest req;
-        req.table = QModbusDataUnit::HoldingRegisters;
+        req.table = core::RegisterTable::HoldingRegister;
         req.startAddress = 0;
         req.count = 8;
 
@@ -160,7 +160,7 @@ int main(int argc, char** argv) {
         static std::thread worker;
         worker = std::thread([&app, srvThread]() {
             ReadRequest wreq;
-            wreq.table = QModbusDataUnit::HoldingRegisters;
+            wreq.table = core::RegisterTable::HoldingRegister;
             wreq.startAddress = 0; wreq.count = 8;
             std::vector<int> wMs; int wOk = 0;
             for (int i = 0; i < 10; ++i) {

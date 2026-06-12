@@ -2,30 +2,29 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include <QDateTime>
 #include <QMetaObject>
 #include <QPointer>
 #include <QString>
 #include <QVariantMap>
 
 #include "core/dp/TimeQt.h"
+#include "core/dp/ValueQt.h"
 #include "core/log/ILogSink.h"
 #include "core/log/Logger.h"
 
-#include "DemoController.h"
+#include "GatewayController.h"
 
-// A custom ILogSink that feeds the live log view in QML — demonstrates the
-// registerable-sink extension point. write() runs on the logger's dispatch
-// thread, so each record is marshalled to the GUI thread via a queued call.
+// Feeds the live log view in QML. write() runs on the logger's dispatch thread,
+// so each record is marshalled to the GUI thread via a queued call. Adapts the
+// Qt-free LogRecord / OperationRecord (std::string + std::chrono) to QVariantMap.
 class UiLogSink : public core::log::ILogSink {
 public:
-    explicit UiLogSink(DemoController* c) : m_ctrl(c) {}
+    explicit UiLogSink(GatewayController* c) : m_ctrl(c) {}
 
     void write(core::log::LogRecord const& r) override {
         post(QVariantMap{
             {QStringLiteral("kind"),     QStringLiteral("system")},
             {QStringLiteral("ts"),       hms(r.ts)},
-            {QStringLiteral("level"),    int(r.level)},
             {QStringLiteral("badge"),    QString::fromLatin1(core::log::levelName(r.level))},
             {QStringLiteral("category"), QString::fromStdString(r.category)},
             {QStringLiteral("source"),   QString::fromStdString(r.source)},
@@ -37,7 +36,6 @@ public:
         post(QVariantMap{
             {QStringLiteral("kind"),     QStringLiteral("operation")},
             {QStringLiteral("ts"),       hms(r.ts)},
-            {QStringLiteral("level"),    -1},
             {QStringLiteral("badge"),    QStringLiteral("OP")},
             {QStringLiteral("category"), QString::fromStdString(r.actor)},
             {QStringLiteral("source"),   QString::fromStdString(r.target)},
@@ -59,5 +57,5 @@ private:
                                   Q_ARG(QVariantMap, m));
     }
 
-    QPointer<DemoController> m_ctrl;
+    QPointer<GatewayController> m_ctrl;
 };

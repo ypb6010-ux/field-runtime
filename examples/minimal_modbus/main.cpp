@@ -18,6 +18,8 @@
 #include "core/bus/EventBus.h"
 #include "core/dp/Datapoint.h"
 #include "core/dp/DatapointRegistry.h"
+#include "core/dp/TimeQt.h"
+#include "core/dp/Value.h"
 
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
@@ -31,8 +33,8 @@ int main(int argc, char* argv[]) {
     auto loaded = core->loadConfig(path);
     if (!loaded.has_value()) {
         for (auto const& e : loaded.error()) {
-            out << "[config] " << e.section << "." << e.field
-                << " (line " << e.lineNumber << "): " << e.message << "\n";
+            out << "[config] " << e.section.c_str() << "." << e.field.c_str()
+                << " (line " << e.lineNumber << "): " << e.message.c_str() << "\n";
         }
         return 1;
     }
@@ -40,8 +42,9 @@ int main(int argc, char* argv[]) {
     // Print every datapoint update.
     auto sub = core->bus().subscribe<core::bus::DpChanged>(
         [&out](core::bus::DpChanged const& e) {
-            out << e.timestamp.toString("HH:mm:ss.zzz")
-                << "  " << e.id << " = " << e.value.toString() << "\n";
+            out << core::dp::toQDateTime(e.timestamp).toString(QStringLiteral("HH:mm:ss.zzz"))
+                << "  " << e.id.c_str() << " = "
+                << core::dp::toString(e.value).c_str() << "\n";
             out.flush();
         });
 
