@@ -55,8 +55,8 @@ bool waitDp(ICore& core, QString const& id, quint16 expected, int timeoutMs = 20
                         + std::chrono::milliseconds(timeoutMs);
     while (std::chrono::steady_clock::now() < deadline) {
         internal::pollAllOnce(core);
-        auto dp = core.datapoints().find(id);
-        if (dp && quint16(dp->value().toUInt()) == expected) return true;
+        auto dp = core.datapoints().find(id.toStdString());
+        if (dp && quint16(core::dp::toUInt64(dp->value())) == expected) return true;
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     return false;

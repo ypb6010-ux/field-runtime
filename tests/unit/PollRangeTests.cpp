@@ -19,7 +19,7 @@ using Catch::Matchers::WithinAbs;
 
 namespace {
 
-dp::DatapointSpec dpSpec(QString const& id,
+dp::DatapointSpec dpSpec(std::string const& id,
                           dp::ScalarType  type,
                           int             address,
                           dp::WordOrder   wo = dp::WordOrder::ABCD,
@@ -83,8 +83,8 @@ TEST_CASE("PollRange dispatches decoded values into bound datapoints",
 
     auto r = poll.pollOnce();
     REQUIRE(r.kind == sched::ResultKind::Ok);
-    REQUIRE(a->value().value<quint16>() == 0x42);
-    REQUIRE_THAT(b->value().toDouble(), WithinAbs(20.0, 1e-9));
+    REQUIRE(dp::toUInt64(a->value()) == 0x42);
+    REQUIRE_THAT(dp::toDouble(b->value()), WithinAbs(20.0, 1e-9));
     REQUIRE(a->state() == dp::DpState::Ok);
     REQUIRE(b->state() == dp::DpState::Ok);
 }
@@ -103,7 +103,7 @@ TEST_CASE("PollRange decodes multi-register datapoints honouring word order",
     mock.enqueueReadValues({0x0000, 0x41BC});
 
     REQUIRE(poll.pollOnce().kind == sched::ResultKind::Ok);
-    REQUIRE_THAT(dpt->value().toDouble(), WithinAbs(23.5, 1e-6));
+    REQUIRE_THAT(dp::toDouble(dpt->value()), WithinAbs(23.5, 1e-6));
 }
 
 TEST_CASE("PollRange propagates transport errors to bound datapoints",
@@ -186,7 +186,7 @@ TEST_CASE("PollRange.stop() pauses ticks and resume() restarts them",
     mock.enqueueReadValues({0x77});
     auto r2 = poll.pollOnce();
     REQUIRE(r2.kind == core::sched::ResultKind::Ok);
-    REQUIRE(dpt->value().value<quint16>() == 0x77);
+    REQUIRE(dp::toUInt64(dpt->value()) == 0x77);
 }
 
 TEST_CASE("PollRange uses its moduleId for the scheduler tag",
@@ -231,7 +231,7 @@ TEST_CASE("PollRange.driveTick dispatches decoded values via the async path",
     poll.driveTick();   // sync mock async → completes inline
 
     REQUIRE(mock.readCount() == 1);
-    REQUIRE(dpt->value().value<quint16>() == 0x55);
+    REQUIRE(dp::toUInt64(dpt->value()) == 0x55);
     REQUIRE(dpt->state() == dp::DpState::Ok);
 }
 
@@ -254,13 +254,13 @@ TEST_CASE("PollRange.driveTick coalesces while a read is still in flight",
     REQUIRE(mock.readCount() == 1);
 
     REQUIRE(mock.completeNextRead());       // finish the first read
-    REQUIRE(dpt->value().value<quint16>() == 0x11);
+    REQUIRE(dp::toUInt64(dpt->value()) == 0x11);
 
     mock.enqueueReadValues({0x22});
     poll.driveTick();                       // guard freed → a new read fires
     REQUIRE(mock.readCount() == 2);
     REQUIRE(mock.completeNextRead());
-    REQUIRE(dpt->value().value<quint16>() == 0x22);
+    REQUIRE(dp::toUInt64(dpt->value()) == 0x22);
 }
 
 TEST_CASE("PollRange.driveTick marks Stale and frees the guard when rejected",

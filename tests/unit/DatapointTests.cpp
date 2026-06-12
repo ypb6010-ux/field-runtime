@@ -2,18 +2,18 @@
 // SPDX-License-Identifier: MPL-2.0
 #include <catch2/catch_test_macros.hpp>
 
-#include <QSignalSpy>
+#include <cstdint>
 #include <memory>
 
 #include "core/dp/Datapoint.h"
 #include "core/dp/DatapointRegistry.h"
-#include "core/dp/ValueQt.h"
+#include "core/dp/Value.h"
 
 using namespace core::dp;
 
 namespace {
 
-DatapointSpec specFor(QString const& id,
+DatapointSpec specFor(std::string const& id,
                        Kind            kind = Kind::Status,
                        ScalarType      type = ScalarType::U16) {
     DatapointSpec s;
@@ -31,73 +31,78 @@ TEST_CASE("Datapoint starts in Missing state with no value", "[dp]") {
     REQUIRE(d.state() == DpState::Missing);
     REQUIRE(d.stateText() == "Missing");
     REQUIRE_FALSE(d.valid());
-    REQUIRE_FALSE(d.value().isValid());
+    REQUIRE(isNull(d.value()));
 }
 
-TEST_CASE("Datapoint.setValue transitions to Ok and emits valueChanged",
+TEST_CASE("Datapoint.setValue transitions to Ok and fires onValueChanged",
           "[dp]") {
     Datapoint d(specFor("foo"));
-    QSignalSpy valueSpy(&d, &Datapoint::valueChanged);
-    QSignalSpy stateSpy(&d, &Datapoint::stateChanged);
+    int valueCount = 0;
+    int stateCount = 0;
+    d.setOnValueChanged([&] { ++valueCount; });
+    d.setOnStateChanged([&] { ++stateCount; });
 
-    d.setValue(42);
+    d.setValue(std::int64_t(42));
 
-    REQUIRE(d.value().toInt() == 42);
+    REQUIRE(toInt64(d.value()) == 42);
     REQUIRE(d.valid());
     REQUIRE(d.state() == DpState::Ok);
-    REQUIRE(valueSpy.count() == 1);
-    REQUIRE(stateSpy.count() == 1);
+    REQUIRE(valueCount == 1);
+    REQUIRE(stateCount == 1);
 }
 
-TEST_CASE("Datapoint.setValue does not re-emit when value is unchanged",
+TEST_CASE("Datapoint.setValue does not re-notify when value is unchanged",
           "[dp]") {
     Datapoint d(specFor("foo"));
-    d.setValue(7);
+    d.setValue(std::int64_t(7));
 
-    QSignalSpy valueSpy(&d, &Datapoint::valueChanged);
+    int valueCount = 0;
+    d.setOnValueChanged([&] { ++valueCount; });
 
-    d.setValue(7);   // identical value
-    REQUIRE(valueSpy.count() == 0);
+    d.setValue(std::int64_t(7));   // identical value
+    REQUIRE(valueCount == 0);
 
-    d.setValue(8);
-    REQUIRE(valueSpy.count() == 1);
+    d.setValue(std::int64_t(8));
+    REQUIRE(valueCount == 1);
 }
 
-TEST_CASE("Datapoint.setState changes state and emits both signals",
+TEST_CASE("Datapoint.setState changes state and fires both callbacks",
           "[dp]") {
     Datapoint d(specFor("foo"));
-    d.setValue(1);
+    d.setValue(std::int64_t(1));
 
-    QSignalSpy valueSpy(&d, &Datapoint::valueChanged);
-    QSignalSpy stateSpy(&d, &Datapoint::stateChanged);
+    int valueCount = 0;
+    int stateCount = 0;
+    d.setOnValueChanged([&] { ++valueCount; });
+    d.setOnStateChanged([&] { ++stateCount; });
 
     d.setState(DpState::Stale);
     REQUIRE(d.state() == DpState::Stale);
     REQUIRE(d.stateText() == "Stale");
     REQUIRE_FALSE(d.valid());
-    REQUIRE(stateSpy.count() == 1);
-    REQUIRE(valueSpy.count() == 1);   // valid Q_PROPERTY also rebinds
+    REQUIRE(stateCount == 1);
+    REQUIRE(valueCount == 1);   // a `valid` QML binding also rebinds
 }
 
 TEST_CASE("Datapoint.write invokes the registered writer", "[dp][write]") {
     Datapoint d(specFor("cmd", Kind::Command, ScalarType::Bool));
 
-    QVariant received;
+    Value received;
     int calls = 0;
-    d.setWriter([&](core::dp::Value const& v) { received = core::dp::toQVariant(v); ++calls; });
+    d.setWriter([&](Value const& v) { received = v; ++calls; });
 
     d.write(true);
     REQUIRE(calls == 1);
-    REQUIRE(received.toBool());
+    REQUIRE(toBool(received));
 
     d.write(false);
     REQUIRE(calls == 2);
-    REQUIRE_FALSE(received.toBool());
+    REQUIRE_FALSE(toBool(received));
 }
 
 TEST_CASE("Datapoint.write without a writer is a no-op", "[dp][write]") {
     Datapoint d(specFor("cmd", Kind::Command));
-    REQUIRE_NOTHROW(d.write(123));
+    REQUIRE_NOTHROW(d.write(std::int64_t(123)));
 }
 
 TEST_CASE("DatapointRegistry stores and retrieves datapoints",

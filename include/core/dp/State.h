@@ -5,10 +5,10 @@
 // --- core-base ---------------------------------------------------------------
 // Qt-free reactive runtime state of a datapoint: the decoded value, its
 // validity/quality, and the timestamp of the last update. This is the part the
-// core logic (poll/route) reads and writes; the QObject Datapoint (Qt layer)
-// composes a State and marshals it to QML (value -> QVariant, timestamp ->
-// QDateTime). Keeping State Qt-free is what lets a Qt-free build carry datapoint
-// state without QtCore.
+// core logic (poll/route) reads and writes; the Qt-free dp::Datapoint model
+// holds a State, and the Qt wrapper (core/qml/QtDatapoint) marshals it to QML
+// (value -> QVariant, timestamp -> QDateTime). Keeping State Qt-free is what
+// lets a Qt-free build carry datapoint state without QtCore.
 
 #include <chrono>
 

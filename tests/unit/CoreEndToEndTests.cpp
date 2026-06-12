@@ -134,10 +134,10 @@ source = { port="tcp1", table="HR", addr=4, wordOrder="CDAB" }
     REQUIRE(u16->valid());
     REQUIRE(temp->valid());
     REQUIRE(sp->valid());
-    REQUIRE(u16->value().value<quint16>() == 0x42);
+    REQUIRE(core::dp::toUInt64(u16->value()) == 0x42);
     // raw 600 * 0.1 + (-40) = 20.0
-    REQUIRE_THAT(temp->value().toDouble(), WithinAbs(20.0, 1e-6));
-    REQUIRE_THAT(sp->value().toDouble(),   WithinAbs(23.5, 1e-6));
+    REQUIRE_THAT(core::dp::toDouble(temp->value()), WithinAbs(20.0, 1e-6));
+    REQUIRE_THAT(core::dp::toDouble(sp->value()),   WithinAbs(23.5, 1e-6));
 
     core->stop();
 }

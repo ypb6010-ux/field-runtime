@@ -19,7 +19,7 @@ using namespace core;
 
 namespace {
 
-dp::DatapointSpec specFor(QString const& id,
+dp::DatapointSpec specFor(std::string const& id,
                           dp::Kind kind = dp::Kind::Status,
                           dp::ScalarType type = dp::ScalarType::U16) {
     dp::DatapointSpec s;

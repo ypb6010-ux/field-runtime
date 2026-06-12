@@ -111,18 +111,26 @@ BytePermutation permutationFor(WordOrder w, int byteCount) noexcept {
 // once it grows beyond a single lookup.
 // ---------------------------------------------------------------------------
 #include "core/qml/DatapointQmlBridge.h"
+#include "core/qml/QtDatapoint.h"
 #include "core/dp/DatapointRegistry.h"
 #include "core/dp/Datapoint.h"
 
 namespace core::qml {
 
-DatapointQmlBridge::DatapointQmlBridge(dp::DatapointRegistry& reg, QObject* parent)
-    : QObject(parent), m_registry(reg) {}
+DatapointQmlBridge::DatapointQmlBridge(dp::DatapointRegistry& reg,
+                                       bus::EventBus& bus, QObject* parent)
+    : QObject(parent), m_registry(reg), m_bus(bus) {}
 
 DatapointQmlBridge::~DatapointQmlBridge() = default;
 
-dp::Datapoint* DatapointQmlBridge::dp(QString const& id) const {
-    return m_registry.find(id).get();
+QtDatapoint* DatapointQmlBridge::dp(QString const& id) {
+    auto const key = id.toStdString();
+    if (auto it = m_cache.find(key); it != m_cache.end()) return it->second;
+    auto model = m_registry.find(key);
+    if (!model) return nullptr;
+    auto* wrapper = new QtDatapoint(std::move(model), m_bus, this);
+    m_cache.emplace(key, wrapper);
+    return wrapper;
 }
 
 } // namespace core::qml

@@ -79,7 +79,7 @@ dp::WordOrder wordOrderFromString(QString const& s) {
     return dp::WordOrder::ABCD;
 }
 
-dp::Kind kindFromString(QString const& s) {
+dp::Kind kindFromString(std::string const& s) {
     if (s == "Command")       return dp::Kind::Command;
     if (s == "Bidirectional") return dp::Kind::Bidirectional;
     return dp::Kind::Status;
@@ -404,8 +404,8 @@ private:
         // whose source address falls within the written range, then call
         // stageRegister on the SinkWindow associated with the `to` datapoint.
         for (auto const& r : m_routes) {
-            auto fromIt = m_datapointById.find(qs(r.from));
-            auto toIt   = m_datapointById.find(qs(r.to));
+            auto fromIt = m_datapointById.find(r.from);
+            auto toIt   = m_datapointById.find(r.to);
             if (fromIt == m_datapointById.end() || toIt == m_datapointById.end()) continue;
             auto const& fromDp = fromIt->second;
             auto const& toDp   = toIt->second;
@@ -533,7 +533,7 @@ public:
             core::RegisterWords values(b.mirrorCount, quint16(0));
             for (auto const& [addr, dp] : m_bridgeMirrors[size_t(i)]) {
                 int const idx = addr - b.mirrorStart;
-                if (idx >= 0 && idx < b.mirrorCount) values[idx] = quint16(dp->value().toUInt());
+                if (idx >= 0 && idx < b.mirrorCount) values[idx] = quint16(dp::toUInt64(dp->value()));
             }
             transport::WriteBatch batch;
             batch.table        = core::RegisterTable::HoldingRegister;
@@ -728,7 +728,7 @@ private:
         }
     }
 
-    using DpById = std::map<QString, std::shared_ptr<dp::Datapoint>>;
+    using DpById = std::map<std::string, std::shared_ptr<dp::Datapoint>>;
 
     void buildSinkWindows(config::ConfigSchema const& schema) {
         for (auto const& sc : schema.sinkWindows) {
@@ -814,33 +814,37 @@ private:
             }
 
             dp::DatapointSpec spec;
-            spec.id         = qs(dc.id);
-            spec.kind       = kindFromString(qs(dc.kind));
+            spec.id         = dc.id;
+            spec.kind       = kindFromString(dc.kind);
             spec.type       = dc.type;
             if (dc.hasSource) spec.source = makePortRef(dc.source, sourceCodec);
             if (dc.hasSink) {
                 spec.sink = makePortRef(dc.sink,
                     m_codecs->find(codec::BuiltinScalarCodec::idFor(dc.type)));
             }
-            spec.uiBinding  = qs(dc.ui);
-            spec.persistTag = qs(dc.persist);
+            spec.uiBinding  = dc.ui;
+            spec.persistTag = dc.persist;
 
             auto datapoint = std::make_shared<dp::Datapoint>(std::move(spec));
             m_dps->registerDp(datapoint);
-            out.emplace(qs(dc.id), datapoint);
-            m_datapointById.emplace(qs(dc.id), datapoint);
+            out.emplace(dc.id, datapoint);
+            m_datapointById.emplace(dc.id, datapoint);
 
             // Auto-publish DpChanged on every value change so plugins /
-            // database / dashboard subscribers don't need to poll.
+            // database / dashboard subscribers don't need to poll. The model is
+            // Qt-free now, so we hop to the bus (QObject) thread ourselves to
+            // preserve the old queued-signal semantics: setValue runs on a
+            // transport worker thread, DpChanged is published on the bus thread.
             std::weak_ptr<dp::Datapoint> weak = datapoint;
-            QObject::connect(datapoint.get(), &dp::Datapoint::valueChanged,
-                m_bus.get(), [this, weak] {
+            datapoint->setOnValueChanged([this, weak] {
+                QMetaObject::invokeMethod(m_bus.get(), [this, weak] {
                     auto sp = weak.lock();
                     if (!sp) return;
                     auto const snap = sp->snapshot();
                     m_bus->publish(bus::DpChanged{
-                        sp->id().toStdString(), snap.value, snap.timestamp});
-                });
+                        sp->id(), snap.value, snap.timestamp});
+                }, Qt::QueuedConnection);
+            });
 
             // For Command / Bidirectional datapoints with a SinkWindow sink,
             // wire a writer that encodes the value through the codec then
@@ -907,7 +911,7 @@ private:
             int const rc     = dp::registerCountFor(dc.type);
             int const offset = dc.source.address - req.startAddress;
             if (offset < 0 || offset + rc > req.count) continue;
-            auto itDp = byId.find(qs(dc.id));
+            auto itDp = byId.find(dc.id);
             if (itDp == byId.end()) continue;
 
             auto codec = m_codecs->find(dc.source.codec.empty()
@@ -934,7 +938,7 @@ private:
     bool                                                        m_started = false;
     std::vector<module::PollRange*>                             m_pollRangePtrs;
     std::vector<module::SinkWindow*>                            m_sinkWindowPtrs;
-    std::map<QString, std::shared_ptr<dp::Datapoint>>           m_datapointById;
+    std::map<std::string, std::shared_ptr<dp::Datapoint>>      m_datapointById;
     std::vector<config::RouteConfig>                            m_routes;
     std::vector<config::BridgeConfig>                           m_bridges;
     std::vector<std::vector<std::pair<int, std::shared_ptr<dp::Datapoint>>>> m_bridgeMirrors;

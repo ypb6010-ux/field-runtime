@@ -4,8 +4,8 @@
 
 #include <map>
 #include <memory>
-#include <QList>
-#include <QString>
+#include <string>
+#include <vector>
 
 #include "core/core_global.h"
 
@@ -21,11 +21,11 @@ public:
     CORE_DISABLE_COPY_MOVE(DatapointRegistry)
 
     void                       registerDp(std::shared_ptr<Datapoint> dp);
-    std::shared_ptr<Datapoint> find(QString const& id) const;
-    QList<std::shared_ptr<Datapoint>> all() const;
+    std::shared_ptr<Datapoint> find(std::string const& id) const;
+    std::vector<std::shared_ptr<Datapoint>> all() const;
 
 private:
-    std::map<QString, std::shared_ptr<Datapoint>> m_byId;
+    std::map<std::string, std::shared_ptr<Datapoint>> m_byId;
 };
 
 } // namespace core::dp

@@ -2,18 +2,25 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
+#include <map>
+#include <string>
+
 #include <QObject>
 #include <QString>
 
 #include "core/core_global.h"
 
-namespace core::dp { class Datapoint; class DatapointRegistry; }
+namespace core::dp  { class DatapointRegistry; }
+namespace core::bus { class EventBus; }
 
 namespace core::qml {
 
-// Thin QObject that lets QML look up datapoints by id. The returned Datapoint
-// is itself a QObject with `value` Q_PROPERTY + NOTIFY, so QML binds to its
-// `value` directly and updates automatically when it changes.
+class QtDatapoint;
+
+// Thin QObject that lets QML look up datapoints by id. The returned QtDatapoint
+// is a QObject with a `value` Q_PROPERTY + NOTIFY, so QML binds to its `value`
+// directly and updates automatically when it changes. Wrappers are created on
+// demand and cached (owned as children of the bridge).
 //
 // Usage:
 //   Text   { text: bridge.dp("belt2.run_state").value }
@@ -21,14 +28,17 @@ namespace core::qml {
 class CORE_EXPORT DatapointQmlBridge : public QObject {
     Q_OBJECT
 public:
-    explicit DatapointQmlBridge(dp::DatapointRegistry& registry,
-                                QObject* parent = nullptr);
+    DatapointQmlBridge(dp::DatapointRegistry& registry,
+                       bus::EventBus& bus,
+                       QObject* parent = nullptr);
     ~DatapointQmlBridge() override;
 
-    Q_INVOKABLE dp::Datapoint* dp(QString const& id) const;
+    Q_INVOKABLE QtDatapoint* dp(QString const& id);
 
 private:
-    dp::DatapointRegistry& m_registry;
+    dp::DatapointRegistry&              m_registry;
+    bus::EventBus&                      m_bus;
+    std::map<std::string, QtDatapoint*> m_cache;
 };
 
 } // namespace core::qml

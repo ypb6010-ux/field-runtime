@@ -18,7 +18,6 @@
 #include "core/bus/Subscription.h"
 #include "core/dp/Datapoint.h"
 #include "core/dp/DatapointRegistry.h"
-#include "core/dp/ValueQt.h"
 #include "core/log/Logger.h"
 
 namespace core::plugin {
@@ -51,7 +50,7 @@ void PortRegistry::bindInErased(std::string const& dpId,
 }
 
 void PortRegistry::writeErased(std::string const& dpId, dp::Value const& value) {
-    if (auto d = m_impl->dps.find(QString::fromStdString(dpId))) d->write(dp::toQVariant(value));
+    if (auto d = m_impl->dps.find(dpId)) d->write(value);
 }
 
 // ── PluginRegistry ─────────────────────────────────────────────────────────
