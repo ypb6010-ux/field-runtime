@@ -3,45 +3,62 @@
 #include "core/log/Sinks.h"
 
 #include <cstdio>
+#include <ctime>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <string>
 
-#include <QDir>
-#include <QFile>
-#include <QFileInfo>
-#include <QTextStream>
-
-#include "core/dp/TimeQt.h"
-#include "core/dp/ValueQt.h"
+#include "core/dp/Value.h"
 
 namespace core::log {
 
 namespace {
 
-QString tsString(LogTime ts) {
-    return dp::toQDateTime(ts).toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"));
+std::string pad(std::string s, std::size_t width) {
+    if (s.size() < width) s.append(width - s.size(), ' ');
+    return s;
 }
 
-QString categoryTag(std::string const& category) {
-    QString c = category.empty() ? QStringLiteral("app")
-                                  : QString::fromStdString(category);
-    if (!c.isEmpty()) c[0] = c[0].toUpper();
-    return QStringLiteral("[Core/%1]").arg(c);
+// Local wall-clock "yyyy-MM-dd HH:mm:ss.zzz" — Qt-free, portable.
+std::string tsString(LogTime ts) {
+    auto const sinceEpoch = ts.time_since_epoch();
+    auto const ms = std::chrono::duration_cast<std::chrono::milliseconds>(sinceEpoch).count() % 1000;
+    std::time_t const tt = std::chrono::system_clock::to_time_t(ts);
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &tt);
+#else
+    localtime_r(&tt, &tm);
+#endif
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%04d-%02d-%02d %02d:%02d:%02d.%03d",
+                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                  tm.tm_hour, tm.tm_min, tm.tm_sec, int(ms));
+    return buf;
 }
 
-QString fieldsToString(std::map<std::string, dp::Value> const& fields) {
+std::string categoryTag(std::string const& category) {
+    std::string c = category.empty() ? std::string("app") : category;
+    if (!c.empty() && c[0] >= 'a' && c[0] <= 'z') c[0] = char(c[0] - 'a' + 'A');
+    return "[Core/" + c + "]";
+}
+
+std::string fieldsToString(std::map<std::string, dp::Value> const& fields) {
     if (fields.empty()) return {};
-    QStringList parts;
-    parts.reserve(int(fields.size()));
+    std::string out;
     for (auto const& [key, value] : fields) {
-        parts << QStringLiteral("%1=%2").arg(QString::fromStdString(key),
-                                             QString::fromStdString(dp::toString(value)));
+        out += ' ';
+        out += key;
+        out += '=';
+        out += dp::toString(value);
     }
-    return QLatin1Char(' ') + parts.join(QLatin1Char(' '));
+    return out;
 }
 
-const char* ansiColour(LogLevel level) {
+char const* ansiColour(LogLevel level) {
     switch (level) {
         case LogLevel::Trace:    return "\033[90m";  // bright black
         case LogLevel::Debug:    return "\033[36m";  // cyan
@@ -55,48 +72,59 @@ const char* ansiColour(LogLevel level) {
 
 } // namespace
 
-QString formatLine(LogRecord const& rec) {
-    QString const source  = QString::fromStdString(rec.source);
-    QString const message = QString::fromStdString(rec.message);
-    return QStringLiteral("%1 %2 %3 %4%5")
-        .arg(tsString(rec.ts),
-             QString::fromLatin1(levelName(rec.level)).leftJustified(5),
-             categoryTag(rec.category).leftJustified(16),
-             source.isEmpty() ? message
-                              : QStringLiteral("%1 %2").arg(source, message),
-             fieldsToString(rec.fields));
+std::string formatLine(LogRecord const& rec) {
+    std::string out = tsString(rec.ts);
+    out += ' ';
+    out += pad(levelName(rec.level), 5);
+    out += ' ';
+    out += pad(categoryTag(rec.category), 16);
+    out += ' ';
+    if (rec.source.empty()) {
+        out += rec.message;
+    } else {
+        out += rec.source;
+        out += ' ';
+        out += rec.message;
+    }
+    out += fieldsToString(rec.fields);
+    return out;
 }
 
-QString formatLine(OperationRecord const& rec) {
-    return QStringLiteral("%1 %2 %3 action=%4 target=%5 %6->%7 result=%8%9")
-        .arg(tsString(rec.ts),
-             QStringLiteral("OP   "),
-             QStringLiteral("[Core/Operation]"),
-             QString::fromStdString(rec.action),
-             QString::fromStdString(rec.target),
-             QString::fromStdString(dp::toString(rec.oldValue)),
-             QString::fromStdString(dp::toString(rec.newValue)),
-             QString::fromStdString(rec.result),
-             rec.note.empty() ? QString()
-                              : QStringLiteral(" note=%1").arg(QString::fromStdString(rec.note)))
-        + QStringLiteral(" actor=%1").arg(QString::fromStdString(rec.actor));
+std::string formatLine(OperationRecord const& rec) {
+    std::string out = tsString(rec.ts);
+    out += " OP    [Core/Operation] action=";
+    out += rec.action;
+    out += " target=";
+    out += rec.target;
+    out += ' ';
+    out += dp::toString(rec.oldValue);
+    out += "->";
+    out += dp::toString(rec.newValue);
+    out += " result=";
+    out += rec.result;
+    if (!rec.note.empty()) {
+        out += " note=";
+        out += rec.note;
+    }
+    out += " actor=";
+    out += rec.actor;
+    return out;
 }
 
 // ---------------------------------------------------------------------------
 // ConsoleSink
 // ---------------------------------------------------------------------------
 void ConsoleSink::write(LogRecord const& rec) {
-    QString line = formatLine(rec);
+    std::string const line = formatLine(rec);
     if (m_colour) {
-        std::fprintf(stderr, "%s%s\033[0m\n",
-                     ansiColour(rec.level), line.toUtf8().constData());
+        std::fprintf(stderr, "%s%s\033[0m\n", ansiColour(rec.level), line.c_str());
     } else {
-        std::fprintf(stderr, "%s\n", line.toUtf8().constData());
+        std::fprintf(stderr, "%s\n", line.c_str());
     }
 }
 
 void ConsoleSink::write(OperationRecord const& rec) {
-    std::fprintf(stderr, "%s\n", formatLine(rec).toUtf8().constData());
+    std::fprintf(stderr, "%s\n", formatLine(rec).c_str());
 }
 
 // ---------------------------------------------------------------------------
@@ -104,61 +132,68 @@ void ConsoleSink::write(OperationRecord const& rec) {
 // ---------------------------------------------------------------------------
 class RollingFileSink::Impl {
 public:
-    Impl(QString path, qint64 maxBytes, int maxFiles)
-        : path(std::move(path)), maxBytes(maxBytes), maxFiles(maxFiles) {
-        QFileInfo info(this->path);
-        QDir().mkpath(info.absolutePath());
+    Impl(std::string p, std::int64_t maxBytes, int maxFiles)
+        : path(std::move(p)), maxBytes(maxBytes), maxFiles(maxFiles) {
+        std::error_code ec;
+        std::filesystem::path const fp(path);
+        if (fp.has_parent_path()) std::filesystem::create_directories(fp.parent_path(), ec);
         open();
     }
 
     ~Impl() {
-        if (file.isOpen()) file.close();
+        std::lock_guard lk(mtx);
+        if (file.is_open()) file.close();
     }
 
     void open() {
-        file.setFileName(path);
-        if (file.open(QIODevice::Append | QIODevice::Text)) {
-            stream.setDevice(&file);
-        }
+        file.open(path, std::ios::out | std::ios::app | std::ios::binary);
     }
 
     void rotateIfNeeded() {
-        if (maxBytes <= 0 || file.size() < maxBytes) return;
-        stream.flush();
+        if (maxBytes <= 0) return;
+        std::error_code ec;
+        auto const sz = std::filesystem::file_size(path, ec);
+        if (ec || std::int64_t(sz) < maxBytes) return;
         file.close();
-        // path.(maxFiles-1) is dropped; shift the rest up by one.
-        QString const oldest = QStringLiteral("%1.%2").arg(path).arg(maxFiles);
-        QFile::remove(oldest);
+        // path.<maxFiles> is dropped; shift the rest up by one.
+        std::filesystem::remove(path + "." + std::to_string(maxFiles), ec);
         for (int i = maxFiles - 1; i >= 1; --i) {
-            QString const from = QStringLiteral("%1.%2").arg(path).arg(i);
-            QString const to   = QStringLiteral("%1.%2").arg(path).arg(i + 1);
-            if (QFile::exists(from)) QFile::rename(from, to);
+            auto const from = path + "." + std::to_string(i);
+            auto const to   = path + "." + std::to_string(i + 1);
+            if (std::filesystem::exists(from, ec))
+                std::filesystem::rename(from, to, ec);
         }
-        QFile::rename(path, QStringLiteral("%1.1").arg(path));
+        std::filesystem::rename(path, path + ".1", ec);
         open();
     }
 
-    void writeLine(QString const& line) {
-        if (!file.isOpen()) return;
-        stream << line << '\n';
-        stream.flush();
+    void writeLine(std::string const& line) {
+        std::lock_guard lk(mtx);
+        if (!file.is_open()) return;
+        file << line << '\n';
+        file.flush();
         rotateIfNeeded();
     }
 
-    QString      path;
-    qint64       maxBytes;
-    int          maxFiles;
-    QFile        file;
-    QTextStream  stream;
+    void doFlush() {
+        std::lock_guard lk(mtx);
+        if (file.is_open()) file.flush();
+    }
+
+    std::string   path;
+    std::int64_t  maxBytes;
+    int           maxFiles;
+    std::ofstream file;
+    std::mutex    mtx;
 };
 
-RollingFileSink::RollingFileSink(QString filePath, qint64 maxBytes, int maxFiles)
+RollingFileSink::RollingFileSink(std::string filePath, std::int64_t maxBytes, int maxFiles)
     : m_impl(std::make_unique<Impl>(std::move(filePath), maxBytes, maxFiles)) {}
 
 RollingFileSink::~RollingFileSink() = default;
 
 void RollingFileSink::write(LogRecord const& rec)       { m_impl->writeLine(formatLine(rec)); }
 void RollingFileSink::write(OperationRecord const& rec) { m_impl->writeLine(formatLine(rec)); }
-void RollingFileSink::flush()                           { m_impl->stream.flush(); }
+void RollingFileSink::flush()                           { m_impl->doFlush(); }
 
 } // namespace core::log

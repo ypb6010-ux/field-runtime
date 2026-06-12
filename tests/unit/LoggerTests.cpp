@@ -188,17 +188,19 @@ TEST_CASE("Logger gates operation records by category", "[logger]") {
 }
 
 TEST_CASE("DedupFilter suppresses repeats within window", "[dedup]") {
+    using namespace std::chrono;
     DedupFilter d(1000);   // 1s window
-    QDateTime const t0(QDate(2026, 6, 10), QTime(0, 0, 0));
+    DedupFilter::TimePoint const t0{};   // epoch; only relative offsets matter
+    auto at = [&](int ms) { return t0 + milliseconds(ms); };
 
-    REQUIRE(d.accept("k", t0));                      // first occurrence emits
-    REQUIRE_FALSE(d.accept("k", t0.addMSecs(200)));  // within window: suppressed
-    REQUIRE_FALSE(d.accept("k", t0.addMSecs(900)));
+    REQUIRE(d.accept("k", at(0)));            // first occurrence emits
+    REQUIRE_FALSE(d.accept("k", at(200)));    // within window: suppressed
+    REQUIRE_FALSE(d.accept("k", at(900)));
     REQUIRE(d.takeSuppressed("k") == 2);
-    REQUIRE(d.accept("k", t0.addMSecs(1100)));       // window elapsed: emits again
+    REQUIRE(d.accept("k", at(1100)));         // window elapsed: emits again
 
     d.reset("k");
-    REQUIRE(d.accept("k", t0.addMSecs(1200)));       // reset: emits fresh
+    REQUIRE(d.accept("k", at(1200)));         // reset: emits fresh
 }
 
 TEST_CASE("formatLine renders a system record", "[logger]") {
@@ -208,7 +210,7 @@ TEST_CASE("formatLine renders a system record", "[logger]") {
     r.category = "transport";
     r.source   = "PLC1";
     r.message  = "reconnect";
-    QString line = formatLine(r);
+    QString line = QString::fromStdString(formatLine(r));
     REQUIRE(line.contains("2026-05-29 14:23:45.678"));
     REQUIRE(line.contains("[Core/Transport]"));
     REQUIRE(line.contains("PLC1 reconnect"));

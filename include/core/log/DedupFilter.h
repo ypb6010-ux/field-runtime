@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
+#include <chrono>
+#include <cstdint>
 #include <mutex>
-
-#include <QDateTime>
-#include <QHash>
-#include <QString>
+#include <string>
+#include <unordered_map>
 
 #include "core/core_global.h"
 
@@ -27,33 +27,36 @@ namespace core::log {
 // different threads.
 class CORE_EXPORT DedupFilter {
 public:
-    explicit DedupFilter(qint64 windowMs = 60'000)
+    using Clock     = std::chrono::system_clock;
+    using TimePoint = Clock::time_point;
+
+    explicit DedupFilter(std::int64_t windowMs = 60'000)
         : m_windowMs(windowMs) {
     }
 
     // True if `key` should be emitted now: first time seen, or the window
     // since its last emit has elapsed. Repeats within the window return false
     // and bump the suppressed counter.
-    bool accept(QString const& key, QDateTime const& now);
-    bool accept(QString const& key) { return accept(key, QDateTime::currentDateTime()); }
+    bool accept(std::string const& key, TimePoint now);
+    bool accept(std::string const& key) { return accept(key, Clock::now()); }
 
     // Repeats suppressed for `key` since its last emit, then cleared. Call
     // right after accept() returns true to annotate an aggregated message.
-    quint64 takeSuppressed(QString const& key);
+    std::uint64_t takeSuppressed(std::string const& key);
 
     // Forget `key` so its next occurrence emits fresh (e.g. on recovery).
-    void reset(QString const& key);
+    void reset(std::string const& key);
     void clear();
 
 private:
     struct Entry {
-        QDateTime lastEmit;
-        quint64   suppressed = 0;
+        TimePoint     lastEmit;
+        std::uint64_t suppressed = 0;
     };
 
-    qint64                m_windowMs;
-    QHash<QString, Entry> m_entries;
-    std::mutex            m_mtx;
+    std::int64_t                           m_windowMs;
+    std::unordered_map<std::string, Entry> m_entries;
+    std::mutex                             m_mtx;
 };
 
 } // namespace core::log

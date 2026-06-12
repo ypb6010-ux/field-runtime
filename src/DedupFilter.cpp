@@ -4,35 +4,37 @@
 
 namespace core::log {
 
-bool DedupFilter::accept(QString const& key, QDateTime const& now) {
+bool DedupFilter::accept(std::string const& key, TimePoint now) {
     std::lock_guard lk(m_mtx);
     auto it = m_entries.find(key);
     if (it == m_entries.end()) {
-        m_entries.insert(key, Entry{now, 0});
+        m_entries.emplace(key, Entry{now, 0});
         return true;
     }
-    if (it->lastEmit.msecsTo(now) >= m_windowMs) {
-        it->lastEmit = now;
+    auto const elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               now - it->second.lastEmit).count();
+    if (elapsedMs >= m_windowMs) {
+        it->second.lastEmit = now;
         return true;
     }
-    ++it->suppressed;
+    ++it->second.suppressed;
     return false;
 }
 
-quint64 DedupFilter::takeSuppressed(QString const& key) {
+std::uint64_t DedupFilter::takeSuppressed(std::string const& key) {
     std::lock_guard lk(m_mtx);
     auto it = m_entries.find(key);
     if (it == m_entries.end()) {
         return 0;
     }
-    quint64 const n = it->suppressed;
-    it->suppressed = 0;
+    std::uint64_t const n = it->second.suppressed;
+    it->second.suppressed = 0;
     return n;
 }
 
-void DedupFilter::reset(QString const& key) {
+void DedupFilter::reset(std::string const& key) {
     std::lock_guard lk(m_mtx);
-    m_entries.remove(key);
+    m_entries.erase(key);
 }
 
 void DedupFilter::clear() {
