@@ -200,7 +200,7 @@ TEST_CASE("PollRange uses its moduleId for the scheduler tag",
     // Round-robin & cancelModule both pivot on moduleId; verifying its
     // propagation here keeps PollRange compatible with those scheduler
     // behaviours (already covered by SerialScheduler tests).
-    auto cancelled = mock.scheduler().cancelModule(QStringLiteral("poll.mock.unique"));
+    auto cancelled = mock.scheduler().cancelModule("poll.mock.unique");
     REQUIRE(cancelled == 0);   // none pending — we just exercise the lookup
 }
 

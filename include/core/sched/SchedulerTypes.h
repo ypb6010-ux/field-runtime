@@ -3,8 +3,9 @@
 #pragma once
 
 #include <array>
-#include <QDateTime>
-#include <QString>
+#include <chrono>
+#include <cstdint>
+#include <string>
 
 #include "core/core_global.h"
 
@@ -44,13 +45,13 @@ enum class CircuitState {
 };
 
 struct RequestTag {
-    QString  moduleId;
-    Priority priority       = Priority::Normal;
-    int      timeoutMs      = 1000;
-    int      maxRetries     = 0;
-    int      retryBackoffMs = 100;
-    bool     coalesce       = false;
-    bool     interruptable  = false;
+    std::string moduleId;
+    Priority    priority       = Priority::Normal;
+    int         timeoutMs      = 1000;
+    int         maxRetries     = 0;
+    int         retryBackoffMs = 100;
+    bool        coalesce       = false;
+    bool        interruptable  = false;
 };
 
 struct SchedulerConfig {
@@ -67,27 +68,27 @@ struct SchedulerConfig {
 };
 
 struct ModuleStats {
-    quint64    submitted        = 0;
-    quint64    completed        = 0;
-    quint64    failed           = 0;
-    quint64    cancelled        = 0;
-    int        lastLatencyMs    = 0;
-    int        p50LatencyMs     = 0;
-    int        p99LatencyMs     = 0;
-    QDateTime  lastSuccessAt;
-    QDateTime  lastErrorAt;
-    QString    lastErrorMessage;
+    std::uint64_t submitted        = 0;
+    std::uint64_t completed        = 0;
+    std::uint64_t failed           = 0;
+    std::uint64_t cancelled        = 0;
+    int           lastLatencyMs    = 0;
+    int           p50LatencyMs     = 0;
+    int           p99LatencyMs     = 0;
+    std::chrono::system_clock::time_point lastSuccessAt;
+    std::chrono::system_clock::time_point lastErrorAt;
+    std::string   lastErrorMessage;
 };
 
 struct SchedulerStats {
     int        queueDepth        = 0;
     int        inflight          = 0;
     int        maxQueueDepth     = 0;
-    quint64    totalSubmitted    = 0;
-    quint64    totalCompleted    = 0;
-    quint64    totalFailed       = 0;
-    quint64    totalTimedOut     = 0;
-    quint64    totalCancelled    = 0;
+    std::uint64_t totalSubmitted    = 0;
+    std::uint64_t totalCompleted    = 0;
+    std::uint64_t totalFailed       = 0;
+    std::uint64_t totalTimedOut     = 0;
+    std::uint64_t totalCancelled    = 0;
     int        p50LatencyMs      = 0;
     int        p99LatencyMs      = 0;
     std::array<int, kPriorityCount> laneQueueDepth{};

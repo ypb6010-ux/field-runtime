@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <string>
 #include <thread>
 
 #include "core/transport/ModbusTcpClientTransport.h"
@@ -179,7 +180,7 @@ TEST_CASE("Scheduler serialises concurrent reads against a real server",
         ts.emplace_back([&, i] {
             for (int j = 0; j < kPer; ++j) {
                 core::sched::RequestTag tag;
-                tag.moduleId = QString::number(i);
+                tag.moduleId = std::to_string(i);
                 auto r = sched.submit(tag, [&] {
                     int cur = active.fetch_add(1) + 1;
                     int prev = peak.load();

@@ -116,14 +116,14 @@ void SinkWindow::markFlushed(bool ok, quint64 gen) {
 sched::SubmitResult SinkWindow::onTick() {
     if (!m_started.load()) {
         return {sched::ResultKind::Cancelled,
-                QStringLiteral("module not started"), 0};
+                "module not started", 0};
     }
 
     core::RegisterWords values;
     QString        reason;
     quint64        gen = 0;
     if (!decideFlush(values, reason, gen)) {
-        return {sched::ResultKind::Ok, QStringLiteral("no flush due"), 0};
+        return {sched::ResultKind::Ok, "no flush due", 0};
     }
 
     transport::WriteBatch batch;
@@ -132,7 +132,7 @@ sched::SubmitResult SinkWindow::onTick() {
     batch.values       = std::move(values);
 
     sched::RequestTag tag;
-    tag.moduleId = m_id;
+    tag.moduleId = m_id.toStdString();
     tag.priority = m_priority;
     tag.coalesce = m_cfg.coalesceWrites;
 
@@ -149,9 +149,9 @@ sched::SubmitResult SinkWindow::onTick() {
 
     if (!write.ok) {
         submission.kind         = sched::ResultKind::Error;
-        submission.errorMessage = write.errorMessage;
+        submission.errorMessage = write.errorMessage.toStdString();
     }
-    submission.errorMessage = reason + (write.ok ? QString{} : (": " + write.errorMessage));
+    submission.errorMessage = (reason + (write.ok ? QString{} : (": " + write.errorMessage))).toStdString();
     return submission;
 }
 
@@ -178,7 +178,7 @@ void SinkWindow::driveTick() {
     batch.values       = std::move(values);
 
     sched::RequestTag tag;
-    tag.moduleId = m_id;
+    tag.moduleId = m_id.toStdString();
     tag.priority = m_priority;
     tag.coalesce = m_cfg.coalesceWrites;
 

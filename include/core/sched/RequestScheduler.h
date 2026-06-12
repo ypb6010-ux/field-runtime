@@ -4,7 +4,7 @@
 
 #include <functional>
 #include <memory>
-#include <QString>
+#include <string>
 
 #include "core/core_global.h"
 #include "core/sched/SchedulerTypes.h"
@@ -13,7 +13,7 @@ namespace core::sched {
 
 struct SubmitResult {
     ResultKind kind         = ResultKind::Ok;
-    QString    errorMessage;
+    std::string errorMessage;
     int        latencyMs    = 0;
 };
 
@@ -60,7 +60,7 @@ public:
     // teardown cannot pump the next request into a half-destroyed transport.
     virtual void stopAsync() = 0;
 
-    virtual int            cancelModule(QString const& moduleId) = 0;
+    virtual int            cancelModule(std::string const& moduleId) = 0;
     virtual SchedulerStats stats() const                         = 0;
 };
 

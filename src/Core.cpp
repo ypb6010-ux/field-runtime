@@ -540,7 +540,7 @@ public:
             batch.startAddress = b.mirrorStart + b.offset;
             batch.values       = std::move(values);
             sched::RequestTag tag;
-            tag.moduleId = QStringLiteral("bridge.mirror.") + qs(b.server);
+            tag.moduleId = "bridge.mirror." + b.server;
             tag.priority = sched::Priority::Low;
             tag.coalesce = true;
             server->scheduler().submitAsync(tag, [server, batch](sched::AsyncDone done) {

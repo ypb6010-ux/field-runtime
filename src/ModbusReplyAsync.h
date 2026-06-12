@@ -63,8 +63,9 @@ inline void modbusWriteAsync(QModbusClient* client, int slaveId,
     if (batch.values.empty()) { done(WriteResult{true, {}}); return; }
     QMetaObject::invokeMethod(client,
         [client, slaveId, batch, done = std::move(done)]() mutable {
-            QModbusDataUnit unit(core::toQModbus(batch.table), batch.startAddress, batch.values.size());
-            for (int i = 0; i < batch.values.size(); ++i)
+            int const valueCount = int(batch.values.size());
+            QModbusDataUnit unit(core::toQModbus(batch.table), batch.startAddress, quint16(valueCount));
+            for (int i = 0; i < valueCount; ++i)
                 unit.setValue(i, batch.values.at(i));
             auto* reply = client->sendWriteRequest(unit, slaveId);
             if (!reply) {

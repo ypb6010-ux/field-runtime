@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <string>
 #include <thread>
 
 #include "core/module/SinkWindow.h"
@@ -189,7 +190,7 @@ TEST_CASE("Write failure preserves dirty state for next-tick retry",
 
     auto r1 = w.onTick();
     REQUIRE(r1.kind == sched::ResultKind::Error);
-    REQUIRE(r1.errorMessage.contains("boom"));
+    REQUIRE(r1.errorMessage.find("boom") != std::string::npos);
     REQUIRE(w.dirty());                 // dirty preserved for retry
 
     // Now allow success on the next attempt.

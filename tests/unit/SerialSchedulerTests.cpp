@@ -5,8 +5,11 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <mutex>
+#include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "core/sched/SerialScheduler.h"
@@ -16,10 +19,10 @@ using namespace std::chrono_literals;
 
 namespace {
 
-RequestTag tagFor(QString const& moduleId,
-                  Priority       priority = Priority::Normal) {
+RequestTag tagFor(std::string moduleId,
+                  Priority    priority = Priority::Normal) {
     RequestTag t;
-    t.moduleId = moduleId;
+    t.moduleId = std::move(moduleId);
     t.priority = priority;
     return t;
 }
@@ -62,7 +65,7 @@ TEST_CASE("SerialScheduler never has more than one inflight at once",
     for (int i = 0; i < kThreads; ++i) {
         ts.emplace_back([&, i] {
             for (int j = 0; j < kPerT; ++j) {
-                s.submit(tagFor(QString::number(i)), [&] {
+                s.submit(tagFor(std::to_string(i)), [&] {
                     int cur = active.fetch_add(1) + 1;
                     int prev = peakActive.load();
                     while (cur > prev
@@ -76,7 +79,7 @@ TEST_CASE("SerialScheduler never has more than one inflight at once",
     for (auto& t : ts) t.join();
 
     REQUIRE(peakActive.load() == 1);
-    REQUIRE(s.stats().totalCompleted == quint64(kThreads * kPerT));
+    REQUIRE(s.stats().totalCompleted == std::uint64_t(kThreads * kPerT));
 }
 
 TEST_CASE("SerialScheduler dispatches Critical priority ahead of Normal",
@@ -89,7 +92,7 @@ TEST_CASE("SerialScheduler dispatches Critical priority ahead of Normal",
     std::condition_variable cv;
     bool                    firstStarted = false;
     bool                    releaseFirst = false;
-    std::vector<QString>    order;
+    std::vector<std::string> order;
 
     std::thread t1([&] {
         s.submit(tagFor("first", Priority::Normal), [&] {
@@ -142,7 +145,7 @@ TEST_CASE("SerialScheduler round-robins within a lane when configured",
     std::condition_variable cv;
     bool                    firstStarted = false;
     bool                    releaseFirst = false;
-    std::vector<QString>    order;
+    std::vector<std::string> order;
 
     std::thread t1([&] {
         s.submit(tagFor("seed"), [&] {
@@ -187,7 +190,7 @@ TEST_CASE("SerialScheduler round-robins within a lane when configured",
 
     t1.join(); tA1.join(); tA2.join(); tB1.join(); tB2.join();
 
-    REQUIRE(order == std::vector<QString>{"A", "B", "A", "B"});
+    REQUIRE(order == std::vector<std::string>{"A", "B", "A", "B"});
 }
 
 TEST_CASE("SerialScheduler enforces inter-request gap between submissions",
@@ -240,7 +243,7 @@ TEST_CASE("SerialScheduler.cancelModule unblocks pending entries",
     });
     waitFor([&] { return s.stats().queueDepth == 1; });
 
-    int cancelled = s.cancelModule(QStringLiteral("doomed"));
+    int cancelled = s.cancelModule("doomed");
     REQUIRE(cancelled == 1);
 
     // The pending submit() should wake and return Cancelled.
@@ -260,7 +263,7 @@ TEST_CASE("SerialScheduler.cancelModule unblocks pending entries",
 TEST_CASE("SerialScheduler.cancelModule returns 0 when nothing matches",
           "[sched][serial][cancel]") {
     SerialScheduler s(SchedulerConfig{});
-    REQUIRE(s.cancelModule(QStringLiteral("nothing")) == 0);
+    REQUIRE(s.cancelModule("nothing") == 0);
 }
 
 TEST_CASE("SerialScheduler refuses submissions once queue is full",
@@ -293,7 +296,7 @@ TEST_CASE("SerialScheduler refuses submissions once queue is full",
 
     auto r = s.submit(tagFor("b"), [] {});
     REQUIRE(r.kind == ResultKind::Error);
-    REQUIRE(r.errorMessage.contains("queue full"));
+    REQUIRE(r.errorMessage.find("queue full") != std::string::npos);
 
     { std::lock_guard lk(mtx); release = true; }
     cv.notify_all();

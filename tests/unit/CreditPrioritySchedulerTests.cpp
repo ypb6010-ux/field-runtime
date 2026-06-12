@@ -4,7 +4,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "core/sched/CreditScheduler.h"
@@ -16,7 +18,7 @@ using namespace std::chrono_literals;
 
 namespace {
 
-RequestTag tagOf(QString id, Priority p = Priority::Normal,
+RequestTag tagOf(std::string id, Priority p = Priority::Normal,
                   bool interruptable = false) {
     RequestTag t;
     t.moduleId      = std::move(id);
@@ -40,7 +42,7 @@ TEST_CASE("CreditScheduler allows up to maxInflight concurrent work units",
     std::vector<std::thread> threads;
     for (int i = 0; i < 8; ++i) {
         threads.emplace_back([&, i] {
-            s.submit(tagOf(QStringLiteral("m%1").arg(i)), [&] {
+            s.submit(tagOf("m" + std::to_string(i)), [&] {
                 int cur = running.fetch_add(1) + 1;
                 int prev = peakRunning.load();
                 while (cur > prev
@@ -88,7 +90,7 @@ TEST_CASE("PriorityScheduler preempts lower-priority interruptable peers",
     for (int i = 0; i < 4; ++i) {
         lows.emplace_back([&, i] {
             ++lowsAttempted;
-            auto r = s.submit(tagOf(QStringLiteral("low%1").arg(i),
+            auto r = s.submit(tagOf("low" + std::to_string(i),
                                      Priority::Low, /*interruptable=*/true),
                               [] { std::this_thread::sleep_for(50ms); });
             if (r.kind == ResultKind::Cancelled) ++lowsCancelled;

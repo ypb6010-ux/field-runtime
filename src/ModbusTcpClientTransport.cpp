@@ -390,8 +390,9 @@ WriteResult ModbusTcpClientTransport::writeBatch(WriteBatch const& batch) {
 
     QSemaphore done(0);
     QMetaObject::invokeMethod(m_impl->client, [this, batch, &result, &done] {
-        QModbusDataUnit unit(core::toQModbus(batch.table), batch.startAddress, batch.values.size());
-        for (int i = 0; i < batch.values.size(); ++i) {
+        int const valueCount = int(batch.values.size());
+        QModbusDataUnit unit(core::toQModbus(batch.table), batch.startAddress, quint16(valueCount));
+        for (int i = 0; i < valueCount; ++i) {
             unit.setValue(i, batch.values.at(i));
         }
         auto* reply = m_impl->client->sendWriteRequest(unit, m_impl->cfg.slaveId);

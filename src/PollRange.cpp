@@ -79,11 +79,11 @@ void PollRange::applyResult(transport::ReadResult const& result) {
 sched::SubmitResult PollRange::pollOnce() {
     if (m_paused.load()) {
         return {sched::ResultKind::Cancelled,
-                QStringLiteral("module paused"), 0};
+                "module paused", 0};
     }
 
     sched::RequestTag tag;
-    tag.moduleId = m_id;
+    tag.moduleId = m_id.toStdString();
     tag.priority = m_priority;
 
     transport::ReadResult result{};
@@ -103,7 +103,7 @@ sched::SubmitResult PollRange::pollOnce() {
     applyResult(result);
     if (!result.ok) {
         submission.kind         = sched::ResultKind::Error;
-        submission.errorMessage = result.errorMessage;
+        submission.errorMessage = result.errorMessage.toStdString();
     }
     return submission;
 }
@@ -120,7 +120,7 @@ void PollRange::driveTick() {
     }
 
     sched::RequestTag tag;
-    tag.moduleId = m_id;
+    tag.moduleId = m_id.toStdString();
     tag.priority = m_priority;
 
     auto const submission = m_transport->scheduler().submitAsync(tag,

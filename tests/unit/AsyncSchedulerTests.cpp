@@ -6,6 +6,7 @@
 #include <chrono>
 #include <functional>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -29,7 +30,7 @@ struct Harness {
 
     SubmitResult submit(int id, Priority pri = Priority::Normal) {
         RequestTag tag;
-        tag.moduleId = QString::number(id);
+        tag.moduleId = std::to_string(id);
         tag.priority = pri;
         return sched->submitAsync(tag, [this, id](AsyncDone d) {
             started.push_back(id);

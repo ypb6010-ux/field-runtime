@@ -7,10 +7,12 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -73,17 +75,17 @@ public:
     mutable std::mutex                                                mtx;
     std::condition_variable                                           cv;
     std::array<std::deque<std::shared_ptr<PendingEntry>>, kPriorityCount> lanes;
-    std::array<QString, kPriorityCount>                               lastServedModule;
+    std::array<std::string, kPriorityCount>                           lastServedModule;
     int                                                               inflightCount = 0;
     std::chrono::steady_clock::time_point                             lastCompleteAt;
     LatencyWindow                                                     latencyWindow;
 
-    quint64 totalSubmitted = 0;
-    quint64 totalCompleted = 0;
-    quint64 totalFailed    = 0;
-    quint64 totalCancelled = 0;
-    quint64 totalTimedOut  = 0;
-    int     lastLatencyMs  = 0;
+    std::uint64_t totalSubmitted = 0;
+    std::uint64_t totalCompleted = 0;
+    std::uint64_t totalFailed    = 0;
+    std::uint64_t totalCancelled = 0;
+    std::uint64_t totalTimedOut  = 0;
+    int           lastLatencyMs  = 0;
 
     CircuitState                          circuitState = CircuitState::Closed;
     int                                   errorStreak  = 0;
@@ -179,7 +181,7 @@ public:
 
             auto it = lane.begin();
             if (!cfg.fifoWithinLane && lane.size() > 1
-             && !lastServedModule[picked].isEmpty()) {
+             && !lastServedModule[picked].empty()) {
                 auto rr = std::find_if(lane.begin(), lane.end(),
                     [&](auto const& e) {
                         return e->tag.moduleId != lastServedModule[picked];
@@ -257,7 +259,7 @@ public:
 
             auto it = lane.begin();
             if (!cfg.fifoWithinLane && lane.size() > 1
-             && !lastServedModule[picked].isEmpty()) {
+             && !lastServedModule[picked].empty()) {
                 auto rr = std::find_if(lane.begin(), lane.end(),
                     [&](auto const& e) {
                         return e->tag.moduleId != lastServedModule[picked];
@@ -363,18 +365,18 @@ SubmitResult SerialScheduler::submit(RequestTag tag,
         std::unique_lock lk(m_impl->mtx);
         if (m_impl->mode == Impl::Mode::Async) {
             return {ResultKind::Error,
-                    QStringLiteral("scheduler is in async mode"), 0};
+                    "scheduler is in async mode", 0};
         }
         m_impl->mode = Impl::Mode::Sync;
         m_impl->updateCircuitLocked();
         if (m_impl->circuitState == CircuitState::Open) {
             return {ResultKind::CircuitOpen,
-                    QStringLiteral("circuit open"), 0};
+                    "circuit open", 0};
         }
         int depth = m_impl->totalQueueDepthLocked() + m_impl->inflightCount;
         if (depth >= m_impl->cfg.maxQueueDepth) {
             return {ResultKind::Error,
-                    QStringLiteral("queue full"), 0};
+                    "queue full", 0};
         }
         m_impl->lanes[laneIndex(entry->tag.priority)].push_back(entry);
         ++m_impl->totalSubmitted;
@@ -389,7 +391,7 @@ SubmitResult SerialScheduler::submit(RequestTag tag,
 
         if (entry->state == PendingState::Cancelled) {
             return {ResultKind::Cancelled,
-                    QStringLiteral("cancelled"), 0};
+                    "cancelled", 0};
         }
     }
 
@@ -409,15 +411,15 @@ SubmitResult SerialScheduler::submit(RequestTag tag,
     // ── Phase C: run user work outside the lock ────────────────────
     auto    t0      = steady::now();
     bool    failed  = false;
-    QString errMsg;
+    std::string errMsg;
     try {
         work();
     } catch (std::exception const& e) {
         failed = true;
-        errMsg = QString::fromUtf8(e.what());
+        errMsg = e.what();
     } catch (...) {
         failed = true;
-        errMsg = QStringLiteral("unknown exception");
+        errMsg = "unknown exception";
     }
     auto t1      = steady::now();
     int  latency = static_cast<int>(duration_cast<milliseconds>(t1 - t0).count());
@@ -445,16 +447,16 @@ SubmitResult SerialScheduler::submitAsync(RequestTag tag, AsyncWork work) {
         std::lock_guard lk(m_impl->mtx);
         if (m_impl->mode == Impl::Mode::Sync) {
             return {ResultKind::Error,
-                    QStringLiteral("scheduler is in sync mode"), 0};
+                    "scheduler is in sync mode", 0};
         }
         m_impl->mode = Impl::Mode::Async;
         m_impl->updateCircuitLocked();
         if (m_impl->circuitState == CircuitState::Open) {
-            return {ResultKind::CircuitOpen, QStringLiteral("circuit open"), 0};
+            return {ResultKind::CircuitOpen, "circuit open", 0};
         }
         int const depth = m_impl->totalQueueDepthLocked() + m_impl->inflightCount;
         if (depth >= m_impl->cfg.maxQueueDepth) {
-            return {ResultKind::Error, QStringLiteral("queue full"), 0};
+            return {ResultKind::Error, "queue full", 0};
         }
         auto entry       = std::make_shared<PendingEntry>();
         entry->tag       = std::move(tag);
@@ -480,7 +482,7 @@ void SerialScheduler::stopAsync() {
     m_impl->stopped = true;
 }
 
-int SerialScheduler::cancelModule(QString const& moduleId) {
+int SerialScheduler::cancelModule(std::string const& moduleId) {
     int n = 0;
     {
         std::lock_guard lk(m_impl->mtx);

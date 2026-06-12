@@ -26,7 +26,7 @@ public:
     SubmitResult   submitAsync(RequestTag tag, AsyncWork work) override;
     void           setDelayFn(DelayFn fn) override;
     void           stopAsync() override;
-    int            cancelModule(QString const& moduleId) override;
+    int            cancelModule(std::string const& moduleId) override;
     SchedulerStats stats() const override;
 
 private:

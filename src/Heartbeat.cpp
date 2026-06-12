@@ -27,12 +27,12 @@ int Heartbeat::periodMs() const noexcept { return m_cfg.periodMs; }
 sched::SubmitResult Heartbeat::onTick() {
     if (!m_started.load()) {
         return {sched::ResultKind::Cancelled,
-                QStringLiteral("module not started"), 0};
+                "module not started", 0};
     }
     auto const now = clock_t::now();
     auto const elapsed = duration_cast<milliseconds>(now - m_lastSentAt).count();
     if (m_cfg.periodMs > 0 && elapsed < m_cfg.periodMs) {
-        return {sched::ResultKind::Ok, QStringLiteral("not yet"), 0};
+        return {sched::ResultKind::Ok, "not yet", 0};
     }
 
     transport::WriteBatch batch;
@@ -41,7 +41,7 @@ sched::SubmitResult Heartbeat::onTick() {
     batch.values       = m_cfg.values;
 
     sched::RequestTag tag;
-    tag.moduleId = m_id;
+    tag.moduleId = m_id.toStdString();
     tag.priority = m_priority;
 
     transport::WriteResult write{};
@@ -52,7 +52,7 @@ sched::SubmitResult Heartbeat::onTick() {
         m_lastSentAt = now;
         if (!write.ok) {
             submission.kind         = sched::ResultKind::Error;
-            submission.errorMessage = write.errorMessage;
+            submission.errorMessage = write.errorMessage.toStdString();
         }
     }
     return submission;
@@ -76,7 +76,7 @@ void Heartbeat::driveTick() {
     batch.values       = m_cfg.values;
 
     sched::RequestTag tag;
-    tag.moduleId = m_id;
+    tag.moduleId = m_id.toStdString();
     tag.priority = m_priority;
 
     auto const submission = m_transport->scheduler().submitAsync(tag,

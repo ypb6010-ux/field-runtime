@@ -30,7 +30,7 @@ sched::SubmitResult Command::execute() {
         batch.values       = core::RegisterWords{e.value};
 
         sched::RequestTag tag;
-        tag.moduleId      = m_id;
+        tag.moduleId      = m_id.toStdString();
         tag.priority      = m_priority;
         tag.interruptable = m_cfg.interruptable;
 
@@ -41,7 +41,7 @@ sched::SubmitResult Command::execute() {
         if (submission.kind != sched::ResultKind::Ok && firstFailure.kind == sched::ResultKind::Ok) {
             firstFailure = submission;
         } else if (!write.ok && firstFailure.kind == sched::ResultKind::Ok) {
-            firstFailure = {sched::ResultKind::Error, write.errorMessage,
+            firstFailure = {sched::ResultKind::Error, write.errorMessage.toStdString(),
                             submission.latencyMs};
         }
     }
@@ -56,7 +56,7 @@ void Command::executeAsync() {
         batch.values       = core::RegisterWords{e.value};
 
         sched::RequestTag tag;
-        tag.moduleId      = m_id;
+        tag.moduleId      = m_id.toStdString();
         tag.priority      = m_priority;
         tag.interruptable = m_cfg.interruptable;
 
