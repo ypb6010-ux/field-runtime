@@ -12,7 +12,7 @@
 
 namespace core::module {
 
-PollRange::PollRange(QString                     moduleId,
+PollRange::PollRange(std::string                 moduleId,
                      transport::Transport&       transport,
                      transport::ReadRequest      request,
                      int                         periodMs,
@@ -21,7 +21,7 @@ PollRange::PollRange(QString                     moduleId,
     , m_req(std::move(request))
     , m_periodMs(periodMs) {
     m_id          = std::move(moduleId);
-    m_transportId = QString::fromStdString(transport.id());
+    m_transportId = transport.id();
     m_priority    = priority;
 }
 
@@ -37,7 +37,7 @@ void PollRange::bind(std::shared_ptr<dp::Datapoint> datapoint,
 }
 
 int PollRange::periodMs()    const noexcept { return m_periodMs; }
-int PollRange::bindingCount() const noexcept { return m_bindings.size(); }
+int PollRange::bindingCount() const noexcept { return int(m_bindings.size()); }
 
 transport::ReadRequest const& PollRange::request() const noexcept {
     return m_req;
@@ -83,7 +83,7 @@ sched::SubmitResult PollRange::pollOnce() {
     }
 
     sched::RequestTag tag;
-    tag.moduleId = m_id.toStdString();
+    tag.moduleId = m_id;
     tag.priority = m_priority;
 
     transport::ReadResult result{};
@@ -120,7 +120,7 @@ void PollRange::driveTick() {
     }
 
     sched::RequestTag tag;
-    tag.moduleId = m_id.toStdString();
+    tag.moduleId = m_id;
     tag.priority = m_priority;
 
     auto const submission = m_transport->scheduler().submitAsync(tag,

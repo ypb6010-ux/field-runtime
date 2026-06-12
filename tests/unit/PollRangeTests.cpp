@@ -47,7 +47,7 @@ transport::ReadRequest readRange(int start, int count) {
 TEST_CASE("PollRange submits exactly one read through the scheduler per tick",
           "[poll][basic]") {
     test::MockTransport mock;
-    module::PollRange poll(QStringLiteral("poll.mock.range"),
+    module::PollRange poll("poll.mock.range",
                            mock, readRange(0, 4), /*periodMs*/ 100);
 
     mock.enqueueReadValues({0x0001, 0x0002, 0x0003, 0x0004});
@@ -62,7 +62,7 @@ TEST_CASE("PollRange submits exactly one read through the scheduler per tick",
 TEST_CASE("PollRange dispatches decoded values into bound datapoints",
           "[poll][dispatch]") {
     test::MockTransport mock;
-    module::PollRange poll(QStringLiteral("poll.mock"),
+    module::PollRange poll("poll.mock",
                            mock, readRange(100, 4), 100);
 
     // Two datapoints bound:
@@ -92,7 +92,7 @@ TEST_CASE("PollRange dispatches decoded values into bound datapoints",
 TEST_CASE("PollRange decodes multi-register datapoints honouring word order",
           "[poll][f32]") {
     test::MockTransport mock;
-    module::PollRange poll(QStringLiteral("poll.mock"),
+    module::PollRange poll("poll.mock",
                            mock, readRange(0x100, 2), 100);
 
     auto spec = dpSpec("speed", dp::ScalarType::F32, 0x100, dp::WordOrder::CDAB);
@@ -109,7 +109,7 @@ TEST_CASE("PollRange decodes multi-register datapoints honouring word order",
 TEST_CASE("PollRange propagates transport errors to bound datapoints",
           "[poll][error]") {
     test::MockTransport mock;
-    module::PollRange poll(QStringLiteral("poll.mock"),
+    module::PollRange poll("poll.mock",
                            mock, readRange(0, 2), 100);
 
     auto spec = dpSpec("a", dp::ScalarType::U16, 0);
@@ -130,7 +130,7 @@ TEST_CASE("PollRange propagates transport errors to bound datapoints",
 TEST_CASE("PollRange ignores out-of-bound bindings instead of crashing",
           "[poll][safety]") {
     test::MockTransport mock;
-    module::PollRange poll(QStringLiteral("poll.mock"),
+    module::PollRange poll("poll.mock",
                            mock, readRange(0, 2), 100);
 
     auto spec = dpSpec("offrange", dp::ScalarType::U32, 4);
@@ -154,7 +154,7 @@ TEST_CASE("PollRange marks datapoints Error when scheduler reports failure",
     for (int i = 0; i < 10; ++i) sched.recordFailureForTesting();
     REQUIRE(sched.stats().circuitState == core::sched::CircuitState::Open);
 
-    module::PollRange poll(QStringLiteral("poll.mock"),
+    module::PollRange poll("poll.mock",
                            mock, readRange(0, 2), 100);
     auto spec = dpSpec("a", dp::ScalarType::U16, 0);
     auto dpt  = std::make_shared<dp::Datapoint>(spec);
@@ -170,7 +170,7 @@ TEST_CASE("PollRange marks datapoints Error when scheduler reports failure",
 TEST_CASE("PollRange.stop() pauses ticks and resume() restarts them",
           "[poll][lifecycle]") {
     test::MockTransport mock;
-    module::PollRange poll(QStringLiteral("poll.mock"),
+    module::PollRange poll("poll.mock",
                            mock, readRange(0, 1), 100);
 
     auto spec = dpSpec("a", dp::ScalarType::U16, 0);
@@ -192,7 +192,7 @@ TEST_CASE("PollRange.stop() pauses ticks and resume() restarts them",
 TEST_CASE("PollRange uses its moduleId for the scheduler tag",
           "[poll][tag]") {
     test::MockTransport mock;
-    module::PollRange poll(QStringLiteral("poll.mock.unique"),
+    module::PollRange poll("poll.mock.unique",
                            mock, readRange(0, 1), 100);
 
     poll.pollOnce();
@@ -207,7 +207,7 @@ TEST_CASE("PollRange uses its moduleId for the scheduler tag",
 TEST_CASE("PollRange supports no bindings (raw poll-only mode)",
           "[poll][empty]") {
     test::MockTransport mock;
-    module::PollRange poll(QStringLiteral("poll.mock"),
+    module::PollRange poll("poll.mock",
                            mock, readRange(0, 4), 100);
 
     mock.enqueueReadValues({1, 2, 3, 4});
@@ -221,7 +221,7 @@ TEST_CASE("PollRange supports no bindings (raw poll-only mode)",
 TEST_CASE("PollRange.driveTick dispatches decoded values via the async path",
           "[poll][async]") {
     test::MockTransport mock;
-    module::PollRange poll(QStringLiteral("poll.async"),
+    module::PollRange poll("poll.async",
                            mock, readRange(0, 2), 100);
     auto spec = dpSpec("a", dp::ScalarType::U16, 0);
     auto dpt  = std::make_shared<dp::Datapoint>(spec);
@@ -239,7 +239,7 @@ TEST_CASE("PollRange.driveTick coalesces while a read is still in flight",
           "[poll][async][coalesce]") {
     test::MockTransport mock;
     mock.setDeferAsync(true);   // hold completions so a read stays in flight
-    module::PollRange poll(QStringLiteral("poll.coalesce"),
+    module::PollRange poll("poll.coalesce",
                            mock, readRange(0, 1), 100);
     auto spec = dpSpec("a", dp::ScalarType::U16, 0);
     auto dpt  = std::make_shared<dp::Datapoint>(spec);
@@ -270,7 +270,7 @@ TEST_CASE("PollRange.driveTick marks Stale and frees the guard when rejected",
     for (int i = 0; i < 10; ++i) sched.recordFailureForTesting();
     REQUIRE(sched.stats().circuitState == core::sched::CircuitState::Open);
 
-    module::PollRange poll(QStringLiteral("poll.reject"),
+    module::PollRange poll("poll.reject",
                            mock, readRange(0, 1), 100);
     auto spec = dpSpec("a", dp::ScalarType::U16, 0);
     auto dpt  = std::make_shared<dp::Datapoint>(spec);

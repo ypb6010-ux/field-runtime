@@ -3,7 +3,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <cstdint>
+#include <string>
 #include <thread>
+#include <utility>
 
 #include "core/bus/BusEvents.h"
 #include "core/bus/EventBus.h"
@@ -14,12 +17,12 @@ using namespace std::chrono_literals;
 
 namespace {
 
-module::AckWatch::Config cfgFor(QString const& dpId,
-                                 QVariant       expected,
-                                 int            timeoutMs = 200) {
+module::AckWatch::Config cfgFor(std::string dpId,
+                                 dp::Value   expected,
+                                 int         timeoutMs = 200) {
     module::AckWatch::Config c;
     c.moduleId  = "ack." + dpId;
-    c.dpId      = dpId;
+    c.dpId      = std::move(dpId);
     c.expected  = std::move(expected);
     c.timeoutMs = timeoutMs;
     return c;
@@ -46,7 +49,7 @@ TEST_CASE("AckWatch resolves on the first matching DpChanged event",
 TEST_CASE("AckWatch ignores DpChanged events for other dps",
           "[ack][filter]") {
     bus::EventBus bus;
-    module::AckWatch watch(cfgFor("dp.expected", 42, /*timeoutMs*/100), bus);
+    module::AckWatch watch(cfgFor("dp.expected", std::int64_t(42), /*timeoutMs*/100), bus);
     watch.start();
 
     std::thread publisher([&] {
@@ -62,7 +65,7 @@ TEST_CASE("AckWatch ignores DpChanged events for other dps",
 TEST_CASE("AckWatch ignores DpChanged events with the wrong value",
           "[ack][filter]") {
     bus::EventBus bus;
-    module::AckWatch watch(cfgFor("dp.x", 1, 100), bus);
+    module::AckWatch watch(cfgFor("dp.x", std::int64_t(1), 100), bus);
     watch.start();
 
     std::thread publisher([&] {

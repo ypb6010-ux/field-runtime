@@ -4,7 +4,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <string>
 #include <thread>
+#include <utility>
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -17,13 +19,13 @@ using namespace std::chrono_literals;
 
 namespace {
 
-// Bare module that counts ticks. Used to verify the QTimer wiring without
+// Bare module that counts ticks. Used to verify the timer wiring without
 // dragging a real transport into the test.
 class CountingModule : public FunctionalModule {
 public:
-    CountingModule(QString id, int periodMs) : m_periodMs(periodMs) {
+    CountingModule(std::string id, int periodMs) : m_periodMs(periodMs) {
         m_id          = std::move(id);
-        m_transportId = QStringLiteral("mock");
+        m_transportId = "mock";
     }
     int  tickPeriodMs() const override { return m_periodMs; }
     void driveTick()         override { ticks.fetch_add(1, std::memory_order_acq_rel); }
@@ -39,10 +41,10 @@ private:
 
 } // namespace
 
-TEST_CASE("ModuleRegistry::startAll arms a QTimer per module and ticks fire",
+TEST_CASE("ModuleRegistry::startAll arms a timer per module and ticks fire",
           "[module-registry][autotick]") {
     ModuleRegistry reg;
-    auto* m = new CountingModule(QStringLiteral("counter"), 20);
+    auto* m = new CountingModule("counter", 20);
     reg.registerModule(std::unique_ptr<FunctionalModule>(m));
 
     reg.startAll();
@@ -65,10 +67,10 @@ TEST_CASE("ModuleRegistry::startAll arms a QTimer per module and ticks fire",
     REQUIRE(m->ticks.load() == after);
 }
 
-TEST_CASE("ModuleRegistry::setAutoTickEnabled(false) suppresses the QTimer",
+TEST_CASE("ModuleRegistry::setAutoTickEnabled(false) suppresses the timer",
           "[module-registry][autotick]") {
     ModuleRegistry reg;
-    auto* m = new CountingModule(QStringLiteral("counter.off"), 20);
+    auto* m = new CountingModule("counter.off", 20);
     reg.registerModule(std::unique_ptr<FunctionalModule>(m));
     reg.setAutoTickEnabled(false);
 
@@ -87,27 +89,27 @@ TEST_CASE("ModuleRegistry rejects registerModule once ticking is live",
           "[module-registry][lifecycle]") {
     ModuleRegistry reg;
     REQUIRE(reg.registerModule(
-        std::make_unique<CountingModule>(QStringLiteral("a"), 20)));
+        std::make_unique<CountingModule>("a", 20)));
 
     reg.startAll();
     // While started, a tick timer holds a raw module pointer — registering
     // (and thus possibly replacing/destroying a module) must be refused.
     REQUIRE_FALSE(reg.registerModule(
-        std::make_unique<CountingModule>(QStringLiteral("b"), 20)));
+        std::make_unique<CountingModule>("b", 20)));
     REQUIRE(reg.find("b") == nullptr);
 
     reg.stopAll();
     // After stop, registration is allowed again.
     REQUIRE(reg.registerModule(
-        std::make_unique<CountingModule>(QStringLiteral("c"), 20)));
+        std::make_unique<CountingModule>("c", 20)));
     REQUIRE(reg.find("c") != nullptr);
 }
 
 TEST_CASE("ModuleRegistry skips modules whose tickPeriodMs is 0",
           "[module-registry][autotick]") {
     ModuleRegistry reg;
-    auto* a = new CountingModule(QStringLiteral("p.zero"), 0);
-    auto* b = new CountingModule(QStringLiteral("p.live"), 20);
+    auto* a = new CountingModule("p.zero", 0);
+    auto* b = new CountingModule("p.live", 20);
     reg.registerModule(std::unique_ptr<FunctionalModule>(a));
     reg.registerModule(std::unique_ptr<FunctionalModule>(b));
 

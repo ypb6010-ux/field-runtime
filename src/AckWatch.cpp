@@ -10,7 +10,6 @@
 
 #include "core/bus/BusEvents.h"
 #include "core/bus/EventBus.h"
-#include "core/dp/ValueQt.h"
 
 namespace core::module {
 
@@ -26,13 +25,13 @@ AckWatch::AckWatch(Config cfg, bus::EventBus& bus)
     m_impl->bus = &bus;
     m_impl->cfg = std::move(cfg);
     m_id          = m_impl->cfg.moduleId;
-    m_transportId = QString{};
+    m_transportId = {};
     m_priority    = sched::Priority::Normal;
 }
 
 AckWatch::~AckWatch() { delete m_impl; }
 
-QString AckWatch::dpId() const { return m_impl->cfg.dpId; }
+std::string const& AckWatch::dpId() const { return m_impl->cfg.dpId; }
 
 AckWatch::AckResult AckWatch::waitOnce() {
     if (m_impl->cancelled.load(std::memory_order_acquire)) {
@@ -45,8 +44,8 @@ AckWatch::AckResult AckWatch::waitOnce() {
 
     auto sub = m_impl->bus->subscribe<bus::DpChanged>(
         [this, &mtx, &cv, &matched](bus::DpChanged const& e) {
-            if (e.id != m_impl->cfg.dpId.toStdString()) return;
-            if (e.value != dp::fromQVariant(m_impl->cfg.expected)) return;
+            if (e.id != m_impl->cfg.dpId) return;
+            if (e.value != m_impl->cfg.expected) return;
             {
                 std::lock_guard lk(mtx);
                 matched = true;

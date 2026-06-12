@@ -12,7 +12,7 @@
 
 namespace core::module {
 
-// TickDriver — drives each auto-ticking module's driveTick() from QTimers on the
+// TickDriver — drives each auto-ticking module's driveTick() from timers on the
 // thread that owns the Core lifecycle (the GUI / main event loop).
 //
 // This is safe because every transport now exposes a NON-BLOCKING async path:
@@ -77,29 +77,29 @@ bool ModuleRegistry::registerModule(std::unique_ptr<FunctionalModule> mod) {
     // FunctionalModule*, so replacing/destroying a module now would dangle it.
     // Modules must be wired before startAll() (config reload = stopAll first).
     if (m_started) return false;
-    QString const id = mod->id();
+    std::string const id = mod->id();
     m_modules.insert_or_assign(id, std::move(mod));
     return true;
 }
 
-FunctionalModule* ModuleRegistry::find(QString const& moduleId) const {
+FunctionalModule* ModuleRegistry::find(std::string const& moduleId) const {
     auto it = m_modules.find(moduleId);
     return it == m_modules.end() ? nullptr : it->second.get();
 }
 
-QList<FunctionalModule*>
-ModuleRegistry::byTransport(QString const& transportId) const {
-    QList<FunctionalModule*> out;
+std::vector<FunctionalModule*>
+ModuleRegistry::byTransport(std::string const& transportId) const {
+    std::vector<FunctionalModule*> out;
     for (auto const& [_, mod] : m_modules) {
-        if (mod->transportId() == transportId) out.append(mod.get());
+        if (mod->transportId() == transportId) out.push_back(mod.get());
     }
     return out;
 }
 
-QList<FunctionalModule*> ModuleRegistry::all() const {
-    QList<FunctionalModule*> out;
-    out.reserve(int(m_modules.size()));
-    for (auto const& [_, mod] : m_modules) out.append(mod.get());
+std::vector<FunctionalModule*> ModuleRegistry::all() const {
+    std::vector<FunctionalModule*> out;
+    out.reserve(m_modules.size());
+    for (auto const& [_, mod] : m_modules) out.push_back(mod.get());
     return out;
 }
 

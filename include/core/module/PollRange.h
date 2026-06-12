@@ -4,8 +4,8 @@
 
 #include <atomic>
 #include <memory>
-#include <QString>
-#include <QVector>
+#include <string>
+#include <vector>
 
 #include "core/core_global.h"
 #include "core/module/FunctionalModule.h"
@@ -23,11 +23,11 @@ namespace core::module {
 // scheduler; on success, every registered binding decodes its slice of the
 // response into the bound Datapoint.
 //
-// Phase 1 ships the per-tick algorithm via `pollOnce()`. The QTimer-driven
+// Phase 1 ships the per-tick algorithm via `pollOnce()`. The timer-driven
 // loop wiring lives in Phase 2 alongside ModuleRegistry::startAll().
 class CORE_EXPORT PollRange : public FunctionalModule {
 public:
-    PollRange(QString                     moduleId,
+    PollRange(std::string                 moduleId,
               transport::Transport&       transport,
               transport::ReadRequest      request,
               int                         periodMs,
@@ -79,7 +79,7 @@ private:
     transport::Transport*       m_transport;
     transport::ReadRequest      m_req;
     int                         m_periodMs;
-    QVector<Binding>            m_bindings;
+    std::vector<Binding>        m_bindings;
     std::atomic<bool>           m_paused{false};   // read on tick thread, set on stop/pause
     std::atomic<bool>           m_inFlight{false};
 };

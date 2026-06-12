@@ -3,6 +3,8 @@
 #include "core/module/SinkWindow.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <string>
 #include <utility>
 
 #include "core/transport/Transport.h"
@@ -18,7 +20,7 @@ SinkWindow::SinkWindow(Config cfg, transport::Transport& transport)
     , m_cfg(std::move(cfg))
     , m_snapshot(m_cfg.size, 0) {
     m_id          = m_cfg.moduleId;
-    m_transportId = QString::fromStdString(transport.id());
+    m_transportId = transport.id();
     m_priority    = m_cfg.priority;
     int const populate = std::min(int(m_cfg.initial.size()), m_cfg.size);
     for (int i = 0; i < populate; ++i) {
@@ -52,13 +54,13 @@ bool SinkWindow::dirty() const {
     return m_dirty;
 }
 
-bool SinkWindow::stageRegister(int absAddress, quint16 value, quint16 mask) {
+bool SinkWindow::stageRegister(int absAddress, std::uint16_t value, std::uint16_t mask) {
     int const idx = absAddress - m_cfg.startAddress;
     if (idx < 0 || idx >= m_cfg.size) return false;
 
     std::lock_guard lk(m_mtx);
-    quint16 const cur  = m_snapshot[idx];
-    quint16 const next = quint16((cur & ~mask) | (value & mask));
+    std::uint16_t const cur  = m_snapshot[idx];
+    std::uint16_t const next = std::uint16_t((cur & ~mask) | (value & mask));
     if (next == cur) return false;
     m_snapshot[idx] = next;
     ++m_generation;   // an effective change — lost-update guard
@@ -75,25 +77,25 @@ void SinkWindow::forceFlush() {
     ++m_generation;
 }
 
-bool SinkWindow::decideFlush(core::RegisterWords& values, QString& reason, quint64& gen) {
+bool SinkWindow::decideFlush(core::RegisterWords& values, std::string& reason, std::uint64_t& gen) {
     auto const now = clock_t::now();
     std::lock_guard lk(m_mtx);
     bool flush = false;
     if (m_forceFlush) {
         flush  = true;
-        reason = QStringLiteral("force");
+        reason = "force";
     } else if (m_dirty) {
         auto const elapsed = duration_cast<milliseconds>(now - m_dirtyAt).count();
         if (elapsed >= m_cfg.debounceMs) {
             flush  = true;
-            reason = QStringLiteral("debounce");
+            reason = "debounce";
         }
     }
     if (!flush && m_cfg.keepAlivePeriodMs > 0) {
         auto const elapsed = duration_cast<milliseconds>(now - m_lastFlushAt).count();
         if (elapsed >= m_cfg.keepAlivePeriodMs) {
             flush  = true;
-            reason = QStringLiteral("keepalive");
+            reason = "keepalive";
         }
     }
     if (!flush) return false;
@@ -102,7 +104,7 @@ bool SinkWindow::decideFlush(core::RegisterWords& values, QString& reason, quint
     return true;
 }
 
-void SinkWindow::markFlushed(bool ok, quint64 gen) {
+void SinkWindow::markFlushed(bool ok, std::uint64_t gen) {
     if (!ok) return;   // dirty preserved on failure so the next tick retries
     std::lock_guard lk(m_mtx);
     // If a stage / forceFlush landed since the snapshot, that data was not in
@@ -120,8 +122,8 @@ sched::SubmitResult SinkWindow::onTick() {
     }
 
     core::RegisterWords values;
-    QString        reason;
-    quint64        gen = 0;
+    std::string    reason;
+    std::uint64_t  gen = 0;
     if (!decideFlush(values, reason, gen)) {
         return {sched::ResultKind::Ok, "no flush due", 0};
     }
@@ -132,7 +134,7 @@ sched::SubmitResult SinkWindow::onTick() {
     batch.values       = std::move(values);
 
     sched::RequestTag tag;
-    tag.moduleId = m_id.toStdString();
+    tag.moduleId = m_id;
     tag.priority = m_priority;
     tag.coalesce = m_cfg.coalesceWrites;
 
@@ -151,7 +153,7 @@ sched::SubmitResult SinkWindow::onTick() {
         submission.kind         = sched::ResultKind::Error;
         submission.errorMessage = write.errorMessage;
     }
-    submission.errorMessage = reason.toStdString()
+    submission.errorMessage = reason
         + (write.ok ? std::string() : (": " + write.errorMessage));
     return submission;
 }
@@ -166,8 +168,8 @@ void SinkWindow::driveTick() {
     }
 
     core::RegisterWords values;
-    QString        reason;
-    quint64        gen = 0;
+    std::string    reason;
+    std::uint64_t  gen = 0;
     if (!decideFlush(values, reason, gen)) {
         m_inFlight.store(false, std::memory_order_release);
         return;
@@ -179,7 +181,7 @@ void SinkWindow::driveTick() {
     batch.values       = std::move(values);
 
     sched::RequestTag tag;
-    tag.moduleId = m_id.toStdString();
+    tag.moduleId = m_id;
     tag.priority = m_priority;
     tag.coalesce = m_cfg.coalesceWrites;
 

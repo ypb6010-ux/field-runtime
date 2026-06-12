@@ -358,7 +358,7 @@ private:
                     logTransportEvent(e);
                     if (e.kind != bus::TransportEventKind::Connected) return;
                     for (auto* sw : m_sinkWindowPtrs) {
-                        if (sw->transportId() == qs(e.transportId)) sw->forceFlush();
+                        if (sw->transportId() == e.transportId) sw->forceFlush();
                     }
                 }));
         // On operator-box write into a server transport, fan out into a
@@ -424,14 +424,14 @@ private:
             module::SinkWindow* target = nullptr;
             // Look up by named window first, fall back to address-based match.
             for (auto* sw : m_sinkWindowPtrs) {
-                if (!sink.window.empty() && sw->id() == qs(sink.window)) {
+                if (!sink.window.empty() && sw->id() == sink.window) {
                     target = sw;
                     break;
                 }
             }
             if (!target && !sink.transport.empty()) {
                 for (auto* sw : m_sinkWindowPtrs) {
-                    if (sw->transportId() != qs(sink.transport)) continue;
+                    if (sw->transportId() != sink.transport) continue;
                     int const addr = sink.address;
                     if (addr < sw->startAddress()
                      || addr >= sw->startAddress() + sw->size()) continue;
@@ -472,7 +472,7 @@ private:
             if (b.writeCount > 0) {
                 if (auto* plc = transport(qs(b.plc))) {
                     module::SinkWindow::Config cfg;
-                    cfg.moduleId       = QStringLiteral("bridge.fwd.") + qs(b.server);
+                    cfg.moduleId       = "bridge.fwd." + b.server;
                     cfg.table          = core::RegisterTable::HoldingRegister;
                     cfg.startAddress   = b.writeStart - b.offset;
                     cfg.size           = b.writeCount;
@@ -734,7 +734,7 @@ private:
             auto* t = transport(qs(sc.transport));
             if (!t) continue;
             module::SinkWindow::Config cfg;
-            cfg.moduleId          = qs(sc.moduleId);
+            cfg.moduleId          = sc.moduleId;
             cfg.table             = tableFromString(qs(sc.table));
             cfg.startAddress      = sc.startAddress;
             cfg.size              = sc.size;
@@ -755,7 +755,7 @@ private:
             auto* t = transport(qs(hc.transport));
             if (!t) continue;
             module::Heartbeat::Config cfg;
-            cfg.moduleId = qs(hc.moduleId);
+            cfg.moduleId = hc.moduleId;
             cfg.table    = tableFromString(qs(hc.table));
             cfg.address  = hc.address;
             cfg.values   = hc.values;
@@ -769,9 +769,9 @@ private:
     void buildAckWatches(config::ConfigSchema const& schema) {
         for (auto const& ac : schema.ackWatches) {
             module::AckWatch::Config cfg;
-            cfg.moduleId  = qs(ac.moduleId);
-            cfg.dpId      = qs(ac.dp);
-            cfg.expected  = dp::toQVariant(ac.expected);
+            cfg.moduleId  = ac.moduleId;
+            cfg.dpId      = ac.dp;
+            cfg.expected  = ac.expected;
             cfg.timeoutMs = ac.timeoutMs;
             m_modules->registerModule(
                 std::make_unique<module::AckWatch>(std::move(cfg), *m_bus));
@@ -783,7 +783,7 @@ private:
             auto* t = transport(qs(cc.transport));
             if (!t) continue;
             module::Command::Config cfg;
-            cfg.moduleId      = qs(cc.moduleId);
+            cfg.moduleId      = cc.moduleId;
             cfg.priority      = cc.priority;
             cfg.interruptable = cc.interruptable;
             for (auto const& w : cc.writes) {
@@ -791,7 +791,7 @@ private:
                 e.table   = tableFromString(qs(w.table));
                 e.address = w.address;
                 e.value   = w.value;
-                cfg.writes.append(e);
+                cfg.writes.push_back(e);
             }
             m_modules->registerModule(
                 std::make_unique<module::Command>(std::move(cfg), *t));
@@ -853,7 +853,7 @@ private:
                 || datapoint->kind() == dp::Kind::Bidirectional)
                 && datapoint->sink().has_value()
                 && !datapoint->sink()->window.empty()) {
-                QString const windowId = qs(datapoint->sink()->window);
+                std::string const windowId = datapoint->sink()->window;
                 datapoint->setWriter([this, weak, windowId](core::dp::Value const& v) {
                     auto sp = weak.lock();
                     if (!sp || !sp->sink().has_value()) return;
@@ -889,7 +889,7 @@ private:
             req.count        = pc.count;
 
             auto poll = std::make_unique<module::PollRange>(
-                qs(pc.moduleId), *t, req, pc.periodMs, pc.priority);
+                pc.moduleId, *t, req, pc.periodMs, pc.priority);
             wireBindings(*poll, schema, byId, pc.transport, req);
 
             auto* raw = poll.get();

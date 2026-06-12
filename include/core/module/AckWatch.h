@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include <QString>
-#include <QVariant>
+#include <string>
 
 #include "core/core_global.h"
+#include "core/dp/Value.h"
 #include "core/module/FunctionalModule.h"
 
 namespace core::bus { class EventBus; }
@@ -28,10 +28,10 @@ public:
     };
 
     struct Config {
-        QString  moduleId;
-        QString  dpId;
-        QVariant expected;
-        int      timeoutMs = 3000;
+        std::string moduleId;
+        std::string dpId;
+        dp::Value   expected;
+        int         timeoutMs = 3000;
     };
 
     AckWatch(Config cfg, bus::EventBus& bus);
@@ -42,7 +42,7 @@ public:
     AckResult waitOnce();
     void      cancel();
 
-    QString dpId() const;
+    std::string const& dpId() const;
 
     void start()  override;
     void stop()   override;

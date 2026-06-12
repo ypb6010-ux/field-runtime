@@ -12,13 +12,13 @@ Command::Command(Config cfg, transport::Transport& transport)
     : m_transport(&transport)
     , m_cfg(std::move(cfg)) {
     m_id          = m_cfg.moduleId;
-    m_transportId = QString::fromStdString(transport.id());
+    m_transportId = transport.id();
     m_priority    = m_cfg.priority;
 }
 
 Command::~Command() = default;
 
-int Command::writeCount() const noexcept { return m_cfg.writes.size(); }
+int Command::writeCount() const noexcept { return int(m_cfg.writes.size()); }
 
 sched::SubmitResult Command::execute() {
     sched::SubmitResult firstFailure{sched::ResultKind::Ok, {}, 0};
@@ -30,7 +30,7 @@ sched::SubmitResult Command::execute() {
         batch.values       = core::RegisterWords{e.value};
 
         sched::RequestTag tag;
-        tag.moduleId      = m_id.toStdString();
+        tag.moduleId      = m_id;
         tag.priority      = m_priority;
         tag.interruptable = m_cfg.interruptable;
 
@@ -56,7 +56,7 @@ void Command::executeAsync() {
         batch.values       = core::RegisterWords{e.value};
 
         sched::RequestTag tag;
-        tag.moduleId      = m_id.toStdString();
+        tag.moduleId      = m_id;
         tag.priority      = m_priority;
         tag.interruptable = m_cfg.interruptable;
 

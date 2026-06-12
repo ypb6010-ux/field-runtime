@@ -4,7 +4,7 @@
 
 #include <atomic>
 #include <chrono>
-#include <QString>
+#include <string>
 
 #include "core/base/RegisterTable.h"
 #include "core/core_global.h"
@@ -25,7 +25,7 @@ namespace core::module {
 class CORE_EXPORT Heartbeat : public FunctionalModule {
 public:
     struct Config {
-        QString                       moduleId;
+        std::string                   moduleId;
         core::RegisterTable           table     = core::RegisterTable::HoldingRegister;
         int                           address   = 0;
         core::RegisterWords                values;

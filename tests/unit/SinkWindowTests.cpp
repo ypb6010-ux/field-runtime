@@ -5,6 +5,7 @@
 #include <chrono>
 #include <string>
 #include <thread>
+#include <utility>
 
 #include "core/module/SinkWindow.h"
 #include "core/sched/SchedulerTypes.h"
@@ -15,11 +16,11 @@ using namespace std::chrono_literals;
 
 namespace {
 
-module::SinkWindow::Config baseCfg(QString const& id   = "win",
-                                   int            start = 0,
-                                   int            size  = 4) {
+module::SinkWindow::Config baseCfg(std::string id = "win",
+                                   int         start = 0,
+                                   int         size  = 4) {
     module::SinkWindow::Config c;
-    c.moduleId      = id;
+    c.moduleId      = std::move(id);
     c.table         = core::RegisterTable::HoldingRegister;
     c.startAddress  = start;
     c.size          = size;

@@ -4,8 +4,8 @@
 
 #include <map>
 #include <memory>
-#include <QList>
-#include <QString>
+#include <string>
+#include <vector>
 
 #include "core/core_global.h"
 #include "core/module/FunctionalModule.h"
@@ -25,11 +25,11 @@ public:
     // (and ignores the module) if called after startAll() without an
     // intervening stopAll().
     bool registerModule(std::unique_ptr<FunctionalModule> mod);
-    FunctionalModule*           find(QString const& moduleId) const;
-    QList<FunctionalModule*>    byTransport(QString const& transportId) const;
-    QList<FunctionalModule*>    all() const;
+    FunctionalModule*           find(std::string const& moduleId) const;
+    std::vector<FunctionalModule*> byTransport(std::string const& transportId) const;
+    std::vector<FunctionalModule*> all() const;
 
-    // start*All() also arms / disarms a QTimer per module whose
+    // start*All() also arms / disarms a timer per module whose
     // tickPeriodMs() > 0, so PollRange / SinkWindow / Heartbeat run
     // automatically once startAll() returns.
     void startAll();
@@ -37,13 +37,13 @@ public:
     void pauseAll();
     void resumeAll();
 
-    // Test hook — disable the QTimer driver so the unit tests can drive
+    // Test hook — disable the timer driver so the unit tests can drive
     // module ticks explicitly through pollOnce()/onTick().
     void setAutoTickEnabled(bool on);
 
 private:
     class TickDriver;
-    std::map<QString, std::unique_ptr<FunctionalModule>> m_modules;
+    std::map<std::string, std::unique_ptr<FunctionalModule>> m_modules;
     std::unique_ptr<TickDriver> m_tickDriver;
     bool m_autoTick = true;
     bool m_started  = false;   // true between startAll() and stopAll()

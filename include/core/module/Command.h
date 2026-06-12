@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include <QList>
-#include <QString>
+#include <cstdint>
+#include <string>
+#include <vector>
 
 #include "core/base/RegisterTable.h"
 #include "core/core_global.h"
@@ -24,14 +25,14 @@ class CORE_EXPORT Command : public FunctionalModule {
 public:
     struct Entry {
         core::RegisterTable table = core::RegisterTable::HoldingRegister;
-        int     address = 0;
-        quint16 value   = 0;
+        int           address = 0;
+        std::uint16_t value   = 0;
     };
     struct Config {
-        QString          moduleId;
+        std::string      moduleId;
         sched::Priority  priority      = sched::Priority::High;
         bool             interruptable = false;
-        QList<Entry>     writes;
+        std::vector<Entry> writes;
     };
 
     Command(Config cfg, transport::Transport& transport);

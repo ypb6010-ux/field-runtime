@@ -16,7 +16,7 @@ Heartbeat::Heartbeat(Config cfg, transport::Transport& transport)
     : m_transport(&transport)
     , m_cfg(std::move(cfg)) {
     m_id          = m_cfg.moduleId;
-    m_transportId = QString::fromStdString(transport.id());
+    m_transportId = transport.id();
     m_priority    = m_cfg.priority;
 }
 
@@ -41,7 +41,7 @@ sched::SubmitResult Heartbeat::onTick() {
     batch.values       = m_cfg.values;
 
     sched::RequestTag tag;
-    tag.moduleId = m_id.toStdString();
+    tag.moduleId = m_id;
     tag.priority = m_priority;
 
     transport::WriteResult write{};
@@ -76,7 +76,7 @@ void Heartbeat::driveTick() {
     batch.values       = m_cfg.values;
 
     sched::RequestTag tag;
-    tag.moduleId = m_id.toStdString();
+    tag.moduleId = m_id;
     tag.priority = m_priority;
 
     auto const submission = m_transport->scheduler().submitAsync(tag,

@@ -3,7 +3,7 @@
 #pragma once
 
 #include <atomic>
-#include <QString>
+#include <string>
 
 #include "core/core_global.h"
 #include "core/sched/SchedulerTypes.h"
@@ -19,8 +19,8 @@ class CORE_EXPORT FunctionalModule {
 public:
     virtual ~FunctionalModule() = default;
 
-    QString               id()          const noexcept { return m_id; }
-    QString               transportId() const noexcept { return m_transportId; }
+    std::string const&    id()          const noexcept { return m_id; }
+    std::string const&    transportId() const noexcept { return m_transportId; }
     sched::Priority       priority()    const noexcept { return m_priority; }
     sched::ModuleStats    stats()       const          { return m_stats; }
 
@@ -29,15 +29,15 @@ public:
     virtual void pause()  = 0;
     virtual void resume() = 0;
 
-    // Tick interface — ModuleRegistry's QTimer driver calls `driveTick()` at
+    // Tick interface — ModuleRegistry's timer driver calls `driveTick()` at
     // the module's preferred cadence. `tickPeriodMs() == 0` disables auto
     // driving (Command and AckWatch are invoked imperatively).
     virtual int  tickPeriodMs() const = 0;
     virtual void driveTick()          = 0;
 
 protected:
-    QString             m_id;
-    QString             m_transportId;
+    std::string         m_id;
+    std::string         m_transportId;
     sched::Priority     m_priority = sched::Priority::Normal;
     sched::ModuleStats  m_stats;
 };

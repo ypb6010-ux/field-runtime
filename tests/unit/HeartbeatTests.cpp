@@ -3,7 +3,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <string>
 #include <thread>
+#include <utility>
 
 #include "core/module/Heartbeat.h"
 #include "core/sched/SchedulerTypes.h"
@@ -14,11 +16,11 @@ using namespace std::chrono_literals;
 
 namespace {
 
-module::Heartbeat::Config cfgFor(QString const& id = "hb",
-                                  int            periodMs = 10,
+module::Heartbeat::Config cfgFor(std::string id = "hb",
+                                  int         periodMs = 10,
                                   core::RegisterWords values = {0xA5A5}) {
     module::Heartbeat::Config c;
-    c.moduleId = id;
+    c.moduleId = std::move(id);
     c.table    = core::RegisterTable::HoldingRegister;
     c.address  = 500;
     c.values   = std::move(values);

@@ -4,9 +4,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <mutex>
-#include <QString>
+#include <string>
 
 #include "core/base/RegisterTable.h"
 #include "core/core_global.h"
@@ -24,12 +25,12 @@ namespace core::module {
 // either debounce expires after a stage, the keep-alive period elapses, or
 // `forceFlush()` is signalled (e.g. after a transport reconnect).
 //
-// Phase 2 ships the algorithm via `onTick()`; Phase 2.5 hooks a QTimer
+// Phase 2 ships the algorithm via `onTick()`; Phase 2.5 hooks a timer
 // alongside PollRange.
 class CORE_EXPORT SinkWindow : public FunctionalModule {
 public:
     struct Config {
-        QString                       moduleId;
+        std::string                   moduleId;
         core::RegisterTable           table        = core::RegisterTable::HoldingRegister;
         int                           startAddress = 0;
         int                           size         = 0;
@@ -51,7 +52,7 @@ public:
     //   snapshot[i] = (snapshot[i] & ~mask) | (value & mask)
     // Returns true when the staged value differed from the current snapshot.
     // Writes outside the window's range are silently dropped.
-    bool stageRegister(int absAddress, quint16 value, quint16 mask = 0xFFFF);
+    bool stageRegister(int absAddress, std::uint16_t value, std::uint16_t mask = 0xFFFF);
 
     // After a transport reconnect, force the next tick to flush the whole
     // snapshot regardless of dirty / keep-alive timing.
@@ -80,11 +81,11 @@ private:
     // Decide whether a flush is due; if so, snapshot the values + reason and
     // the staging generation at snapshot time. Returns false when nothing
     // needs writing. Shared by onTick / driveTick.
-    bool decideFlush(core::RegisterWords& values, QString& reason, quint64& gen);
+    bool decideFlush(core::RegisterWords& values, std::string& reason, std::uint64_t& gen);
     // On a successful write, clear dirty / forceFlush and stamp the flush time —
     // but ONLY if no new stage/forceFlush arrived since `gen` was snapshotted,
     // otherwise that update would be lost while the write was in flight.
-    void markFlushed(bool ok, quint64 gen);
+    void markFlushed(bool ok, std::uint64_t gen);
 
     transport::Transport*              m_transport;
     Config                              m_cfg;
@@ -95,7 +96,7 @@ private:
     // Bumped by every effective stageRegister() / forceFlush(); lets a flush
     // detect concurrent staging and avoid clearing dirty for data it did not
     // write (the in-flight lost-update race Codex flagged).
-    quint64                             m_generation  = 0;
+    std::uint64_t                       m_generation  = 0;
     std::chrono::steady_clock::time_point m_dirtyAt;
     std::chrono::steady_clock::time_point m_lastFlushAt;
     mutable std::mutex                   m_mtx;
