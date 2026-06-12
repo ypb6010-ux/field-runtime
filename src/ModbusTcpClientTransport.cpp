@@ -51,6 +51,10 @@ ConnectionState stateFromQt(QModbusDevice::State s) {
     return ConnectionState::Disconnected;
 }
 
+QString qs(std::string const& s) {
+    return QString::fromStdString(s);
+}
+
 } // namespace
 
 class ModbusTcpClientTransport::Impl {
@@ -92,11 +96,11 @@ public:
                 if (cur == ConnectionState::Connected
                     && prev != ConnectionState::Connected) {
                     busPtr->publish(bus::TransportEvent{
-                        cfg.id.toStdString(), bus::TransportEventKind::Connected, {}});
+                        cfg.id, bus::TransportEventKind::Connected, {}});
                 } else if (cur == ConnectionState::Disconnected
                            && prev == ConnectionState::Connected) {
                     busPtr->publish(bus::TransportEvent{
-                        cfg.id.toStdString(), bus::TransportEventKind::Disconnected, {}});
+                        cfg.id, bus::TransportEventKind::Disconnected, {}});
                 }
             }
         });
@@ -110,7 +114,7 @@ public:
                 lastError = msg;
                 if (busPtr && prev == ConnectionState::Connected) {
                     busPtr->publish(bus::TransportEvent{
-                        cfg.id.toStdString(), bus::TransportEventKind::Disconnected, msg.toStdString()});
+                        cfg.id, bus::TransportEventKind::Disconnected, msg.toStdString()});
                 }
             }
         });
@@ -163,13 +167,13 @@ ModbusTcpClientTransport::ModbusTcpClientTransport(Config cfg, bus::EventBus* bu
 
 ModbusTcpClientTransport::~ModbusTcpClientTransport() = default;
 
-QString               ModbusTcpClientTransport::id()    const { return m_impl->cfg.id; }
+std::string           ModbusTcpClientTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         ModbusTcpClientTransport::kind()  const { return TransportKind::ModbusTcpClient; }
 ConnectionState       ModbusTcpClientTransport::state() const { return m_impl->state.load(std::memory_order_acquire); }
 
 sched::RequestScheduler& ModbusTcpClientTransport::scheduler() { return *m_impl->scheduler; }
 
-std::expected<void, QString>
+std::expected<void, std::string>
 ModbusTcpClientTransport::connect() {
     if (state() == ConnectionState::Connected) {
         armReconnectIfConfigured();
@@ -179,7 +183,7 @@ ModbusTcpClientTransport::connect() {
     bool kicked = false;
     QMetaObject::invokeMethod(m_impl->client, [this, &kicked] {
         m_impl->client->setConnectionParameter(
-            QModbusDevice::NetworkAddressParameter, m_impl->cfg.host);
+            QModbusDevice::NetworkAddressParameter, qs(m_impl->cfg.host));
         m_impl->client->setConnectionParameter(
             QModbusDevice::NetworkPortParameter, m_impl->cfg.port);
         m_impl->client->setTimeout(m_impl->cfg.requestTimeoutMs);
@@ -190,8 +194,8 @@ ModbusTcpClientTransport::connect() {
     if (!kicked) {
         armReconnectIfConfigured();
         return std::unexpected(m_impl->lastError.isEmpty()
-            ? QStringLiteral("connectDevice() returned false")
-            : m_impl->lastError);
+            ? std::string("connectDevice() returned false")
+            : m_impl->lastError.toStdString());
     }
 
     // Poll for terminal state up to connectTimeoutMs. We deliberately avoid
@@ -207,12 +211,12 @@ ModbusTcpClientTransport::connect() {
         }
         if (s == ConnectionState::Error) {
             armReconnectIfConfigured();
-            return std::unexpected(m_impl->lastError);
+            return std::unexpected(m_impl->lastError.toStdString());
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     armReconnectIfConfigured();
-    return std::unexpected(QStringLiteral("connect timeout"));
+    return std::unexpected(std::string("connect timeout"));
 }
 
 void ModbusTcpClientTransport::armReconnectIfConfigured() {
@@ -221,10 +225,9 @@ void ModbusTcpClientTransport::armReconnectIfConfigured() {
     m_impl->autoReconnect.store(true, std::memory_order_release);
 
     auto* impl = m_impl.get();
-    QString const id = m_impl->cfg.id;
     int const intervalMs = m_impl->cfg.reconnectIntervalMs;
 
-    QMetaObject::invokeMethod(m_impl->client, [impl, id, intervalMs] {
+    QMetaObject::invokeMethod(m_impl->client, [impl, intervalMs] {
         if (impl->reconnectTimer) return;
         impl->reconnectTimer = new QTimer(impl->client);
         impl->reconnectTimer->setInterval(intervalMs);
@@ -238,7 +241,7 @@ void ModbusTcpClientTransport::armReconnectIfConfigured() {
                 // Re-issue connectDevice on the client's own thread.
                 impl->client->disconnectDevice();
                 impl->client->setConnectionParameter(
-                    QModbusDevice::NetworkAddressParameter, impl->cfg.host);
+                    QModbusDevice::NetworkAddressParameter, qs(impl->cfg.host));
                 impl->client->setConnectionParameter(
                     QModbusDevice::NetworkPortParameter, impl->cfg.port);
                 impl->client->setTimeout(impl->cfg.requestTimeoutMs);
@@ -327,7 +330,7 @@ ReadResult ModbusTcpClientTransport::read(ReadRequest const& req) {
 
     if (state() != ConnectionState::Connected) {
         result.ok           = false;
-        result.errorMessage = QStringLiteral("not connected");
+        result.errorMessage = "not connected";
         return result;
     }
 
@@ -337,16 +340,16 @@ ReadResult ModbusTcpClientTransport::read(ReadRequest const& req) {
         auto* reply = m_impl->client->sendReadRequest(unit, m_impl->cfg.slaveId);
         if (!reply) {
             result.ok           = false;
-            result.errorMessage = m_impl->client->errorString();
-            if (result.errorMessage.isEmpty())
-                result.errorMessage = QStringLiteral("sendReadRequest failed");
+            QString err = m_impl->client->errorString();
+            if (err.isEmpty()) err = QStringLiteral("sendReadRequest failed");
+            result.errorMessage = err.toStdString();
             done.release();
             return;
         }
         if (reply->isFinished()) {
             if (reply->error() != QModbusDevice::NoError) {
                 result.ok           = false;
-                result.errorMessage = reply->errorString();
+                result.errorMessage = reply->errorString().toStdString();
             } else {
                 result.ok     = true;
                 result.values = core::fromQtWords(reply->result().values());
@@ -359,7 +362,7 @@ ReadResult ModbusTcpClientTransport::read(ReadRequest const& req) {
             [reply, &result, &done] {
                 if (reply->error() != QModbusDevice::NoError) {
                     result.ok           = false;
-                    result.errorMessage = reply->errorString();
+                    result.errorMessage = reply->errorString().toStdString();
                 } else {
                     result.ok     = true;
                     result.values = core::fromQtWords(reply->result().values());
@@ -371,7 +374,7 @@ ReadResult ModbusTcpClientTransport::read(ReadRequest const& req) {
 
     if (!done.tryAcquire(1, m_impl->cfg.requestTimeoutMs * 2 + 500)) {
         result.ok           = false;
-        result.errorMessage = QStringLiteral("read timeout");
+        result.errorMessage = "read timeout";
     }
     return result;
 }
@@ -380,7 +383,7 @@ WriteResult ModbusTcpClientTransport::writeBatch(WriteBatch const& batch) {
     WriteResult result;
     if (state() != ConnectionState::Connected) {
         result.ok           = false;
-        result.errorMessage = QStringLiteral("not connected");
+        result.errorMessage = "not connected";
         return result;
     }
     if (batch.values.empty()) {
@@ -398,16 +401,16 @@ WriteResult ModbusTcpClientTransport::writeBatch(WriteBatch const& batch) {
         auto* reply = m_impl->client->sendWriteRequest(unit, m_impl->cfg.slaveId);
         if (!reply) {
             result.ok           = false;
-            result.errorMessage = m_impl->client->errorString();
-            if (result.errorMessage.isEmpty())
-                result.errorMessage = QStringLiteral("sendWriteRequest failed");
+            QString err = m_impl->client->errorString();
+            if (err.isEmpty()) err = QStringLiteral("sendWriteRequest failed");
+            result.errorMessage = err.toStdString();
             done.release();
             return;
         }
         if (reply->isFinished()) {
             if (reply->error() != QModbusDevice::NoError) {
                 result.ok           = false;
-                result.errorMessage = reply->errorString();
+                result.errorMessage = reply->errorString().toStdString();
             } else {
                 result.ok = true;
             }
@@ -419,7 +422,7 @@ WriteResult ModbusTcpClientTransport::writeBatch(WriteBatch const& batch) {
             [reply, &result, &done] {
                 if (reply->error() != QModbusDevice::NoError) {
                     result.ok           = false;
-                    result.errorMessage = reply->errorString();
+                    result.errorMessage = reply->errorString().toStdString();
                 } else {
                     result.ok = true;
                 }
@@ -430,7 +433,7 @@ WriteResult ModbusTcpClientTransport::writeBatch(WriteBatch const& batch) {
 
     if (!done.tryAcquire(1, m_impl->cfg.requestTimeoutMs * 2 + 500)) {
         result.ok           = false;
-        result.errorMessage = QStringLiteral("write timeout");
+        result.errorMessage = "write timeout";
     }
     return result;
 }
@@ -442,7 +445,7 @@ void ModbusTcpClientTransport::readAsync(ReadRequest const& req, ReadDone done) 
         ReadResult r;
         r.startAddress = req.startAddress;
         r.ok = false;
-        r.errorMessage = QStringLiteral("not connected");
+        r.errorMessage = "not connected";
         done(std::move(r));
         return;
     }
@@ -451,7 +454,7 @@ void ModbusTcpClientTransport::readAsync(ReadRequest const& req, ReadDone done) 
 
 void ModbusTcpClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
     if (state() != ConnectionState::Connected) {
-        done(WriteResult{false, QStringLiteral("not connected")});
+        done(WriteResult{false, "not connected"});
         return;
     }
     detail::modbusWriteAsync(m_impl->client, m_impl->cfg.slaveId, batch, std::move(done));

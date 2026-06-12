@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 #include <catch2/catch_test_macros.hpp>
 
+#include <string>
+
 #include "core/transport/MqttClientTransport.h"
 #include "core/transport/MqttPahoTransport.h"
 
@@ -42,7 +44,7 @@ TEST_CASE("Qt Mqtt transport.read on disconnected returns 'not connected'",
 
     auto rd = t.read({core::RegisterTable::HoldingRegister, 0, 2});
     REQUIRE_FALSE(rd.ok);
-    REQUIRE(rd.errorMessage.contains("not connected"));
+    REQUIRE(rd.errorMessage.find("not connected") != std::string::npos);
 }
 
 // ─── paho.mqtt.cpp backend ─────────────────────────────────────────

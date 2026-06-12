@@ -3,6 +3,7 @@
 #include "core/transport/S7ClientTransport.h"
 
 #include <atomic>
+#include <string>
 #include <utility>
 
 #include "core/sched/SerialScheduler.h"
@@ -25,28 +26,28 @@ S7ClientTransport::S7ClientTransport(Config cfg, bus::EventBus* bus)
 
 S7ClientTransport::~S7ClientTransport() = default;
 
-QString               S7ClientTransport::id()    const { return m_impl->cfg.id; }
+std::string           S7ClientTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         S7ClientTransport::kind()  const { return TransportKind::S7Client; }
 ConnectionState       S7ClientTransport::state() const { return m_impl->state.load(); }
 
 sched::RequestScheduler& S7ClientTransport::scheduler() { return *m_impl->scheduler; }
 
 // Stub: real implementation requires `snap7` (http://snap7.sourceforge.net/).
-std::expected<void, QString> S7ClientTransport::connect() {
-    return std::unexpected(QStringLiteral(
+std::expected<void, std::string> S7ClientTransport::connect() {
+    return std::unexpected(std::string(
         "S7ClientTransport: snap7 library not yet vendored"));
 }
 void S7ClientTransport::disconnect() {}
 
 ReadResult S7ClientTransport::read(ReadRequest const&) {
     ReadResult r;
-    r.errorMessage = QStringLiteral("S7ClientTransport not implemented yet");
+    r.errorMessage = "S7ClientTransport not implemented yet";
     return r;
 }
 
 WriteResult S7ClientTransport::writeBatch(WriteBatch const&) {
     WriteResult r;
-    r.errorMessage = QStringLiteral("S7ClientTransport not implemented yet");
+    r.errorMessage = "S7ClientTransport not implemented yet";
     return r;
 }
 

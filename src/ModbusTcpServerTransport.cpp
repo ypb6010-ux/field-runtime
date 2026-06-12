@@ -35,6 +35,10 @@ ConnectionState stateFromQt(QModbusDevice::State s) {
     return ConnectionState::Disconnected;
 }
 
+QString qs(std::string const& s) {
+    return QString::fromStdString(s);
+}
+
 } // namespace
 
 class ModbusTcpServerTransport::Impl {
@@ -57,11 +61,11 @@ public:
             if (cur == ConnectionState::Connected
                 && prev != ConnectionState::Connected) {
                 busPtr->publish(bus::TransportEvent{
-                    cfg.id.toStdString(), bus::TransportEventKind::Connected, {}});
+                    cfg.id, bus::TransportEventKind::Connected, {}});
             } else if (cur == ConnectionState::Disconnected
                        && prev == ConnectionState::Connected) {
                 busPtr->publish(bus::TransportEvent{
-                    cfg.id.toStdString(), bus::TransportEventKind::Disconnected, {}});
+                    cfg.id, bus::TransportEventKind::Disconnected, {}});
             }
         });
         QObject::connect(server, &QModbusDevice::errorOccurred,
@@ -71,7 +75,7 @@ public:
             lastError = server->errorString();
             if (busPtr && prev == ConnectionState::Connected) {
                 busPtr->publish(bus::TransportEvent{
-                    cfg.id.toStdString(), bus::TransportEventKind::Disconnected, lastError.toStdString()});
+                    cfg.id, bus::TransportEventKind::Disconnected, lastError.toStdString()});
             }
         });
         QObject::connect(server, &QModbusTcpServer::dataWritten,
@@ -85,7 +89,7 @@ public:
                 values.push_back(v);
             }
             busPtr->publish(bus::ServerWriteEvent{
-                cfg.id.toStdString(), core::fromQModbus(table), address, std::move(values)});
+                cfg.id, core::fromQModbus(table), address, std::move(values)});
         });
     }
 
@@ -126,7 +130,7 @@ ModbusTcpServerTransport::ModbusTcpServerTransport(Config cfg, bus::EventBus& bu
 
 ModbusTcpServerTransport::~ModbusTcpServerTransport() = default;
 
-QString               ModbusTcpServerTransport::id()    const { return m_impl->cfg.id; }
+std::string           ModbusTcpServerTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         ModbusTcpServerTransport::kind()  const { return TransportKind::ModbusTcpServer; }
 ConnectionState       ModbusTcpServerTransport::state() const { return m_impl->state.load(std::memory_order_acquire); }
 
@@ -161,7 +165,7 @@ bool applyListenConfig(QModbusTcpServer*                       server,
     server->setMap(map);
     server->setServerAddress(cfg.slaveId);
     server->setConnectionParameter(
-        QModbusDevice::NetworkAddressParameter, cfg.listenAddress);
+        QModbusDevice::NetworkAddressParameter, qs(cfg.listenAddress));
     server->setConnectionParameter(
         QModbusDevice::NetworkPortParameter, cfg.listenPort);
     return server->connectDevice();
@@ -169,7 +173,7 @@ bool applyListenConfig(QModbusTcpServer*                       server,
 
 } // namespace
 
-std::expected<void, QString>
+std::expected<void, std::string>
 ModbusTcpServerTransport::connect() {
     if (state() == ConnectionState::Connected) {
         armReconnectIfConfigured();
@@ -182,8 +186,8 @@ ModbusTcpServerTransport::connect() {
     if (!ok) {
         armReconnectIfConfigured();
         return std::unexpected(m_impl->lastError.isEmpty()
-            ? QStringLiteral("connectDevice() returned false")
-            : m_impl->lastError);
+            ? std::string("connectDevice() returned false")
+            : m_impl->lastError.toStdString());
     }
 
     auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
@@ -195,12 +199,12 @@ ModbusTcpServerTransport::connect() {
         }
         if (s == ConnectionState::Error) {
             armReconnectIfConfigured();
-            return std::unexpected(m_impl->lastError);
+            return std::unexpected(m_impl->lastError.toStdString());
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     armReconnectIfConfigured();
-    return std::unexpected(QStringLiteral("listen timeout"));
+    return std::unexpected(std::string("listen timeout"));
 }
 
 void ModbusTcpServerTransport::disconnect() {
@@ -247,7 +251,7 @@ ReadResult ModbusTcpServerTransport::read(ReadRequest const& req) {
             quint16 v = 0;
             if (!m_impl->server->data(core::toQModbus(req.table), req.startAddress + i, &v)) {
                 result.ok           = false;
-                result.errorMessage = QStringLiteral("address out of range");
+                result.errorMessage = "address out of range";
                 return;
             }
             out.push_back(v);
@@ -266,7 +270,7 @@ WriteResult ModbusTcpServerTransport::writeBatch(WriteBatch const& batch) {
                                           batch.startAddress + i,
                                           batch.values.at(i))) {
                 result.ok           = false;
-                result.errorMessage = QStringLiteral("setData refused");
+                result.errorMessage = "setData refused";
                 return;
             }
         }

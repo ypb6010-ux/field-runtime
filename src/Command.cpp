@@ -12,7 +12,7 @@ Command::Command(Config cfg, transport::Transport& transport)
     : m_transport(&transport)
     , m_cfg(std::move(cfg)) {
     m_id          = m_cfg.moduleId;
-    m_transportId = transport.id();
+    m_transportId = QString::fromStdString(transport.id());
     m_priority    = m_cfg.priority;
 }
 
@@ -41,7 +41,7 @@ sched::SubmitResult Command::execute() {
         if (submission.kind != sched::ResultKind::Ok && firstFailure.kind == sched::ResultKind::Ok) {
             firstFailure = submission;
         } else if (!write.ok && firstFailure.kind == sched::ResultKind::Ok) {
-            firstFailure = {sched::ResultKind::Error, write.errorMessage.toStdString(),
+            firstFailure = {sched::ResultKind::Error, write.errorMessage,
                             submission.latencyMs};
         }
     }

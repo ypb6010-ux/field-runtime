@@ -230,8 +230,8 @@ TEST_CASE("Bridge mirrors PLC reads into the server table and forwards operator 
 
     // —— 转发:真实操作箱(client)写 main HR0/1 → 真实 ServerWriteEvent → 转发到 PLC ——
     transport::ModbusTcpClientTransport::Config opCfg;
-    opCfg.id = QStringLiteral("opbox");
-    opCfg.host = QStringLiteral("127.0.0.1");
+    opCfg.id = "opbox";
+    opCfg.host = "127.0.0.1";
     opCfg.port = serverPort;
     opCfg.slaveId = 1;
     opCfg.connectTimeoutMs = 1000;

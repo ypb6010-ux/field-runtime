@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include <functional>
-#include <QString>
 #include <expected>
+#include <functional>
+#include <string>
 
 #include "core/core_global.h"
 #include "core/transport/TransportTypes.h"
@@ -30,12 +30,12 @@ class CORE_EXPORT Transport {
 public:
     virtual ~Transport() = default;
 
-    virtual QString          id()    const = 0;
+    virtual std::string      id()    const = 0;
     virtual TransportKind    kind()  const = 0;
     virtual ConnectionState  state() const = 0;
 
-    virtual std::expected<void, QString> connect()    = 0;
-    virtual void                          disconnect() = 0;
+    virtual std::expected<void, std::string> connect()    = 0;
+    virtual void                             disconnect() = 0;
 
     virtual sched::RequestScheduler& scheduler() = 0;
 

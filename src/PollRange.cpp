@@ -21,7 +21,7 @@ PollRange::PollRange(QString                     moduleId,
     , m_req(std::move(request))
     , m_periodMs(periodMs) {
     m_id          = std::move(moduleId);
-    m_transportId = transport.id();
+    m_transportId = QString::fromStdString(transport.id());
     m_priority    = priority;
 }
 
@@ -103,7 +103,7 @@ sched::SubmitResult PollRange::pollOnce() {
     applyResult(result);
     if (!result.ok) {
         submission.kind         = sched::ResultKind::Error;
-        submission.errorMessage = result.errorMessage.toStdString();
+        submission.errorMessage = result.errorMessage;
     }
     return submission;
 }

@@ -45,6 +45,10 @@ ConnectionState stateFromQt(QOpcUaClient::ClientState s) {
     return ConnectionState::Disconnected;
 }
 
+QString qs(std::string const& s) {
+    return QString::fromStdString(s);
+}
+
 } // namespace
 
 class OpcUaClientTransport::Impl {
@@ -60,10 +64,10 @@ public:
         // subsequent network I/O runs there. invokeMethod-on-QThread from
         // the same thread deadlocks, so we never use that pattern.
         QOpcUaProvider provider;
-        client = provider.createClient(cfg.backend);
+        client = provider.createClient(qs(cfg.backend));
         if (!client) {
             lastError = QStringLiteral("provider failed to create '%1' backend")
-                            .arg(cfg.backend);
+                            .arg(qs(cfg.backend));
             thread->start();   // keep the worker thread alive for symmetry
             return;
         }
@@ -76,11 +80,11 @@ public:
             if (cur == ConnectionState::Connected
                 && prev != ConnectionState::Connected) {
                 busPtr->publish(bus::TransportEvent{
-                    cfg.id.toStdString(), bus::TransportEventKind::Connected, {}});
+                    cfg.id, bus::TransportEventKind::Connected, {}});
             } else if (cur == ConnectionState::Disconnected
                        && prev == ConnectionState::Connected) {
                 busPtr->publish(bus::TransportEvent{
-                    cfg.id.toStdString(), bus::TransportEventKind::Disconnected, {}});
+                    cfg.id, bus::TransportEventKind::Disconnected, {}});
             }
         });
         QObject::connect(client, &QOpcUaClient::errorChanged,
@@ -129,26 +133,26 @@ OpcUaClientTransport::OpcUaClientTransport(Config cfg, bus::EventBus* bus)
 
 OpcUaClientTransport::~OpcUaClientTransport() = default;
 
-QString               OpcUaClientTransport::id()    const { return m_impl->cfg.id; }
+std::string           OpcUaClientTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         OpcUaClientTransport::kind()  const { return TransportKind::OpcUaClient; }
 ConnectionState       OpcUaClientTransport::state() const { return m_impl->state.load(); }
 
 sched::RequestScheduler& OpcUaClientTransport::scheduler() { return *m_impl->scheduler; }
 
-std::expected<void, QString>
+std::expected<void, std::string>
 OpcUaClientTransport::connect() {
     if (!m_impl->client) {
         return std::unexpected(m_impl->lastError.isEmpty()
-            ? QStringLiteral("OPC UA backend not initialised")
-            : m_impl->lastError);
+            ? std::string("OPC UA backend not initialised")
+            : m_impl->lastError.toStdString());
     }
     if (state() == ConnectionState::Connected) return {};
     QMetaObject::invokeMethod(m_impl->client, [this] {
         QOpcUaEndpointDescription ep;
-        ep.setEndpointUrl(m_impl->cfg.endpointUrl);
-        if (!m_impl->cfg.username.isEmpty()) {
+        ep.setEndpointUrl(qs(m_impl->cfg.endpointUrl));
+        if (!m_impl->cfg.username.empty()) {
             QOpcUaAuthenticationInformation auth;
-            auth.setUsernameAuthentication(m_impl->cfg.username, m_impl->cfg.password);
+            auth.setUsernameAuthentication(qs(m_impl->cfg.username), qs(m_impl->cfg.password));
             m_impl->client->setAuthenticationInformation(auth);
         }
         m_impl->client->connectToEndpoint(ep);
@@ -160,10 +164,10 @@ OpcUaClientTransport::connect() {
         auto s = state();
         if (s == ConnectionState::Connected) return {};
         if (s == ConnectionState::Error)
-            return std::unexpected(m_impl->lastError);
+            return std::unexpected(m_impl->lastError.toStdString());
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    return std::unexpected(QStringLiteral("OPC UA connect timeout"));
+    return std::unexpected(std::string("OPC UA connect timeout"));
 }
 
 void OpcUaClientTransport::disconnect() {
@@ -180,13 +184,13 @@ ReadResult OpcUaClientTransport::read(ReadRequest const& req) {
     ReadResult result;
     result.startAddress = req.startAddress;
     if (state() != ConnectionState::Connected) {
-        result.errorMessage = QStringLiteral("not connected");
+        result.errorMessage = "not connected";
         return result;
     }
     core::RegisterWords out;
     out.reserve(req.count);
     for (int i = 0; i < req.count; ++i) {
-        QString const nodeId = m_impl->cfg.nodeIdTemplate.arg(req.startAddress + i);
+        QString const nodeId = qs(m_impl->cfg.nodeIdTemplate).arg(req.startAddress + i);
         QSemaphore done(0);
         QVariant   value;
         bool       ok = false;
@@ -208,11 +212,11 @@ ReadResult OpcUaClientTransport::read(ReadRequest const& req) {
             }
         }, Qt::BlockingQueuedConnection);
         if (!done.tryAcquire(1, m_impl->cfg.requestTimeoutMs)) {
-            result.errorMessage = QStringLiteral("OPC UA read timeout @ %1").arg(nodeId);
+            result.errorMessage = QStringLiteral("OPC UA read timeout @ %1").arg(nodeId).toStdString();
             return result;
         }
         if (!ok) {
-            result.errorMessage = QStringLiteral("OPC UA read failed @ %1").arg(nodeId);
+            result.errorMessage = QStringLiteral("OPC UA read failed @ %1").arg(nodeId).toStdString();
             return result;
         }
         out.push_back(quint16(value.toUInt()));
@@ -225,11 +229,11 @@ ReadResult OpcUaClientTransport::read(ReadRequest const& req) {
 WriteResult OpcUaClientTransport::writeBatch(WriteBatch const& batch) {
     WriteResult result;
     if (state() != ConnectionState::Connected) {
-        result.errorMessage = QStringLiteral("not connected");
+        result.errorMessage = "not connected";
         return result;
     }
     for (int i = 0; i < batch.values.size(); ++i) {
-        QString const nodeId = m_impl->cfg.nodeIdTemplate.arg(batch.startAddress + i);
+        QString const nodeId = qs(m_impl->cfg.nodeIdTemplate).arg(batch.startAddress + i);
         QSemaphore done(0);
         bool       ok = false;
         QVariant const v = batch.values.at(i);
@@ -249,11 +253,11 @@ WriteResult OpcUaClientTransport::writeBatch(WriteBatch const& batch) {
             }
         }, Qt::BlockingQueuedConnection);
         if (!done.tryAcquire(1, m_impl->cfg.requestTimeoutMs)) {
-            result.errorMessage = QStringLiteral("OPC UA write timeout @ %1").arg(nodeId);
+            result.errorMessage = QStringLiteral("OPC UA write timeout @ %1").arg(nodeId).toStdString();
             return result;
         }
         if (!ok) {
-            result.errorMessage = QStringLiteral("OPC UA write rejected @ %1").arg(nodeId);
+            result.errorMessage = QStringLiteral("OPC UA write rejected @ %1").arg(nodeId).toStdString();
             return result;
         }
     }
@@ -272,7 +276,7 @@ void OpcUaClientTransport::readAsync(ReadRequest const& req, ReadDone done) {
     if (state() != ConnectionState::Connected) {
         ReadResult r;
         r.startAddress = req.startAddress;
-        r.errorMessage = QStringLiteral("not connected");
+        r.errorMessage = "not connected";
         done(std::move(r));
         return;
     }
@@ -292,7 +296,7 @@ void OpcUaClientTransport::readAsync(ReadRequest const& req, ReadDone done) {
     st->req   = req;
     st->done  = std::move(done);
     auto* client  = m_impl->client;
-    QString tpl   = m_impl->cfg.nodeIdTemplate;
+    QString tpl   = qs(m_impl->cfg.nodeIdTemplate);
     int safetyMs  = m_impl->cfg.requestTimeoutMs * std::max(1, req.count) + 500;
 
     QMetaObject::invokeMethod(client, [st, client, tpl, safetyMs]() {
@@ -301,7 +305,7 @@ void OpcUaClientTransport::readAsync(ReadRequest const& req, ReadDone done) {
             st->completed = true;
             ReadResult r;
             r.startAddress = st->req.startAddress;
-            r.errorMessage = QStringLiteral("OPC UA read timeout");
+            r.errorMessage = "OPC UA read timeout";
             st->done(std::move(r));
         });
         st->step = [client, tpl](std::shared_ptr<Chain> self) {
@@ -321,7 +325,7 @@ void OpcUaClientTransport::readAsync(ReadRequest const& req, ReadDone done) {
                 self->completed = true;
                 ReadResult r;
                 r.startAddress = self->req.startAddress;
-                r.errorMessage = QStringLiteral("OPC UA bad node %1").arg(nodeId);
+                r.errorMessage = QStringLiteral("OPC UA bad node %1").arg(nodeId).toStdString();
                 self->done(std::move(r));
                 return;
             }
@@ -338,7 +342,7 @@ void OpcUaClientTransport::readAsync(ReadRequest const& req, ReadDone done) {
                         self->completed = true;
                         ReadResult r;
                         r.startAddress = self->req.startAddress;
-                        r.errorMessage = QStringLiteral("OPC UA read failed");
+                        r.errorMessage = "OPC UA read failed";
                         self->done(std::move(r));
                         return;
                     }
@@ -350,7 +354,7 @@ void OpcUaClientTransport::readAsync(ReadRequest const& req, ReadDone done) {
                 self->completed = true;
                 ReadResult r;
                 r.startAddress = self->req.startAddress;
-                r.errorMessage = QStringLiteral("OPC UA readAttributes failed");
+                r.errorMessage = "OPC UA readAttributes failed";
                 self->done(std::move(r));
             }
         };
@@ -360,7 +364,7 @@ void OpcUaClientTransport::readAsync(ReadRequest const& req, ReadDone done) {
 
 void OpcUaClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
     if (state() != ConnectionState::Connected) {
-        done(WriteResult{false, QStringLiteral("not connected")});
+        done(WriteResult{false, "not connected"});
         return;
     }
     struct Chain {
@@ -374,7 +378,7 @@ void OpcUaClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
     st->batch = batch;
     st->done  = std::move(done);
     auto* client  = m_impl->client;
-    QString tpl   = m_impl->cfg.nodeIdTemplate;
+    QString tpl   = qs(m_impl->cfg.nodeIdTemplate);
     int const n   = batch.values.size();
     int safetyMs  = m_impl->cfg.requestTimeoutMs * std::max(1, n) + 500;
 
@@ -382,7 +386,7 @@ void OpcUaClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
         QTimer::singleShot(safetyMs, client, [st]() {
             if (st->completed) return;
             st->completed = true;
-            st->done(WriteResult{false, QStringLiteral("OPC UA write timeout")});
+            st->done(WriteResult{false, "OPC UA write timeout"});
         });
         st->step = [client, tpl](std::shared_ptr<Chain> self) {
             if (self->completed) return;
@@ -398,7 +402,7 @@ void OpcUaClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
             if (!node) {
                 self->completed = true;
                 self->done(WriteResult{false,
-                    QStringLiteral("OPC UA bad node %1").arg(nodeId)});
+                    QStringLiteral("OPC UA bad node %1").arg(nodeId).toStdString()});
                 return;
             }
             QObject::connect(node, &QOpcUaNode::attributeWritten, node,
@@ -410,7 +414,7 @@ void OpcUaClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
                     if (!ok) {
                         self->completed = true;
                         self->done(WriteResult{false,
-                            QStringLiteral("OPC UA write rejected")});
+                            "OPC UA write rejected"});
                         return;
                     }
                     ++self->i;
@@ -420,7 +424,7 @@ void OpcUaClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
                 node->deleteLater();
                 self->completed = true;
                 self->done(WriteResult{false,
-                    QStringLiteral("OPC UA writeAttribute failed")});
+                    "OPC UA writeAttribute failed"});
             }
         };
         st->step(st);
@@ -444,22 +448,22 @@ OpcUaClientTransport::OpcUaClientTransport(Config cfg, bus::EventBus* bus)
     : m_impl(std::make_unique<Impl>(std::move(cfg), bus)) {}
 OpcUaClientTransport::~OpcUaClientTransport() = default;
 
-QString               OpcUaClientTransport::id()    const { return m_impl->cfg.id; }
+std::string           OpcUaClientTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         OpcUaClientTransport::kind()  const { return TransportKind::OpcUaClient; }
 ConnectionState       OpcUaClientTransport::state() const { return m_impl->state.load(); }
 sched::RequestScheduler& OpcUaClientTransport::scheduler() { return *m_impl->scheduler; }
 
-std::expected<void, QString> OpcUaClientTransport::connect() {
-    return std::unexpected(QStringLiteral(
+std::expected<void, std::string> OpcUaClientTransport::connect() {
+    return std::unexpected(std::string(
         "OpcUaClientTransport disabled (CORE_BUILD_OPCUA=OFF)"));
 }
 void        OpcUaClientTransport::disconnect()                        {}
 ReadResult  OpcUaClientTransport::read      (ReadRequest const&)       {
-    ReadResult r; r.errorMessage = QStringLiteral("OPC UA disabled at build time");
+    ReadResult r; r.errorMessage = "OPC UA disabled at build time";
     return r;
 }
 WriteResult OpcUaClientTransport::writeBatch(WriteBatch  const&)       {
-    WriteResult r; r.errorMessage = QStringLiteral("OPC UA disabled at build time");
+    WriteResult r; r.errorMessage = "OPC UA disabled at build time";
     return r;
 }
 void OpcUaClientTransport::readAsync(ReadRequest const& req, ReadDone done) {

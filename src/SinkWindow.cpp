@@ -18,7 +18,7 @@ SinkWindow::SinkWindow(Config cfg, transport::Transport& transport)
     , m_cfg(std::move(cfg))
     , m_snapshot(m_cfg.size, 0) {
     m_id          = m_cfg.moduleId;
-    m_transportId = transport.id();
+    m_transportId = QString::fromStdString(transport.id());
     m_priority    = m_cfg.priority;
     int const populate = std::min(int(m_cfg.initial.size()), m_cfg.size);
     for (int i = 0; i < populate; ++i) {
@@ -149,9 +149,10 @@ sched::SubmitResult SinkWindow::onTick() {
 
     if (!write.ok) {
         submission.kind         = sched::ResultKind::Error;
-        submission.errorMessage = write.errorMessage.toStdString();
+        submission.errorMessage = write.errorMessage;
     }
-    submission.errorMessage = (reason + (write.ok ? QString{} : (": " + write.errorMessage))).toStdString();
+    submission.errorMessage = reason.toStdString()
+        + (write.ok ? std::string() : (": " + write.errorMessage));
     return submission;
 }
 

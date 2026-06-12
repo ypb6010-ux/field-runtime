@@ -16,7 +16,7 @@ Heartbeat::Heartbeat(Config cfg, transport::Transport& transport)
     : m_transport(&transport)
     , m_cfg(std::move(cfg)) {
     m_id          = m_cfg.moduleId;
-    m_transportId = transport.id();
+    m_transportId = QString::fromStdString(transport.id());
     m_priority    = m_cfg.priority;
 }
 
@@ -52,7 +52,7 @@ sched::SubmitResult Heartbeat::onTick() {
         m_lastSentAt = now;
         if (!write.ok) {
             submission.kind         = sched::ResultKind::Error;
-            submission.errorMessage = write.errorMessage.toStdString();
+            submission.errorMessage = write.errorMessage;
         }
     }
     return submission;

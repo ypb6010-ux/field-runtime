@@ -3,7 +3,7 @@
 #pragma once
 
 #include <memory>
-#include <QString>
+#include <string>
 
 #include "core/core_global.h"
 #include "core/transport/Transport.h"
@@ -26,15 +26,14 @@ namespace core::transport {
 class CORE_EXPORT MqttClientTransport : public Transport {
 public:
     struct Config {
-        QString  id          = QStringLiteral("mqtt-1");
-        QString  brokerUri   = QStringLiteral("tcp://127.0.0.1:1883");
-        QString  clientId    = QStringLiteral("core-client");
-        QString  username;
-        QString  password;
-        QString  topicPrefix;             // optional namespace e.g. "factory/zone1/"
-        // Per-address topic template; the address is substituted into the
-        // QString::arg placeholder, e.g. "factory/zone1/reg/%1".
-        QString  topicTemplate = QStringLiteral("reg/%1");
+        std::string  id          = "mqtt-1";
+        std::string  brokerUri   = "tcp://127.0.0.1:1883";
+        std::string  clientId    = "core-client";
+        std::string  username;
+        std::string  password;
+        std::string  topicPrefix;             // optional namespace e.g. "factory/zone1/"
+        // Per-address topic template; "%1" is replaced by the register address.
+        std::string  topicTemplate = "reg/%1";
         int      qos          = 1;
         bool     cleanSession = true;
         int      connectTimeoutMs    = 5000;
@@ -53,12 +52,12 @@ public:
 
     CORE_DISABLE_COPY_MOVE(MqttClientTransport)
 
-    QString               id()    const override;
+    std::string           id()    const override;
     TransportKind         kind()  const override;
     ConnectionState       state() const override;
 
-    std::expected<void, QString> connect()    override;
-    void                          disconnect() override;
+    std::expected<void, std::string> connect()    override;
+    void                             disconnect() override;
 
     sched::RequestScheduler& scheduler() override;
 

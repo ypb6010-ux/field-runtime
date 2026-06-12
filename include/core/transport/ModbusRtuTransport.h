@@ -3,7 +3,7 @@
 #pragma once
 
 #include <memory>
-#include <QString>
+#include <string>
 
 #include "core/core_global.h"
 #include "core/transport/Transport.h"
@@ -25,8 +25,8 @@ public:
     enum class Parity { None, Even, Odd };
 
     struct Config {
-        QString  id            = QStringLiteral("modbus-rtu");
-        QString  portName      = QStringLiteral("COM1");
+        std::string  id            = "modbus-rtu";
+        std::string  portName      = "COM1";
         int      baudRate      = 9600;
         int      dataBits      = 8;
         int      stopBits      = 1;
@@ -43,12 +43,12 @@ public:
 
     CORE_DISABLE_COPY_MOVE(ModbusRtuTransport)
 
-    QString               id()    const override;
+    std::string           id()    const override;
     TransportKind         kind()  const override;
     ConnectionState       state() const override;
 
-    std::expected<void, QString> connect()    override;
-    void                          disconnect() override;
+    std::expected<void, std::string> connect()    override;
+    void                             disconnect() override;
 
     sched::RequestScheduler& scheduler() override;
 

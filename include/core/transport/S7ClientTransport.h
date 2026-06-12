@@ -3,7 +3,7 @@
 #pragma once
 
 #include <memory>
-#include <QString>
+#include <string>
 
 #include "core/core_global.h"
 #include "core/transport/Transport.h"
@@ -21,8 +21,8 @@ namespace core::transport {
 class CORE_EXPORT S7ClientTransport : public Transport {
 public:
     struct Config {
-        QString  id          = QStringLiteral("s7-1");
-        QString  host        = QStringLiteral("192.168.0.1");
+        std::string  id          = "s7-1";
+        std::string  host        = "192.168.0.1";
         int      port        = 102;        // ISO-on-TCP default
         int      rack        = 0;
         int      slot        = 1;
@@ -37,12 +37,12 @@ public:
 
     CORE_DISABLE_COPY_MOVE(S7ClientTransport)
 
-    QString               id()    const override;
+    std::string           id()    const override;
     TransportKind         kind()  const override;
     ConnectionState       state() const override;
 
-    std::expected<void, QString> connect()    override;
-    void                          disconnect() override;
+    std::expected<void, std::string> connect()    override;
+    void                             disconnect() override;
 
     sched::RequestScheduler& scheduler() override;
 

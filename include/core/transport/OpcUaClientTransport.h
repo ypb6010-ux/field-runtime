@@ -3,7 +3,7 @@
 #pragma once
 
 #include <memory>
-#include <QString>
+#include <string>
 
 #include "core/core_global.h"
 #include "core/transport/Transport.h"
@@ -22,18 +22,18 @@ namespace core::transport {
 class CORE_EXPORT OpcUaClientTransport : public Transport {
 public:
     struct Config {
-        QString  id              = QStringLiteral("opcua-1");
-        QString  endpointUrl     = QStringLiteral("opc.tcp://127.0.0.1:4840");
-        QString  securityPolicy  = QStringLiteral("None");   // None / Basic256Sha256
-        QString  username;
-        QString  password;
+        std::string  id              = "opcua-1";
+        std::string  endpointUrl     = "opc.tcp://127.0.0.1:4840";
+        std::string  securityPolicy  = "None";   // None / Basic256Sha256
+        std::string  username;
+        std::string  password;
         // Open62541 backend name; `open62541` is the open-source default
         // bundled with Qt OPC UA.
-        QString  backend         = QStringLiteral("open62541");
+        std::string  backend         = "open62541";
         // Substituted with the register address when mapping Modbus-style
-        // ReadRequest / WriteBatch into OPC UA nodes. Use Qt's QString::arg
-        // placeholder, e.g. "ns=2;s=Var_%1".
-        QString  nodeIdTemplate  = QStringLiteral("ns=2;s=Var_%1");
+        // ReadRequest / WriteBatch into OPC UA nodes. "%1" is replaced by the
+        // register address, e.g. "ns=2;s=Var_%1".
+        std::string  nodeIdTemplate  = "ns=2;s=Var_%1";
         int      connectTimeoutMs    = 5000;
         int      requestTimeoutMs    = 2000;
         int      reconnectIntervalMs = 0;
@@ -51,12 +51,12 @@ public:
 
     CORE_DISABLE_COPY_MOVE(OpcUaClientTransport)
 
-    QString               id()    const override;
+    std::string           id()    const override;
     TransportKind         kind()  const override;
     ConnectionState       state() const override;
 
-    std::expected<void, QString> connect()    override;
-    void                          disconnect() override;
+    std::expected<void, std::string> connect()    override;
+    void                             disconnect() override;
 
     sched::RequestScheduler& scheduler() override;
 

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
+#include <cstdint>
 #include <memory>
-#include <QString>
+#include <string>
 
 #include "core/core_global.h"
 #include "core/transport/Transport.h"
@@ -30,9 +31,9 @@ namespace core::transport {
 class CORE_EXPORT ModbusTcpClientTransport : public Transport {
 public:
     struct Config {
-        QString  id            = QStringLiteral("modbus-tcp");
-        QString  host          = QStringLiteral("127.0.0.1");
-        quint16  port          = 502;
+        std::string   id            = "modbus-tcp";
+        std::string   host          = "127.0.0.1";
+        std::uint16_t port          = 502;
         int      slaveId       = 1;
         int      connectTimeoutMs = 3000;
         int      requestTimeoutMs = 1000;
@@ -48,12 +49,12 @@ public:
 
     CORE_DISABLE_COPY_MOVE(ModbusTcpClientTransport)
 
-    QString               id()    const override;
+    std::string           id()    const override;
     TransportKind         kind()  const override;
     ConnectionState       state() const override;
 
-    std::expected<void, QString> connect()    override;
-    void                          disconnect() override;
+    std::expected<void, std::string> connect()    override;
+    void                             disconnect() override;
 
     sched::RequestScheduler& scheduler() override;
 

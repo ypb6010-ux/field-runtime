@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include <QString>
+#include <string>
 
 #include "core/base/RegisterTable.h"
 #include "core/core_global.h"
@@ -42,12 +42,12 @@ struct ReadResult {
     bool            ok = false;
     core::RegisterWords  values;
     int             startAddress = 0;
-    QString         errorMessage;
+    std::string     errorMessage;
 };
 
 struct WriteResult {
     bool     ok = false;
-    QString  errorMessage;
+    std::string  errorMessage;
 };
 
 struct WatchRange {

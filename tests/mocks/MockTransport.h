@@ -5,6 +5,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <utility>
 
 #include <QList>
@@ -26,13 +27,13 @@ public:
     using ReadResult      = core::transport::ReadResult;
     using WriteResult     = core::transport::WriteResult;
 
-    explicit MockTransport(QString id = QStringLiteral("mock"))
+    explicit MockTransport(std::string id = "mock")
         : m_id(std::move(id))
         , m_scheduler(std::make_unique<core::sched::SerialScheduler>(
               core::sched::SchedulerConfig{})) {}
 
     // ─── core::transport::Transport ────────────────────────────────────
-    QString               id()    const override { return m_id; }
+    std::string           id()    const override { return m_id; }
     core::transport::TransportKind kind() const override {
         return core::transport::TransportKind::ModbusTcpClient;
     }
@@ -40,7 +41,7 @@ public:
         std::lock_guard lk(m_mtx);
         return m_state;
     }
-    std::expected<void, QString> connect() override {
+    std::expected<void, std::string> connect() override {
         std::lock_guard lk(m_mtx);
         m_state = ConnectionState::Connected;
         return {};
@@ -149,7 +150,7 @@ public:
     void enqueueReadError(QString msg) {
         ReadResult r;
         r.ok           = false;
-        r.errorMessage = std::move(msg);
+        r.errorMessage = msg.toStdString();
         enqueueReadResult(std::move(r));
     }
     void enqueueWriteResult(WriteResult r) {
@@ -171,7 +172,7 @@ public:
     }
 
 private:
-    QString                                                  m_id;
+    std::string                                              m_id;
     std::unique_ptr<core::sched::SerialScheduler>            m_scheduler;
     mutable std::mutex                                       m_mtx;
     ConnectionState                                          m_state = ConnectionState::Connected;

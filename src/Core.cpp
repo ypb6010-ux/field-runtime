@@ -201,14 +201,14 @@ public:
     log::Logger&              logger()     override { return *m_logger; }
 
     transport::Transport* transport(QString const& id) const override {
-        auto it = m_transports.find(id);
+        auto it = m_transports.find(id.toStdString());
         return it == m_transports.end() ? nullptr : it->second.get();
     }
 
     QStringList transportIds() const override {
         QStringList ids;
         ids.reserve(int(m_transports.size()));
-        for (auto const& [id, t] : m_transports) ids << id;
+        for (auto const& [id, t] : m_transports) ids << qs(id);
         return ids;
     }
 
@@ -283,7 +283,7 @@ public:
 
     void publishSchedulerStatsOnce() {
         for (auto& [id, t] : m_transports) {
-            m_bus->publish(bus::SchedulerStatsEvent{id.toStdString(), t->scheduler().stats()});
+            m_bus->publish(bus::SchedulerStatsEvent{id, t->scheduler().stats()});
         }
     }
 
@@ -609,37 +609,35 @@ private:
         for (auto const& tc : schema.transports) {
             if (tc.kind == transport::TransportKind::ModbusTcpClient) {
                 transport::ModbusTcpClientTransport::Config cfg;
-                cfg.id                   = qs(tc.id);
-                cfg.host                 = qs(tc.host);
-                cfg.port                 = quint16(tc.port);
+                cfg.id                   = tc.id;
+                cfg.host                 = tc.host;
+                cfg.port                 = std::uint16_t(tc.port);
                 cfg.slaveId              = tc.slaveId;
                 cfg.connectTimeoutMs     = tc.connectTimeoutMs;
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
                 cfg.scheduler            = tc.scheduler;
                 m_transports.emplace(
-                    qs(tc.id),
+                    tc.id,
                     std::make_unique<transport::ModbusTcpClientTransport>(
                         std::move(cfg), m_bus.get()));
             } else if (tc.kind == transport::TransportKind::ModbusTcpServer) {
                 transport::ModbusTcpServerTransport::Config cfg;
-                cfg.id                   = qs(tc.id);
-                cfg.listenAddress        = qs(tc.listenAddress);
-                cfg.listenPort           = quint16(tc.listenPort);
+                cfg.id                   = tc.id;
+                cfg.listenAddress        = tc.listenAddress;
+                cfg.listenPort           = std::uint16_t(tc.listenPort);
                 cfg.slaveId              = tc.slaveId;
                 cfg.maxClients           = tc.maxClients;
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
-                cfg.listenRanges         = QList<transport::WatchRange>(
-                                               tc.listenRanges.begin(),
-                                               tc.listenRanges.end());
+                cfg.listenRanges         = tc.listenRanges;
                 cfg.scheduler            = tc.scheduler;
                 m_transports.emplace(
-                    qs(tc.id),
+                    tc.id,
                     std::make_unique<transport::ModbusTcpServerTransport>(
                         std::move(cfg), *m_bus));
             } else if (tc.kind == transport::TransportKind::ModbusRtu) {
                 transport::ModbusRtuTransport::Config cfg;
-                cfg.id                   = qs(tc.id);
-                cfg.portName             = qs(tc.portName);
+                cfg.id                   = tc.id;
+                cfg.portName             = tc.portName;
                 cfg.baudRate             = tc.baudRate;
                 cfg.dataBits             = tc.dataBits;
                 cfg.stopBits             = tc.stopBits;
@@ -652,35 +650,35 @@ private:
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
                 cfg.scheduler            = tc.scheduler;
                 m_transports.emplace(
-                    qs(tc.id),
+                    tc.id,
                     std::make_unique<transport::ModbusRtuTransport>(
                         std::move(cfg), m_bus.get()));
             } else if (tc.kind == transport::TransportKind::OpcUaClient) {
                 transport::OpcUaClientTransport::Config cfg;
-                cfg.id                   = qs(tc.id);
-                cfg.endpointUrl          = qs(tc.endpointUrl);
-                cfg.securityPolicy       = qs(tc.securityPolicy);
-                cfg.username             = qs(tc.username);
-                cfg.password             = qs(tc.password);
-                cfg.backend              = qs(tc.opcuaBackend);
-                cfg.nodeIdTemplate       = qs(tc.nodeIdTemplate);
+                cfg.id                   = tc.id;
+                cfg.endpointUrl          = tc.endpointUrl;
+                cfg.securityPolicy       = tc.securityPolicy;
+                cfg.username             = tc.username;
+                cfg.password             = tc.password;
+                cfg.backend              = tc.opcuaBackend;
+                cfg.nodeIdTemplate       = tc.nodeIdTemplate;
                 cfg.connectTimeoutMs     = tc.connectTimeoutMs;
                 cfg.requestTimeoutMs     = tc.requestTimeoutMs;
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
                 cfg.scheduler            = tc.scheduler;
                 m_transports.emplace(
-                    qs(tc.id),
+                    tc.id,
                     std::make_unique<transport::OpcUaClientTransport>(
                         std::move(cfg), m_bus.get()));
             } else if (tc.kind == transport::TransportKind::MqttClient) {
                 transport::MqttClientTransport::Config cfg;
-                cfg.id                   = qs(tc.id);
-                cfg.brokerUri            = qs(tc.brokerUri);
-                cfg.clientId             = qs(tc.clientId);
-                cfg.username             = qs(tc.username);
-                cfg.password             = qs(tc.password);
-                cfg.topicPrefix          = qs(tc.topicPrefix);
-                cfg.topicTemplate        = qs(tc.topicTemplate);
+                cfg.id                   = tc.id;
+                cfg.brokerUri            = tc.brokerUri;
+                cfg.clientId             = tc.clientId;
+                cfg.username             = tc.username;
+                cfg.password             = tc.password;
+                cfg.topicPrefix          = tc.topicPrefix;
+                cfg.topicTemplate        = tc.topicTemplate;
                 cfg.qos                  = tc.qos;
                 cfg.cleanSession         = tc.cleanSession;
                 cfg.connectTimeoutMs     = tc.connectTimeoutMs;
@@ -688,18 +686,18 @@ private:
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
                 cfg.scheduler            = tc.scheduler;
                 m_transports.emplace(
-                    qs(tc.id),
+                    tc.id,
                     std::make_unique<transport::MqttClientTransport>(
                         std::move(cfg), m_bus.get()));
             } else if (tc.kind == transport::TransportKind::MqttPahoClient) {
                 transport::MqttPahoTransport::Config cfg;
-                cfg.id                   = qs(tc.id);
-                cfg.brokerUri            = qs(tc.brokerUri);
-                cfg.clientId             = qs(tc.clientId);
-                cfg.username             = qs(tc.username);
-                cfg.password             = qs(tc.password);
-                cfg.topicPrefix          = qs(tc.topicPrefix);
-                cfg.topicTemplate        = qs(tc.topicTemplate);
+                cfg.id                   = tc.id;
+                cfg.brokerUri            = tc.brokerUri;
+                cfg.clientId             = tc.clientId;
+                cfg.username             = tc.username;
+                cfg.password             = tc.password;
+                cfg.topicPrefix          = tc.topicPrefix;
+                cfg.topicTemplate        = tc.topicTemplate;
                 cfg.qos                  = tc.qos;
                 cfg.cleanSession         = tc.cleanSession;
                 cfg.connectTimeoutMs     = tc.connectTimeoutMs;
@@ -707,13 +705,13 @@ private:
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
                 cfg.scheduler            = tc.scheduler;
                 m_transports.emplace(
-                    qs(tc.id),
+                    tc.id,
                     std::make_unique<transport::MqttPahoTransport>(
                         std::move(cfg), m_bus.get()));
             } else if (tc.kind == transport::TransportKind::S7Client) {
                 transport::S7ClientTransport::Config cfg;
-                cfg.id                   = qs(tc.id);
-                cfg.host                 = qs(tc.host);
+                cfg.id                   = tc.id;
+                cfg.host                 = tc.host;
                 cfg.port                 = tc.port;
                 cfg.rack                 = tc.rack;
                 cfg.slot                 = tc.slot;
@@ -722,7 +720,7 @@ private:
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
                 cfg.scheduler            = tc.scheduler;
                 m_transports.emplace(
-                    qs(tc.id),
+                    tc.id,
                     std::make_unique<transport::S7ClientTransport>(
                         std::move(cfg), m_bus.get()));
             }
@@ -934,7 +932,7 @@ private:
     std::unique_ptr<module::ModuleRegistry>                     m_modules;
     std::unique_ptr<plugin::PluginRegistry>                     m_plugins;
     std::unique_ptr<plugin::PortRegistry>                       m_ports;
-    std::map<QString, std::unique_ptr<transport::Transport>>    m_transports;
+    std::map<std::string, std::unique_ptr<transport::Transport>> m_transports;
     std::vector<std::thread>                                    m_connectThreads;
     bool                                                        m_started = false;
     std::vector<module::PollRange*>                             m_pollRangePtrs;

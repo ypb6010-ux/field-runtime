@@ -3,7 +3,7 @@
 #pragma once
 
 #include <memory>
-#include <QString>
+#include <string>
 
 #include "core/core_global.h"
 #include "core/transport/Transport.h"
@@ -28,13 +28,13 @@ namespace core::transport {
 class CORE_EXPORT MqttPahoTransport : public Transport {
 public:
     struct Config {
-        QString  id          = QStringLiteral("mqtt-paho-1");
-        QString  brokerUri   = QStringLiteral("tcp://127.0.0.1:1883");
-        QString  clientId    = QStringLiteral("core-paho-client");
-        QString  username;
-        QString  password;
-        QString  topicPrefix;             // e.g. "factory/zone1/"
-        QString  topicTemplate = QStringLiteral("reg/%1");
+        std::string  id          = "mqtt-paho-1";
+        std::string  brokerUri   = "tcp://127.0.0.1:1883";
+        std::string  clientId    = "core-paho-client";
+        std::string  username;
+        std::string  password;
+        std::string  topicPrefix;             // e.g. "factory/zone1/"
+        std::string  topicTemplate = "reg/%1";
         int      qos          = 1;
         bool     cleanSession = true;
         int      connectTimeoutMs    = 5000;
@@ -53,12 +53,12 @@ public:
 
     CORE_DISABLE_COPY_MOVE(MqttPahoTransport)
 
-    QString               id()    const override;
+    std::string           id()    const override;
     TransportKind         kind()  const override;
     ConnectionState       state() const override;
 
-    std::expected<void, QString> connect()    override;
-    void                          disconnect() override;
+    std::expected<void, std::string> connect()    override;
+    void                             disconnect() override;
 
     sched::RequestScheduler& scheduler() override;
 

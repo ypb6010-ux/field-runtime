@@ -11,6 +11,9 @@
 #include <unordered_map>
 #include <utility>
 
+#include <QByteArray>
+#include <QString>
+
 #ifdef CORE_HAS_MQTT_PAHO
   #include <mqtt/async_client.h>
   #include <mqtt/callback.h>
@@ -41,6 +44,10 @@ QString topicSuffix(QString const& prefix, QString const& full) {
     return full;
 }
 
+QString qs(std::string const& s) {
+    return QString::fromStdString(s);
+}
+
 } // namespace
 
 class MqttPahoTransport::Impl : public mqtt::callback {
@@ -49,7 +56,7 @@ public:
         : cfg(std::move(c))
         , busPtr(b)
         , scheduler(sched::makeScheduler(cfg.scheduler))
-        , client(cfg.brokerUri.toStdString(), cfg.clientId.toStdString()) {
+        , client(cfg.brokerUri, cfg.clientId) {
         client.set_callback(*this);
     }
 
@@ -60,7 +67,7 @@ public:
     }
 
     QString topicForAddress(int addr) const {
-        return joinTopic(cfg.topicPrefix, cfg.topicTemplate.arg(addr));
+        return joinTopic(qs(cfg.topicPrefix), qs(cfg.topicTemplate).arg(addr));
     }
 
     // mqtt::callback overrides — invoked from paho's dispatcher thread.
@@ -69,7 +76,7 @@ public:
                                           std::memory_order_acq_rel);
         if (busPtr && prev != ConnectionState::Connected) {
             busPtr->publish(bus::TransportEvent{
-                cfg.id.toStdString(), bus::TransportEventKind::Connected, {}});
+                cfg.id, bus::TransportEventKind::Connected, {}});
         }
     }
 
@@ -79,7 +86,7 @@ public:
         lastError = QString::fromStdString(cause);
         if (busPtr && prev == ConnectionState::Connected) {
             busPtr->publish(bus::TransportEvent{
-                cfg.id.toStdString(), bus::TransportEventKind::Disconnected, cause});
+                cfg.id, bus::TransportEventKind::Disconnected, cause});
         }
     }
 
@@ -89,7 +96,7 @@ public:
         QByteArray const payload(msg->get_payload().data(),
                                   int(msg->get_payload().size()));
         std::lock_guard lk(cacheMtx);
-        cache[topicSuffix(cfg.topicPrefix, fullTopic)] = payload;
+        cache[topicSuffix(qs(cfg.topicPrefix), fullTopic)] = payload;
     }
 
     Config                                            cfg;
@@ -107,23 +114,23 @@ MqttPahoTransport::MqttPahoTransport(Config cfg, bus::EventBus* bus)
 
 MqttPahoTransport::~MqttPahoTransport() = default;
 
-QString               MqttPahoTransport::id()    const { return m_impl->cfg.id; }
+std::string           MqttPahoTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         MqttPahoTransport::kind()  const { return TransportKind::MqttPahoClient; }
 ConnectionState       MqttPahoTransport::state() const { return m_impl->state.load(); }
 
 sched::RequestScheduler& MqttPahoTransport::scheduler() { return *m_impl->scheduler; }
 
-std::expected<void, QString>
+std::expected<void, std::string>
 MqttPahoTransport::connect() {
     try {
         mqtt::connect_options opts;
         opts.set_clean_session(m_impl->cfg.cleanSession);
         opts.set_keep_alive_interval(60);
-        if (!m_impl->cfg.username.isEmpty()) {
-            opts.set_user_name(m_impl->cfg.username.toStdString());
+        if (!m_impl->cfg.username.empty()) {
+            opts.set_user_name(m_impl->cfg.username);
         }
-        if (!m_impl->cfg.password.isEmpty()) {
-            opts.set_password(m_impl->cfg.password.toStdString());
+        if (!m_impl->cfg.password.empty()) {
+            opts.set_password(m_impl->cfg.password);
         }
         opts.set_connect_timeout(std::chrono::milliseconds(
             m_impl->cfg.connectTimeoutMs));
@@ -134,13 +141,14 @@ MqttPahoTransport::connect() {
         if (!tok->wait_for(m_impl->cfg.connectTimeoutMs)) {
             m_impl->state.store(ConnectionState::Disconnected,
                                  std::memory_order_release);
-            return std::unexpected(QStringLiteral("paho MQTT connect timeout"));
+            return std::unexpected(std::string("paho MQTT connect timeout"));
         }
         // Subscribe to wildcard so `read()` finds cached payloads.
-        QString const wildcard = m_impl->cfg.topicPrefix.isEmpty()
+        QString const prefix = qs(m_impl->cfg.topicPrefix);
+        QString const wildcard = prefix.isEmpty()
             ? QStringLiteral("#")
-            : m_impl->cfg.topicPrefix
-                + (m_impl->cfg.topicPrefix.endsWith('/')
+            : prefix
+                + (prefix.endsWith('/')
                     ? QStringLiteral("#") : QStringLiteral("/#"));
         m_impl->client.subscribe(wildcard.toStdString(),
                                   m_impl->cfg.qos)->wait();
@@ -149,9 +157,9 @@ MqttPahoTransport::connect() {
         m_impl->state.store(ConnectionState::Error,
                              std::memory_order_release);
         m_impl->lastError = QString::fromUtf8(e.what());
-        return std::unexpected(m_impl->lastError);
+        return std::unexpected(m_impl->lastError.toStdString());
     } catch (std::exception const& e) {
-        return std::unexpected(QString::fromUtf8(e.what()));
+        return std::unexpected(std::string(e.what()));
     }
 }
 
@@ -167,14 +175,14 @@ ReadResult MqttPahoTransport::read(ReadRequest const& req) {
     ReadResult result;
     result.startAddress = req.startAddress;
     if (state() != ConnectionState::Connected) {
-        result.errorMessage = QStringLiteral("not connected");
+        result.errorMessage = "not connected";
         return result;
     }
     core::RegisterWords out;
     out.reserve(req.count);
     std::lock_guard lk(m_impl->cacheMtx);
     for (int i = 0; i < req.count; ++i) {
-        QString const suffix = m_impl->cfg.topicTemplate.arg(req.startAddress + i);
+        QString const suffix = qs(m_impl->cfg.topicTemplate).arg(req.startAddress + i);
         auto it = m_impl->cache.find(suffix);
         if (it == m_impl->cache.end()) { out.push_back(0); continue; }
         bool ok = false;
@@ -189,7 +197,7 @@ ReadResult MqttPahoTransport::read(ReadRequest const& req) {
 WriteResult MqttPahoTransport::writeBatch(WriteBatch const& batch) {
     WriteResult result;
     if (state() != ConnectionState::Connected) {
-        result.errorMessage = QStringLiteral("not connected");
+        result.errorMessage = "not connected";
         return result;
     }
     try {
@@ -204,13 +212,13 @@ WriteResult MqttPahoTransport::writeBatch(WriteBatch const& batch) {
                                                   /*retained=*/false);
             if (!pubTok->wait_for(m_impl->cfg.requestTimeoutMs)) {
                 result.errorMessage =
-                    QStringLiteral("paho publish timeout @ %1").arg(topic);
+                    QStringLiteral("paho publish timeout @ %1").arg(topic).toStdString();
                 return result;
             }
         }
         result.ok = true;
     } catch (mqtt::exception const& e) {
-        result.errorMessage = QString::fromUtf8(e.what());
+        result.errorMessage = e.what();
     }
     return result;
 }
@@ -232,22 +240,22 @@ MqttPahoTransport::MqttPahoTransport(Config cfg, bus::EventBus* bus)
     : m_impl(std::make_unique<Impl>(std::move(cfg), bus)) {}
 MqttPahoTransport::~MqttPahoTransport() = default;
 
-QString               MqttPahoTransport::id()    const { return m_impl->cfg.id; }
+std::string           MqttPahoTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         MqttPahoTransport::kind()  const { return TransportKind::MqttPahoClient; }
 ConnectionState       MqttPahoTransport::state() const { return m_impl->state.load(); }
 sched::RequestScheduler& MqttPahoTransport::scheduler() { return *m_impl->scheduler; }
 
-std::expected<void, QString> MqttPahoTransport::connect() {
-    return std::unexpected(QStringLiteral(
+std::expected<void, std::string> MqttPahoTransport::connect() {
+    return std::unexpected(std::string(
         "MqttPahoTransport disabled (CORE_BUILD_MQTT_PAHO=OFF)"));
 }
 void        MqttPahoTransport::disconnect()                          {}
 ReadResult  MqttPahoTransport::read      (ReadRequest const&)       {
-    ReadResult r; r.errorMessage = QStringLiteral("paho MQTT disabled at build time");
+    ReadResult r; r.errorMessage = "paho MQTT disabled at build time";
     return r;
 }
 WriteResult MqttPahoTransport::writeBatch(WriteBatch  const&)       {
-    WriteResult r; r.errorMessage = QStringLiteral("paho MQTT disabled at build time");
+    WriteResult r; r.errorMessage = "paho MQTT disabled at build time";
     return r;
 }
 

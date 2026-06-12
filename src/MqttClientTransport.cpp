@@ -55,6 +55,10 @@ QString topicSuffix(QString const& prefix, QString const& full) {
     return full;
 }
 
+QString qs(std::string const& s) {
+    return QString::fromStdString(s);
+}
+
 } // namespace
 
 class MqttClientTransport::Impl {
@@ -67,7 +71,7 @@ public:
         , client(new QMqttClient) {
 
         // Parse brokerUri into host + port (Qt MQTT expects them separated).
-        QUrl const url(cfg.brokerUri);
+        QUrl const url(qs(cfg.brokerUri));
         if (url.isValid()) {
             client->setHostname(url.host().isEmpty()
                 ? QStringLiteral("127.0.0.1") : url.host());
@@ -76,9 +80,9 @@ public:
             client->setHostname(QStringLiteral("127.0.0.1"));
             client->setPort(1883);
         }
-        if (!cfg.clientId.isEmpty())  client->setClientId(cfg.clientId);
-        if (!cfg.username.isEmpty())  client->setUsername(cfg.username);
-        if (!cfg.password.isEmpty())  client->setPassword(cfg.password);
+        if (!cfg.clientId.empty())  client->setClientId(qs(cfg.clientId));
+        if (!cfg.username.empty())  client->setUsername(qs(cfg.username));
+        if (!cfg.password.empty())  client->setPassword(qs(cfg.password));
         client->setCleanSession(cfg.cleanSession);
         client->setKeepAlive(60);
 
@@ -93,11 +97,11 @@ public:
             if (cur == ConnectionState::Connected
                 && prev != ConnectionState::Connected) {
                 busPtr->publish(bus::TransportEvent{
-                    cfg.id.toStdString(), bus::TransportEventKind::Connected, {}});
+                    cfg.id, bus::TransportEventKind::Connected, {}});
             } else if (cur == ConnectionState::Disconnected
                        && prev == ConnectionState::Connected) {
                 busPtr->publish(bus::TransportEvent{
-                    cfg.id.toStdString(), bus::TransportEventKind::Disconnected, {}});
+                    cfg.id, bus::TransportEventKind::Disconnected, {}});
             }
         });
         QObject::connect(client, &QMqttClient::errorChanged,
@@ -108,7 +112,7 @@ public:
         QObject::connect(client, &QMqttClient::messageReceived, client,
             [this](QByteArray const& payload, QMqttTopicName const& topic) {
                 std::lock_guard lk(cacheMtx);
-                cache[topicSuffix(cfg.topicPrefix, topic.name())] = payload;
+                cache[topicSuffix(qs(cfg.topicPrefix), topic.name())] = payload;
             });
     }
 
@@ -127,7 +131,7 @@ public:
     }
 
     QString topicForAddress(int addr) const {
-        return joinTopic(cfg.topicPrefix, cfg.topicTemplate.arg(addr));
+        return joinTopic(qs(cfg.topicPrefix), qs(cfg.topicTemplate).arg(addr));
     }
 
     Config                                            cfg;
@@ -146,13 +150,13 @@ MqttClientTransport::MqttClientTransport(Config cfg, bus::EventBus* bus)
 
 MqttClientTransport::~MqttClientTransport() = default;
 
-QString               MqttClientTransport::id()    const { return m_impl->cfg.id; }
+std::string           MqttClientTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         MqttClientTransport::kind()  const { return TransportKind::MqttClient; }
 ConnectionState       MqttClientTransport::state() const { return m_impl->state.load(); }
 
 sched::RequestScheduler& MqttClientTransport::scheduler() { return *m_impl->scheduler; }
 
-std::expected<void, QString>
+std::expected<void, std::string>
 MqttClientTransport::connect() {
     QMetaObject::invokeMethod(m_impl->client, [this] {
         m_impl->client->connectToHost();
@@ -165,22 +169,23 @@ MqttClientTransport::connect() {
         if (s == ConnectionState::Connected) {
             // Subscribe to the wildcard topic so `read()` finds cached values.
             QMetaObject::invokeMethod(m_impl->client, [this] {
-                QString const wildcard = m_impl->cfg.topicPrefix.isEmpty()
+                QString const prefix = qs(m_impl->cfg.topicPrefix);
+                QString const wildcard = prefix.isEmpty()
                     ? QStringLiteral("#")
-                    : m_impl->cfg.topicPrefix
-                        + (m_impl->cfg.topicPrefix.endsWith('/')
+                    : prefix
+                        + (prefix.endsWith('/')
                             ? QStringLiteral("#") : QStringLiteral("/#"));
                 m_impl->client->subscribe(QMqttTopicFilter(wildcard),
                                             quint8(m_impl->cfg.qos));
             }, Qt::BlockingQueuedConnection);
-            return std::expected<void, QString>{};
+            return std::expected<void, std::string>{};
         }
         if (s == ConnectionState::Error)
-            return std::expected<void, QString>(
-                std::unexpect, m_impl->lastError);
+            return std::expected<void, std::string>(
+                std::unexpect, m_impl->lastError.toStdString());
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    return std::unexpected(QStringLiteral("MQTT connect timeout"));
+    return std::unexpected(std::string("MQTT connect timeout"));
 }
 
 void MqttClientTransport::disconnect() {
@@ -193,14 +198,14 @@ ReadResult MqttClientTransport::read(ReadRequest const& req) {
     ReadResult result;
     result.startAddress = req.startAddress;
     if (state() != ConnectionState::Connected) {
-        result.errorMessage = QStringLiteral("not connected");
+        result.errorMessage = "not connected";
         return result;
     }
     core::RegisterWords out;
     out.reserve(req.count);
     std::lock_guard lk(m_impl->cacheMtx);
     for (int i = 0; i < req.count; ++i) {
-        QString const suffix = m_impl->cfg.topicTemplate.arg(req.startAddress + i);
+        QString const suffix = qs(m_impl->cfg.topicTemplate).arg(req.startAddress + i);
         auto it = m_impl->cache.find(suffix);
         if (it == m_impl->cache.end()) {
             // Missing cache entry — treat as zero so PollRange can still
@@ -220,7 +225,7 @@ ReadResult MqttClientTransport::read(ReadRequest const& req) {
 WriteResult MqttClientTransport::writeBatch(WriteBatch const& batch) {
     WriteResult result;
     if (state() != ConnectionState::Connected) {
-        result.errorMessage = QStringLiteral("not connected");
+        result.errorMessage = "not connected";
         return result;
     }
     QMetaObject::invokeMethod(m_impl->client, [this, &batch, &result] {
@@ -232,7 +237,7 @@ WriteResult MqttClientTransport::writeBatch(WriteBatch const& batch) {
                                                 quint8(m_impl->cfg.qos));
             if (id == -1) {
                 result.errorMessage =
-                    QStringLiteral("MQTT publish failed @ %1").arg(topic);
+                    QStringLiteral("MQTT publish failed @ %1").arg(topic).toStdString();
                 return;
             }
         }
@@ -247,7 +252,7 @@ WriteResult MqttClientTransport::writeBatch(WriteBatch const& batch) {
 // surface synchronously, so we report ok once all topics are enqueued.
 void MqttClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
     if (state() != ConnectionState::Connected) {
-        done(WriteResult{false, QStringLiteral("not connected")});
+        done(WriteResult{false, "not connected"});
         return;
     }
     auto* client = m_impl->client;
@@ -259,7 +264,7 @@ void MqttClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
                                               quint8(m_impl->cfg.qos));
             if (id == -1) {
                 done(WriteResult{false,
-                    QStringLiteral("MQTT publish failed @ %1").arg(topic)});
+                    QStringLiteral("MQTT publish failed @ %1").arg(topic).toStdString()});
                 return;
             }
         }
@@ -284,22 +289,22 @@ MqttClientTransport::MqttClientTransport(Config cfg, bus::EventBus* bus)
     : m_impl(std::make_unique<Impl>(std::move(cfg), bus)) {}
 MqttClientTransport::~MqttClientTransport() = default;
 
-QString               MqttClientTransport::id()    const { return m_impl->cfg.id; }
+std::string           MqttClientTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         MqttClientTransport::kind()  const { return TransportKind::MqttClient; }
 ConnectionState       MqttClientTransport::state() const { return m_impl->state.load(); }
 sched::RequestScheduler& MqttClientTransport::scheduler() { return *m_impl->scheduler; }
 
-std::expected<void, QString> MqttClientTransport::connect() {
-    return std::unexpected(QStringLiteral(
+std::expected<void, std::string> MqttClientTransport::connect() {
+    return std::unexpected(std::string(
         "MqttClientTransport disabled (CORE_BUILD_MQTT_QT=OFF)"));
 }
 void        MqttClientTransport::disconnect()                          {}
 ReadResult  MqttClientTransport::read      (ReadRequest const&)       {
-    ReadResult r; r.errorMessage = QStringLiteral("Qt MQTT disabled at build time");
+    ReadResult r; r.errorMessage = "Qt MQTT disabled at build time";
     return r;
 }
 WriteResult MqttClientTransport::writeBatch(WriteBatch  const&)       {
-    WriteResult r; r.errorMessage = QStringLiteral("Qt MQTT disabled at build time");
+    WriteResult r; r.errorMessage = "Qt MQTT disabled at build time";
     return r;
 }
 void MqttClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {

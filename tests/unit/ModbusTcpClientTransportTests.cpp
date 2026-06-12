@@ -23,9 +23,9 @@ quint16 nextPort() {
 }
 
 ModbusTcpClientTransport::Config cfgFor(quint16 port,
-                                         QString host = "127.0.0.1") {
+                                         std::string host = "127.0.0.1") {
     ModbusTcpClientTransport::Config c;
-    c.id               = QStringLiteral("test.tcp");
+    c.id               = "test.tcp";
     c.host             = std::move(host);
     c.port             = port;
     c.slaveId          = 1;
@@ -49,7 +49,7 @@ TEST_CASE("Read on a disconnected transport returns 'not connected'",
     ModbusTcpClientTransport t(cfgFor(nextPort()));
     auto r = t.read({core::RegisterTable::HoldingRegister, 0, 4});
     REQUIRE_FALSE(r.ok);
-    REQUIRE(r.errorMessage.contains("not connected"));
+    REQUIRE(r.errorMessage.find("not connected") != std::string::npos);
 }
 
 TEST_CASE("Connect to an unreachable host fails within the timeout",
@@ -139,7 +139,7 @@ TEST_CASE("readAsync on a disconnected transport reports 'not connected'",
                 [&](ReadResult r) { rr = std::move(r); done.store(true); });
     REQUIRE(done.load());   // synchronous fast-fail path, no event loop needed
     REQUIRE_FALSE(rr.ok);
-    REQUIRE(rr.errorMessage.contains("not connected"));
+    REQUIRE(rr.errorMessage.find("not connected") != std::string::npos);
 }
 
 TEST_CASE("Transport.scheduler() returns a usable SerialScheduler instance",

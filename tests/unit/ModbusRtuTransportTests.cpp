@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 #include <catch2/catch_test_macros.hpp>
 
+#include <string>
+
 #include "core/transport/ModbusRtuTransport.h"
 
 using namespace core::transport;
@@ -46,9 +48,9 @@ TEST_CASE("ModbusRtuTransport read/write on a disconnected port report "
 
     auto rd = t.read({core::RegisterTable::HoldingRegister, 0, 4});
     REQUIRE_FALSE(rd.ok);
-    REQUIRE(rd.errorMessage.contains("not connected"));
+    REQUIRE(rd.errorMessage.find("not connected") != std::string::npos);
 
     auto wr = t.writeBatch({core::RegisterTable::HoldingRegister, 0, {0x1234}});
     REQUIRE_FALSE(wr.ok);
-    REQUIRE(wr.errorMessage.contains("not connected"));
+    REQUIRE(wr.errorMessage.find("not connected") != std::string::npos);
 }

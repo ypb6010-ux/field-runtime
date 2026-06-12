@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
+#include <cstdint>
 #include <memory>
-#include <QList>
-#include <QString>
+#include <string>
+#include <vector>
 
 #include "core/core_global.h"
 #include "core/transport/Transport.h"
@@ -25,15 +26,15 @@ namespace core::transport {
 class CORE_EXPORT ModbusTcpServerTransport : public Transport {
 public:
     struct Config {
-        QString  id              = QStringLiteral("modbus-tcp-server");
-        QString  listenAddress   = QStringLiteral("0.0.0.0");
-        quint16  listenPort      = 502;
+        std::string   id              = "modbus-tcp-server";
+        std::string   listenAddress   = "0.0.0.0";
+        std::uint16_t listenPort      = 502;
         int      slaveId         = 1;
         int      maxClients      = 1;
         // > 0 = re-listen after this many ms once state drops to
         // Disconnected/Error.
         int      reconnectIntervalMs = 0;
-        QList<WatchRange> listenRanges;
+        std::vector<WatchRange> listenRanges;
         sched::SchedulerConfig scheduler = sched::SchedulerConfig{};
     };
 
@@ -42,12 +43,12 @@ public:
 
     CORE_DISABLE_COPY_MOVE(ModbusTcpServerTransport)
 
-    QString               id()    const override;
+    std::string           id()    const override;
     TransportKind         kind()  const override;
     ConnectionState       state() const override;
 
-    std::expected<void, QString> connect()    override;
-    void                          disconnect() override;
+    std::expected<void, std::string> connect()    override;
+    void                             disconnect() override;
 
     sched::RequestScheduler& scheduler() override;
 

@@ -32,9 +32,9 @@ inline void modbusReadAsync(QModbusClient* client, int slaveId,
                 ReadResult r;
                 r.startAddress = req.startAddress;
                 r.ok           = false;
-                r.errorMessage = client->errorString();
-                if (r.errorMessage.isEmpty())
-                    r.errorMessage = QStringLiteral("sendReadRequest failed");
+                QString err = client->errorString();
+                if (err.isEmpty()) err = QStringLiteral("sendReadRequest failed");
+                r.errorMessage = err.toStdString();
                 done(std::move(r));
                 return;
             }
@@ -43,7 +43,7 @@ inline void modbusReadAsync(QModbusClient* client, int slaveId,
                 r.startAddress = req.startAddress;
                 if (reply->error() != QModbusDevice::NoError) {
                     r.ok           = false;
-                    r.errorMessage = reply->errorString();
+                    r.errorMessage = reply->errorString().toStdString();
                 } else {
                     r.ok     = true;
                     r.values = core::fromQtWords(reply->result().values());
@@ -71,14 +71,14 @@ inline void modbusWriteAsync(QModbusClient* client, int slaveId,
             if (!reply) {
                 QString err = client->errorString();
                 if (err.isEmpty()) err = QStringLiteral("sendWriteRequest failed");
-                done(WriteResult{false, std::move(err)});
+                done(WriteResult{false, err.toStdString()});
                 return;
             }
             auto finish = [reply, done = std::move(done)]() {
                 WriteResult r;
                 if (reply->error() != QModbusDevice::NoError) {
                     r.ok           = false;
-                    r.errorMessage = reply->errorString();
+                    r.errorMessage = reply->errorString().toStdString();
                 } else {
                     r.ok = true;
                 }
