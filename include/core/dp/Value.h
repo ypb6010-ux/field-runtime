@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <string>
+#include <type_traits>
 #include <variant>
 
 namespace core::dp {
@@ -82,6 +83,34 @@ inline std::string toString(Value const& v) {
         else if constexpr (std::is_same_v<T, bool>) return x ? "true" : "false";
         else return std::to_string(x);
     }, v);
+}
+
+// Generic scalar marshalling for type-erased boundaries (e.g. plugin ports):
+// coerce a Value into a concrete C++ scalar T and vice versa, reusing the
+// permissive coercion helpers above. Supported T: bool, std::string, and any
+// integral / floating-point type. Unsupported T fail to compile.
+template <class T>
+T valueCast(Value const& v) {
+    if constexpr (std::is_same_v<T, bool>)              return toBool(v);
+    else if constexpr (std::is_same_v<T, std::string>)  return toString(v);
+    else if constexpr (std::is_floating_point_v<T>)     return static_cast<T>(toDouble(v));
+    else if constexpr (std::is_integral_v<T> && std::is_signed_v<T>)
+                                                        return static_cast<T>(toInt64(v));
+    else if constexpr (std::is_integral_v<T> && std::is_unsigned_v<T>)
+                                                        return static_cast<T>(toUInt64(v));
+    else { static_assert(sizeof(T) == 0, "valueCast: unsupported port value type"); }
+}
+
+template <class T>
+Value makeValue(T const& x) {
+    if constexpr (std::is_same_v<T, bool>)              return Value{x};
+    else if constexpr (std::is_same_v<T, std::string>)  return Value{x};
+    else if constexpr (std::is_floating_point_v<T>)     return Value{static_cast<double>(x)};
+    else if constexpr (std::is_integral_v<T> && std::is_signed_v<T>)
+                                                        return Value{static_cast<std::int64_t>(x)};
+    else if constexpr (std::is_integral_v<T> && std::is_unsigned_v<T>)
+                                                        return Value{static_cast<std::uint64_t>(x)};
+    else { static_assert(sizeof(T) == 0, "makeValue: unsupported port value type"); }
 }
 
 } // namespace core::dp

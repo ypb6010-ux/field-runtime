@@ -3,10 +3,10 @@
 #pragma once
 
 #include <functional>
-#include <QString>
-#include <QVariant>
+#include <string>
 
 #include "core/core_global.h"
+#include "core/dp/Value.h"
 #include "core/plugin/InPort.h"
 #include "core/plugin/OutPort.h"
 
@@ -28,23 +28,23 @@ public:
     CORE_DISABLE_COPY_MOVE(PortRegistry)
 
     template <class T>
-    void bindIn(InPort<T>& port, QString const& dpId) {
-        bindInErased(dpId, [&port](QVariant const& v) {
-            port.deliver(v.value<T>());
+    void bindIn(InPort<T>& port, std::string const& dpId) {
+        bindInErased(dpId, [&port](dp::Value const& v) {
+            port.deliver(dp::valueCast<T>(v));
         });
     }
 
     template <class T>
-    void bindOut(OutPort<T>& port, QString const& dpId) {
+    void bindOut(OutPort<T>& port, std::string const& dpId) {
         port.bindEmitter([this, dpId](T const& v) {
-            writeErased(dpId, QVariant::fromValue(v));
+            writeErased(dpId, dp::makeValue(v));
         });
     }
 
 private:
-    void bindInErased(QString const& dpId,
-                      std::function<void(QVariant const&)> deliver);
-    void writeErased(QString const& dpId, QVariant const& value);
+    void bindInErased(std::string const& dpId,
+                      std::function<void(dp::Value const&)> deliver);
+    void writeErased(std::string const& dpId, dp::Value const& value);
 
     class Impl;
     Impl* m_impl;

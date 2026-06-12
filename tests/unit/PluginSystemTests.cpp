@@ -41,7 +41,7 @@ TEST_CASE("PortRegistry.bindIn delivers DpChanged to an InPort", "[plugin][port]
     int got = -1;
     int calls = 0;
     in.onChanged([&](int v) { got = v; ++calls; });
-    reg.bindIn(in, QStringLiteral("a.b"));
+    reg.bindIn(in, "a.b");
 
     bus.publish(bus::DpChanged{"a.b", std::int64_t(42), {}});
     REQUIRE(calls == 1);
@@ -65,7 +65,7 @@ TEST_CASE("PortRegistry.bindOut writes an OutPort value to its datapoint",
 
     plugin::PortRegistry reg(dps, bus);
     plugin::OutPort<int> out;
-    reg.bindOut(out, QStringLiteral("x.cmd"));
+    reg.bindOut(out, "x.cmd");
 
     out.send(0x1234);
     REQUIRE(writes == 1);

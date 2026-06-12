@@ -29,15 +29,14 @@ public:
     Impl(dp::DatapointRegistry& d, bus::EventBus& b) : dps(d), bus(b) {
         // One DpChanged subscription fans out to every bound InPort by id.
         sub = bus.subscribe<bus::DpChanged>([this](bus::DpChanged const& e) {
-            auto range = handlers.equal_range(QString::fromStdString(e.id));
-            auto const v = dp::toQVariant(e.value);
-            for (auto it = range.first; it != range.second; ++it) it->second(v);
+            auto range = handlers.equal_range(e.id);
+            for (auto it = range.first; it != range.second; ++it) it->second(e.value);
         });
     }
 
     dp::DatapointRegistry& dps;
     bus::EventBus&         bus;
-    std::multimap<QString, std::function<void(QVariant const&)>> handlers;
+    std::multimap<std::string, std::function<void(dp::Value const&)>> handlers;
     bus::Subscription      sub;
 };
 
@@ -46,13 +45,13 @@ PortRegistry::PortRegistry(dp::DatapointRegistry& dps, bus::EventBus& bus)
 
 PortRegistry::~PortRegistry() { delete m_impl; }
 
-void PortRegistry::bindInErased(QString const& dpId,
-                                std::function<void(QVariant const&)> deliver) {
+void PortRegistry::bindInErased(std::string const& dpId,
+                                std::function<void(dp::Value const&)> deliver) {
     m_impl->handlers.emplace(dpId, std::move(deliver));
 }
 
-void PortRegistry::writeErased(QString const& dpId, QVariant const& value) {
-    if (auto dp = m_impl->dps.find(dpId)) dp->write(value);
+void PortRegistry::writeErased(std::string const& dpId, dp::Value const& value) {
+    if (auto d = m_impl->dps.find(QString::fromStdString(dpId))) d->write(dp::toQVariant(value));
 }
 
 // ── PluginRegistry ─────────────────────────────────────────────────────────
