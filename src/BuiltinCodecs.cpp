@@ -3,9 +3,11 @@
 #include "core/codec/BuiltinCodecs.h"
 
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <utility>
 
 #include "core/dp/PortRef.h"
@@ -19,49 +21,49 @@ namespace {
 // register is big-endian on the wire; we record the network-order bytes in
 // the order they would appear over TCP (i.e. position 0 = high byte of the
 // first register), then apply the WordOrder permutation.
-quint64 unpackInt(core::RegisterWords const& raw,
-                  int                   regCount,
-                  dp::WordOrder         wordOrder) {
+std::uint64_t unpackInt(core::RegisterWords const& raw,
+                        int                        regCount,
+                        dp::WordOrder              wordOrder) {
     if (regCount == 1) {
         return raw[0];
     }
     int const               byteCount = regCount * 2;
-    std::array<quint8, 8>   network{};
+    std::array<std::uint8_t, 8> network{};
     for (int i = 0; i < regCount; ++i) {
-        quint16 const r = raw[i];
-        network[2 * i]     = quint8(r >> 8);
-        network[2 * i + 1] = quint8(r & 0xFF);
+        std::uint16_t const r = raw[i];
+        network[2 * i]     = std::uint8_t(r >> 8);
+        network[2 * i + 1] = std::uint8_t(r & 0xFF);
     }
     auto const perm = dp::permutationFor(wordOrder, byteCount);
-    quint64    result = 0;
+    std::uint64_t result = 0;
     for (int i = 0; i < byteCount; ++i) {
         result = (result << 8) | network[perm.order[i]];
     }
     return result;
 }
 
-core::RegisterWords packInt(quint64       value,
-                       int           regCount,
-                       dp::WordOrder wordOrder) {
+core::RegisterWords packInt(std::uint64_t value,
+                            int           regCount,
+                            dp::WordOrder wordOrder) {
     if (regCount == 1) {
-        return {quint16(value & 0xFFFFu)};
+        return {std::uint16_t(value & 0xFFFFu)};
     }
     int const               byteCount = regCount * 2;
-    std::array<quint8, 8>   result{};
+    std::array<std::uint8_t, 8> result{};
     for (int i = 0; i < byteCount; ++i) {
-        result[i] = quint8(value >> (8 * (byteCount - 1 - i)));
+        result[i] = std::uint8_t(value >> (8 * (byteCount - 1 - i)));
     }
     // Inverse permutation: network[perm[i]] = result[i]
     auto const             perm = dp::permutationFor(wordOrder, byteCount);
-    std::array<quint8, 8>  network{};
+    std::array<std::uint8_t, 8> network{};
     for (int i = 0; i < byteCount; ++i) {
         network[perm.order[i]] = result[i];
     }
     core::RegisterWords out;
     out.reserve(regCount);
     for (int i = 0; i < regCount; ++i) {
-        quint16 r = quint16(network[2 * i]) << 8;
-        r |= quint16(network[2 * i + 1]);
+        std::uint16_t r = std::uint16_t(network[2 * i]) << 8;
+        r |= std::uint16_t(network[2 * i + 1]);
         out.push_back(r);
     }
     return out;
@@ -75,10 +77,12 @@ bool hasLinearTransform(dp::PortRef const& ref) noexcept {
 
 BuiltinScalarCodec::BuiltinScalarCodec(dp::ScalarType type) : m_type(type) {}
 
-QString BuiltinScalarCodec::id() const { return idFor(m_type); }
+std::string BuiltinScalarCodec::id() const { return idFor(m_type); }
 
-QString BuiltinScalarCodec::idFor(dp::ScalarType type) {
-    return QStringLiteral("builtin.") + QString::fromUtf8(dp::scalarTypeName(type)).toLower();
+std::string BuiltinScalarCodec::idFor(dp::ScalarType type) {
+    std::string name = dp::scalarTypeName(type);
+    for (auto& ch : name) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+    return "builtin." + name;
 }
 
 dp::Value BuiltinScalarCodec::decode(core::RegisterWords const& raw,
@@ -95,8 +99,8 @@ dp::Value BuiltinScalarCodec::decode(core::RegisterWords const& raw,
     }
 
     if (m_type == ScalarType::F32) {
-        quint64 const bits32 = unpackInt(raw, rc, ref.wordOrder);
-        quint32 const b      = quint32(bits32);
+        std::uint64_t const bits32 = unpackInt(raw, rc, ref.wordOrder);
+        std::uint32_t const b      = std::uint32_t(bits32);
         float         f      = 0.0f;
         std::memcpy(&f, &b, sizeof(f));
         double        v      = double(f);
@@ -106,7 +110,7 @@ dp::Value BuiltinScalarCodec::decode(core::RegisterWords const& raw,
         return v;
     }
     if (m_type == ScalarType::F64) {
-        quint64 const bits = unpackInt(raw, rc, ref.wordOrder);
+        std::uint64_t const bits = unpackInt(raw, rc, ref.wordOrder);
         double        v    = 0.0;
         std::memcpy(&v, &bits, sizeof(v));
         if (hasLinearTransform(ref)) {
@@ -115,8 +119,8 @@ dp::Value BuiltinScalarCodec::decode(core::RegisterWords const& raw,
         return v;
     }
 
-    quint64 const concat = unpackInt(raw, rc, ref.wordOrder);
-    quint64 const masked = (concat >> ref.shift) & ref.mask;
+    std::uint64_t const concat = unpackInt(raw, rc, ref.wordOrder);
+    std::uint64_t const masked = (concat >> ref.shift) & ref.mask;
 
     auto integerVariant = [&](auto signedT, auto unsignedT) -> dp::Value {
         using S = decltype(signedT);
@@ -138,13 +142,13 @@ dp::Value BuiltinScalarCodec::decode(core::RegisterWords const& raw,
     };
 
     switch (m_type) {
-        case ScalarType::U16:     return integerVariant(qint16(0),  quint16(0));
-        case ScalarType::S16:     return integerVariant(qint16(0),  quint16(0));
-        case ScalarType::U32:     return integerVariant(qint32(0),  quint32(0));
-        case ScalarType::S32:     return integerVariant(qint32(0),  quint32(0));
-        case ScalarType::U64:     return integerVariant(qint64(0),  quint64(0));
-        case ScalarType::S64:     return integerVariant(qint64(0),  quint64(0));
-        case ScalarType::EnumU16: return std::uint64_t(quint16(masked));   // wrapping codec maps it
+        case ScalarType::U16:     return integerVariant(std::int16_t(0),  std::uint16_t(0));
+        case ScalarType::S16:     return integerVariant(std::int16_t(0),  std::uint16_t(0));
+        case ScalarType::U32:     return integerVariant(std::int32_t(0),  std::uint32_t(0));
+        case ScalarType::S32:     return integerVariant(std::int32_t(0),  std::uint32_t(0));
+        case ScalarType::U64:     return integerVariant(std::int64_t(0),  std::uint64_t(0));
+        case ScalarType::S64:     return integerVariant(std::int64_t(0),  std::uint64_t(0));
+        case ScalarType::EnumU16: return std::uint64_t(std::uint16_t(masked));   // wrapping codec maps it
         default:                  return {};
     }
 }
@@ -159,7 +163,7 @@ core::RegisterWords BuiltinScalarCodec::encode(dp::Value const&    value,
         core::RegisterWords out(rc, 0);
         if (dp::toBool(value)) {
             int bit = ref.bit.value_or(0);
-            out[0]  = quint16(1u << bit);
+            out[0]  = std::uint16_t(1u << bit);
         }
         return out;
     }
@@ -168,31 +172,31 @@ core::RegisterWords BuiltinScalarCodec::encode(dp::Value const&    value,
         double  v    = dp::toDouble(value);
         if (hasLinearTransform(ref)) v = (v - ref.offset) / ref.scale;
         float   f    = float(v);
-        quint32 bits = 0;
+        std::uint32_t bits = 0;
         std::memcpy(&bits, &f, sizeof(f));
         return packInt(bits, rc, ref.wordOrder);
     }
     if (m_type == ScalarType::F64) {
         double  v    = dp::toDouble(value);
         if (hasLinearTransform(ref)) v = (v - ref.offset) / ref.scale;
-        quint64 bits = 0;
+        std::uint64_t bits = 0;
         std::memcpy(&bits, &v, sizeof(v));
         return packInt(bits, rc, ref.wordOrder);
     }
 
     // Stay in 64-bit integer space when no linear transform is configured —
     // a double round-trip would lose precision above 2^53.
-    qint64 raw = 0;
+    std::int64_t raw = 0;
     if (hasLinearTransform(ref)) {
         double dval = (dp::toDouble(value) - ref.offset) / ref.scale;
-        raw         = qint64(std::llround(dval));
+        raw         = std::int64_t(std::llround(dval));
     } else if (m_type == ScalarType::U64) {
-        raw = qint64(dp::toUInt64(value));
+        raw = std::int64_t(dp::toUInt64(value));
     } else {
         raw = dp::toInt64(value);
     }
-    quint64 const masked  = quint64(raw) & ref.mask;
-    quint64 const shifted = masked << ref.shift;
+    std::uint64_t const masked  = std::uint64_t(raw) & ref.mask;
+    std::uint64_t const shifted = masked << ref.shift;
     return packInt(shifted, rc, ref.wordOrder);
 }
 
@@ -200,8 +204,8 @@ core::RegisterWords BuiltinScalarCodec::encode(dp::Value const&    value,
 // EnumU16Codec
 // ---------------------------------------------------------------------------
 
-EnumU16Codec::EnumU16Codec(QString                              id,
-                            std::unordered_map<quint16, QString> map)
+EnumU16Codec::EnumU16Codec(std::string                                      id,
+                            std::unordered_map<std::uint16_t, std::string>   map)
     : m_id(std::move(id))
     , m_forward(std::move(map)) {
     m_reverse.reserve(m_forward.size());
@@ -210,29 +214,29 @@ EnumU16Codec::EnumU16Codec(QString                              id,
     }
 }
 
-QString EnumU16Codec::id() const { return m_id; }
+std::string EnumU16Codec::id() const { return m_id; }
 
 dp::Value EnumU16Codec::decode(core::RegisterWords const& raw,
                                dp::PortRef const&     ref) {
     if (raw.empty()) return {};
-    quint16 const masked = quint16((raw[0] >> ref.shift) & quint16(ref.mask));
+    std::uint16_t const masked = std::uint16_t((raw[0] >> ref.shift) & std::uint16_t(ref.mask));
     auto it = m_forward.find(masked);
     if (it == m_forward.end()) {
         return std::string("Unknown(") + std::to_string(masked) + ")";
     }
-    return it->second.toStdString();
+    return it->second;
 }
 
 core::RegisterWords EnumU16Codec::encode(dp::Value const&    value,
                                      dp::PortRef const& ref) {
-    QString const name = QString::fromStdString(dp::toString(value));
-    quint16       raw  = 0;
+    std::string const name = dp::toString(value);
+    std::uint16_t raw  = 0;
     if (auto it = m_reverse.find(name); it != m_reverse.end()) {
         raw = it->second;
     } else {
-        raw = quint16(dp::toUInt64(value));
+        raw = std::uint16_t(dp::toUInt64(value));
     }
-    quint16 shifted = quint16((raw & quint16(ref.mask)) << ref.shift);
+    std::uint16_t shifted = std::uint16_t((raw & std::uint16_t(ref.mask)) << ref.shift);
     return {shifted};
 }
 

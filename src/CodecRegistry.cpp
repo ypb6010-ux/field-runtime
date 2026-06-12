@@ -16,7 +16,7 @@ void CodecRegistry::registerCodec(std::shared_ptr<Codec> codec) {
     m_codecs.insert_or_assign(codec->id(), std::move(codec));
 }
 
-std::shared_ptr<Codec> CodecRegistry::find(QString const& id) const {
+std::shared_ptr<Codec> CodecRegistry::find(std::string const& id) const {
     auto it = m_codecs.find(id);
     if (it == m_codecs.end()) return nullptr;
     return it->second;

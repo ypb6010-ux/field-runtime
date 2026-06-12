@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include <QString>
+#include <string>
 
 #include "core/base/RegisterTable.h"
 #include "core/core_global.h"
@@ -15,7 +15,7 @@ namespace core::codec {
 class CORE_EXPORT Codec {
 public:
     virtual ~Codec() = default;
-    virtual QString id() const = 0;
+    virtual std::string id() const = 0;
 
     // Decode raw Modbus registers into a typed value.
     virtual dp::Value      decode(core::RegisterWords const& raw,

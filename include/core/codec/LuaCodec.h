@@ -3,7 +3,7 @@
 #pragma once
 
 #include <memory>
-#include <QString>
+#include <string>
 
 #include "core/core_global.h"
 #include "core/codec/Codec.h"
@@ -38,14 +38,14 @@ public:
     // variants, e.g. high/low fault tables). Returns nullptr on failure (Lua
     // disabled, file missing, script error, or no decode/encode); when `error`
     // is non-null it receives a human-readable reason.
-    static std::shared_ptr<LuaCodec> fromFile(QString const& id,
-                                              QString const& scriptPath,
-                                              QString const& arg   = {},
-                                              QString*       error = nullptr);
+    static std::shared_ptr<LuaCodec> fromFile(std::string const& id,
+                                              std::string const& scriptPath,
+                                              std::string const& arg   = {},
+                                              std::string*       error = nullptr);
 
     ~LuaCodec() override;
 
-    QString        id() const override;
+    std::string    id() const override;
     dp::Value       decode(core::RegisterWords const& raw,
                           dp::PortRef const&     ref) override;
     core::RegisterWords encode(dp::Value const&        value,

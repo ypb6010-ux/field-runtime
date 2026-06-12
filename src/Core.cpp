@@ -3,6 +3,7 @@
 #include "core/ICore.h"
 #include "core/internal/Testing.h"
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -576,29 +577,29 @@ private:
     void registerCustomCodecs(config::ConfigSchema const& schema) {
         for (auto const& cc : schema.codecs) {
             if (cc.kind == "enum_u16") {
-                std::unordered_map<quint16, QString> map;
+                std::unordered_map<std::uint16_t, std::string> map;
                 for (auto const& [k, v] : cc.map) {
                     try {
-                        quint16 raw = quint16(std::stoul(k));
-                        map.emplace(raw, qs(dp::toString(v)));
+                        auto raw = std::uint16_t(std::stoul(k));
+                        map.emplace(raw, dp::toString(v));
                     } catch (...) { /* skip non-numeric enum keys */ }
                 }
                 m_codecs->registerCodec(
-                    std::make_shared<codec::EnumU16Codec>(qs(cc.id), std::move(map)));
+                    std::make_shared<codec::EnumU16Codec>(cc.id, std::move(map)));
             } else if (cc.kind == "lua") {
                 QString script = qs(cc.script);
                 if (QFileInfo(script).isRelative() && !m_configDir.isEmpty())
                     script = QDir(m_configDir).filePath(script);
-                QString err;
-                auto lc = codec::LuaCodec::fromFile(qs(cc.id), script, qs(cc.arg), &err);
+                std::string err;
+                auto lc = codec::LuaCodec::fromFile(cc.id, script.toStdString(), cc.arg, &err);
                 if (lc) {
                     m_codecs->registerCodec(std::move(lc));
                 } else {
                     m_logger->logf(log::LogLevel::Error, QStringLiteral("config"),
                                    script,
-                                   err.isEmpty()
+                                   err.empty()
                                        ? QStringLiteral("lua codec load failed")
-                                       : err);
+                                       : qs(err));
                 }
             }
         }
@@ -805,7 +806,7 @@ private:
             std::shared_ptr<codec::Codec> sourceCodec;
             if (dc.hasSource) {
                 if (!dc.source.codec.empty()) {
-                    sourceCodec = m_codecs->find(qs(dc.source.codec));
+                    sourceCodec = m_codecs->find(dc.source.codec);
                 }
                 if (!sourceCodec) {
                     sourceCodec = m_codecs->find(
@@ -916,7 +917,7 @@ private:
 
             auto codec = m_codecs->find(dc.source.codec.empty()
                 ? codec::BuiltinScalarCodec::idFor(dc.type)
-                : qs(dc.source.codec));
+                : dc.source.codec);
             if (!codec) continue;
             poll.bind(itDp->second, codec, offset);
         }

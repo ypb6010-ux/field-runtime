@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include <map>
 #include <memory>
-#include <QString>
+#include <string>
+#include <unordered_map>
 
 #include "core/core_global.h"
 
@@ -20,13 +20,13 @@ public:
     CORE_DISABLE_COPY_MOVE(CodecRegistry)
 
     void registerCodec(std::shared_ptr<Codec> codec);
-    std::shared_ptr<Codec> find(QString const& id) const;
+    std::shared_ptr<Codec> find(std::string const& id) const;
 
     // Populates the builtin scalar and enum codecs.
     void loadBuiltins();
 
 private:
-    std::map<QString, std::shared_ptr<Codec>> m_codecs;
+    std::unordered_map<std::string, std::shared_ptr<Codec>> m_codecs;
 };
 
 } // namespace core::codec

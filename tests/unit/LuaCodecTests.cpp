@@ -4,9 +4,10 @@
 
 #include <QDir>
 #include <QFile>
-#include <QList>
 #include <QString>
 #include <QTemporaryDir>
+
+#include <string>
 
 #include "core/codec/LuaCodec.h"
 #include "core/dp/PortRef.h"
@@ -27,29 +28,28 @@ namespace {
 core::RegisterWords const kRaw{0x0024, 0x0603, 0x1430, 0x4500};
 QString const        kStr = QStringLiteral("2024-06-03 14:30:45");
 
-std::shared_ptr<LuaCodec> loadBcd(QString* err) {
-    return LuaCodec::fromFile(QStringLiteral("bcd_datetime"),
-                              QStringLiteral(CORE_LUA_BCD_SCRIPT), {}, err);
+std::shared_ptr<LuaCodec> loadBcd(std::string* err) {
+    return LuaCodec::fromFile("bcd_datetime", CORE_LUA_BCD_SCRIPT, {}, err);
 }
 
 } // namespace
 
 TEST_CASE("LuaCodec loads the shipped bcd_datetime script", "[codec][lua]") {
-    QString err;
+    std::string err;
     auto codec = loadBcd(&err);
     if (!codec) {
         // Built without Lua (CORE_BUILD_LUA=OFF) — fromFile must say so and the
         // round-trip cases below cannot run.
-        REQUIRE(err.contains(QStringLiteral("disabled")));
-        SKIP("Core built without Lua codec support: " + err.toStdString());
+        REQUIRE(err.find("disabled") != std::string::npos);
+        SKIP("Core built without Lua codec support: " + err);
     }
-    REQUIRE(codec->id() == QStringLiteral("bcd_datetime"));
+    REQUIRE(codec->id() == "bcd_datetime");
 }
 
 TEST_CASE("LuaCodec bcd_datetime decode", "[codec][lua]") {
-    QString err;
+    std::string err;
     auto codec = loadBcd(&err);
-    if (!codec) SKIP("Lua disabled: " + err.toStdString());
+    if (!codec) SKIP("Lua disabled: " + err);
 
     PortRef ref;
     auto const v = codec->decode(kRaw, ref);
@@ -57,9 +57,9 @@ TEST_CASE("LuaCodec bcd_datetime decode", "[codec][lua]") {
 }
 
 TEST_CASE("LuaCodec bcd_datetime encode round-trips", "[codec][lua]") {
-    QString err;
+    std::string err;
     auto codec = loadBcd(&err);
-    if (!codec) SKIP("Lua disabled: " + err.toStdString());
+    if (!codec) SKIP("Lua disabled: " + err);
 
     PortRef ref;
     core::RegisterWords const back = codec->encode(core::dp::Value(kStr.toStdString()), ref);
@@ -69,9 +69,9 @@ TEST_CASE("LuaCodec bcd_datetime encode round-trips", "[codec][lua]") {
 }
 
 TEST_CASE("LuaCodec tolerates malformed input without crashing", "[codec][lua]") {
-    QString err;
+    std::string err;
     auto codec = loadBcd(&err);
-    if (!codec) SKIP("Lua disabled: " + err.toStdString());
+    if (!codec) SKIP("Lua disabled: " + err);
 
     PortRef ref;
     // Too few registers → script returns nil → null Value.
@@ -81,11 +81,10 @@ TEST_CASE("LuaCodec tolerates malformed input without crashing", "[codec][lua]")
 }
 
 TEST_CASE("LuaCodec.fromFile reports a missing script", "[codec][lua]") {
-    QString err;
-    auto codec = LuaCodec::fromFile(QStringLiteral("x"),
-                                    QStringLiteral("does/not/exist.lua"), {}, &err);
+    std::string err;
+    auto codec = LuaCodec::fromFile("x", "does/not/exist.lua", {}, &err);
     REQUIRE(codec == nullptr);
-    REQUIRE_FALSE(err.isEmpty());
+    REQUIRE_FALSE(err.empty());
 }
 
 TEST_CASE("LuaCodec passes the config arg to the script as ctx.arg",
@@ -102,10 +101,10 @@ TEST_CASE("LuaCodec passes the config arg to the script as ctx.arg",
                 "          encode = function(v, ctx) return {} end }");
     }
 
-    QString err;
-    auto hi = LuaCodec::fromFile(QStringLiteral("c1"), path, QStringLiteral("high"), &err);
-    auto lo = LuaCodec::fromFile(QStringLiteral("c2"), path, QStringLiteral("low"),  &err);
-    if (!hi) SKIP("Lua disabled: " + err.toStdString());
+    std::string err;
+    auto hi = LuaCodec::fromFile("c1", path.toStdString(), "high", &err);
+    auto lo = LuaCodec::fromFile("c2", path.toStdString(), "low",  &err);
+    if (!hi) SKIP("Lua disabled: " + err);
 
     PortRef ref;
     REQUIRE(QString::fromStdString(core::dp::toString(hi->decode(core::RegisterWords{0}, ref))) == QStringLiteral("high"));

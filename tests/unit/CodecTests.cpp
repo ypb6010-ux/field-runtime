@@ -3,8 +3,10 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <cstdint>
 #include <cstring>
 #include <memory>
+#include <string>
 #include <type_traits>
 #include <unordered_map>
 
@@ -24,7 +26,7 @@ namespace {
 PortRef portFor(WordOrder wo               = WordOrder::ABCD,
                 std::optional<int> bit     = std::nullopt,
                 int       shift            = 0,
-                quint64   mask             = 0xFFFFFFFFFFFFFFFFull,
+                std::uint64_t mask         = 0xFFFFFFFFFFFFFFFFull,
                 double    scale            = 1.0,
                 double    offset           = 0.0) {
     PortRef r;
@@ -38,7 +40,7 @@ PortRef portFor(WordOrder wo               = WordOrder::ABCD,
 }
 
 // Build a dp::Value from a typed literal, picking the exact variant alternative
-// (a bare int/quint16 would be an ambiguous variant construction).
+// (a bare int / uint16_t would be an ambiguous variant construction).
 template <class T>
 Value V(T x) {
     if constexpr (std::is_same_v<T, bool>)          return x;
@@ -46,7 +48,8 @@ Value V(T x) {
     else if constexpr (std::is_signed_v<T>)         return std::int64_t(x);
     else                                            return std::uint64_t(x);
 }
-inline Value V(QString const& s) { return s.toStdString(); }
+inline Value V(char const* s) { return std::string(s); }
+inline Value V(std::string const& s) { return s; }
 
 } // namespace
 
@@ -58,7 +61,7 @@ TEST_CASE("U16 round-trips raw register values", "[codec][u16]") {
     BuiltinScalarCodec c(ScalarType::U16);
     auto ref = portFor();
 
-    auto regs = c.encode(V(quint16(0xABCD)), ref);
+    auto regs = c.encode(V(std::uint16_t(0xABCD)), ref);
     REQUIRE(regs == core::RegisterWords{0xABCD});
 
     auto v = c.decode(regs, ref);
@@ -69,7 +72,7 @@ TEST_CASE("S16 sign-extends negative values", "[codec][s16]") {
     BuiltinScalarCodec c(ScalarType::S16);
     auto ref = portFor();
 
-    auto regs = c.encode(V(qint16(-2)), ref);
+    auto regs = c.encode(V(std::int16_t(-2)), ref);
     REQUIRE(regs == core::RegisterWords{0xFFFE});
 
     auto v = c.decode(core::RegisterWords{0xFFFE}, ref);
@@ -99,7 +102,7 @@ TEST_CASE("U16 shift+mask isolates bit field", "[codec][u16][bits]") {
     REQUIRE(toUInt64(v) == 0x0F);
 
     // 0x0F → (0x0F & 0x0F) << 4 = 0x00F0
-    auto regs = c.encode(V(quint16(0x0F)), ref);
+    auto regs = c.encode(V(std::uint16_t(0x0F)), ref);
     REQUIRE(regs == core::RegisterWords{0x00F0});
 }
 
@@ -111,7 +114,7 @@ TEST_CASE("U32 ABCD round-trips a known constant", "[codec][u32][abcd]") {
     BuiltinScalarCodec c(ScalarType::U32);
     auto ref = portFor(WordOrder::ABCD);
 
-    auto regs = c.encode(V(quint32(0x12345678u)), ref);
+    auto regs = c.encode(V(std::uint32_t(0x12345678u)), ref);
     REQUIRE(regs == core::RegisterWords{0x1234, 0x5678});
 
     auto v = c.decode(regs, ref);
@@ -122,7 +125,7 @@ TEST_CASE("U32 CDAB swaps the word pair", "[codec][u32][cdab]") {
     BuiltinScalarCodec c(ScalarType::U32);
     auto ref = portFor(WordOrder::CDAB);
 
-    auto regs = c.encode(V(quint32(0x12345678u)), ref);
+    auto regs = c.encode(V(std::uint32_t(0x12345678u)), ref);
     REQUIRE(regs == core::RegisterWords{0x5678, 0x1234});
 
     auto v = c.decode(regs, ref);
@@ -133,7 +136,7 @@ TEST_CASE("U32 BADC swaps bytes within each word", "[codec][u32][badc]") {
     BuiltinScalarCodec c(ScalarType::U32);
     auto ref = portFor(WordOrder::BADC);
 
-    auto regs = c.encode(V(quint32(0x12345678u)), ref);
+    auto regs = c.encode(V(std::uint32_t(0x12345678u)), ref);
     REQUIRE(regs == core::RegisterWords{0x3412, 0x7856});
 
     auto v = c.decode(regs, ref);
@@ -144,7 +147,7 @@ TEST_CASE("U32 DCBA fully reverses bytes", "[codec][u32][dcba]") {
     BuiltinScalarCodec c(ScalarType::U32);
     auto ref = portFor(WordOrder::DCBA);
 
-    auto regs = c.encode(V(quint32(0x12345678u)), ref);
+    auto regs = c.encode(V(std::uint32_t(0x12345678u)), ref);
     REQUIRE(regs == core::RegisterWords{0x7856, 0x3412});
 
     auto v = c.decode(regs, ref);
@@ -155,7 +158,7 @@ TEST_CASE("S32 sign-extends after permutation", "[codec][s32]") {
     BuiltinScalarCodec c(ScalarType::S32);
     auto ref = portFor(WordOrder::CDAB);
 
-    auto regs = c.encode(V(qint32(-1)), ref);
+    auto regs = c.encode(V(std::int32_t(-1)), ref);
     auto v    = c.decode(regs, ref);
     REQUIRE(toInt64(v) == -1);
 }
@@ -218,7 +221,7 @@ TEST_CASE("U64 round-trips with CDAB ordering", "[codec][u64]") {
     BuiltinScalarCodec c(ScalarType::U64);
     auto ref = portFor(WordOrder::CDAB);
 
-    auto regs = c.encode(V(quint64(0x0123456789ABCDEFull)), ref);
+    auto regs = c.encode(V(std::uint64_t(0x0123456789ABCDEFull)), ref);
     auto v    = c.decode(regs, ref);
     REQUIRE(toUInt64(v) == 0x0123456789ABCDEFull);
 }
@@ -257,11 +260,11 @@ TEST_CASE("Bool decodes from a register with multiple bits set",
 // ===========================================================================
 
 TEST_CASE("EnumU16Codec maps raw values to names", "[codec][enum]") {
-    EnumU16Codec c(QStringLiteral("belt_state"), {
-        {0, QStringLiteral("Stopped")},
-        {1, QStringLiteral("Starting")},
-        {2, QStringLiteral("Running")},
-        {4, QStringLiteral("Fault")},
+    EnumU16Codec c("belt_state", {
+        {0, "Stopped"},
+        {1, "Starting"},
+        {2, "Running"},
+        {4, "Fault"},
     });
     auto ref = portFor();
 
@@ -275,23 +278,23 @@ TEST_CASE("EnumU16Codec maps raw values to names", "[codec][enum]") {
 
 TEST_CASE("EnumU16Codec encodes by name and by numeric fallback",
           "[codec][enum]") {
-    EnumU16Codec c(QStringLiteral("belt_state"), {
-        {0, QStringLiteral("Stopped")},
-        {2, QStringLiteral("Running")},
+    EnumU16Codec c("belt_state", {
+        {0, "Stopped"},
+        {2, "Running"},
     });
     auto ref = portFor();
 
-    REQUIRE(c.encode(V(QStringLiteral("Running")), ref) == core::RegisterWords{2});
-    REQUIRE(c.encode(V(QStringLiteral("Stopped")), ref) == core::RegisterWords{0});
+    REQUIRE(c.encode(V("Running"), ref) == core::RegisterWords{2});
+    REQUIRE(c.encode(V("Stopped"), ref) == core::RegisterWords{0});
 
     // Unknown name → fallback to numeric coercion of the value
     REQUIRE(c.encode(V(7), ref) == core::RegisterWords{7});
 }
 
 TEST_CASE("EnumU16Codec masks before lookup", "[codec][enum][mask]") {
-    EnumU16Codec c(QStringLiteral("low_nibble"), {
-        {0, QStringLiteral("Idle")},
-        {1, QStringLiteral("Run")},
+    EnumU16Codec c("low_nibble", {
+        {0, "Idle"},
+        {1, "Run"},
     });
     auto ref = portFor(WordOrder::ABCD, std::nullopt, 0, 0x000Fu);
 
@@ -311,7 +314,7 @@ TEST_CASE("CodecRegistry stores and retrieves codecs", "[codec][registry]") {
     auto found = reg.find(BuiltinScalarCodec::idFor(ScalarType::U16));
     REQUIRE(found.get() == codec.get());
 
-    REQUIRE(reg.find(QStringLiteral("nope")) == nullptr);
+    REQUIRE(reg.find("nope") == nullptr);
 }
 
 TEST_CASE("CodecRegistry.loadBuiltins registers all scalar types",

@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
+#include <cstdint>
 #include <memory>
+#include <string>
 #include <unordered_map>
-#include <QHash>   // std::hash<QString> specialisation for m_reverse map
-#include <QString>
 
 #include "core/core_global.h"
 #include "core/codec/Codec.h"
@@ -27,7 +27,7 @@ class CORE_EXPORT BuiltinScalarCodec : public Codec {
 public:
     explicit BuiltinScalarCodec(dp::ScalarType type);
 
-    QString        id() const override;
+    std::string    id() const override;
     dp::Value       decode(core::RegisterWords const& raw,
                           dp::PortRef const&     ref) override;
     core::RegisterWords encode(dp::Value const&        value,
@@ -36,28 +36,28 @@ public:
     dp::ScalarType scalarType() const noexcept { return m_type; }
 
     // Canonical builtin id for a given scalar type: "builtin.<scalar>".
-    static QString idFor(dp::ScalarType type);
+    static std::string idFor(dp::ScalarType type);
 
 private:
     dp::ScalarType m_type;
 };
 
-// EnumU16Codec — wraps a U16 scalar decode with a map<u16, QString>. Missing
+// EnumU16Codec — wraps a U16 scalar decode with a map<u16, string>. Missing
 // keys decode to "Unknown(<n>)" so the datapoint always carries a value.
 class CORE_EXPORT EnumU16Codec : public Codec {
 public:
-    EnumU16Codec(QString id, std::unordered_map<quint16, QString> map);
+    EnumU16Codec(std::string id, std::unordered_map<std::uint16_t, std::string> map);
 
-    QString        id() const override;
+    std::string    id() const override;
     dp::Value       decode(core::RegisterWords const& raw,
                           dp::PortRef const&     ref) override;
     core::RegisterWords encode(dp::Value const&        value,
                           dp::PortRef const&     ref) override;
 
 private:
-    QString                                m_id;
-    std::unordered_map<quint16, QString>   m_forward;   // raw → name
-    std::unordered_map<QString, quint16>   m_reverse;   // name → raw
+    std::string                                      m_id;
+    std::unordered_map<std::uint16_t, std::string>   m_forward;   // raw → name
+    std::unordered_map<std::string, std::uint16_t>   m_reverse;   // name → raw
 };
 
 } // namespace core::codec

@@ -4,12 +4,12 @@
 
 #include "core/dp/PortRef.h"
 
-#ifdef CORE_HAS_LUA
-
-#include <mutex>
 #include <string>
 
-#include <QFileInfo>
+#ifdef CORE_HAS_LUA
+
+#include <filesystem>
+#include <mutex>
 
 // sol2 pulls in the Lua C headers; keep it strictly out of the public header.
 #define SOL_ALL_SAFETIES_ON 1
@@ -56,8 +56,8 @@ dp::Value fromLua(sol::object const& o) {
 
 class LuaCodec::Impl {
 public:
-    QString                  id;
-    QString                  arg;   // opaque selector → ctx.arg
+    std::string              id;
+    std::string              arg;   // opaque selector → ctx.arg
     sol::state               lua;
     sol::protected_function  decodeFn;
     sol::protected_function  encodeFn;
@@ -69,7 +69,7 @@ public:
         ctx["count"]   = regCount;
         ctx["scale"]   = ref.scale;
         ctx["offset"]  = ref.offset;
-        ctx["arg"]     = arg.toStdString();
+        ctx["arg"]     = arg;
         return ctx;
     }
 };
@@ -77,18 +77,18 @@ public:
 LuaCodec::LuaCodec(std::unique_ptr<Impl> impl) : m_impl(std::move(impl)) {}
 LuaCodec::~LuaCodec() = default;
 
-QString LuaCodec::id() const { return m_impl->id; }
+std::string LuaCodec::id() const { return m_impl->id; }
 
-std::shared_ptr<LuaCodec> LuaCodec::fromFile(QString const& id,
-                                            QString const& scriptPath,
-                                            QString const& arg,
-                                            QString*       error) {
-    auto fail = [&](QString const& msg) -> std::shared_ptr<LuaCodec> {
+std::shared_ptr<LuaCodec> LuaCodec::fromFile(std::string const& id,
+                                            std::string const& scriptPath,
+                                            std::string const& arg,
+                                            std::string*       error) {
+    auto fail = [&](std::string msg) -> std::shared_ptr<LuaCodec> {
         if (error) *error = msg;
         return nullptr;
     };
-    if (!QFileInfo::exists(scriptPath))
-        return fail(QStringLiteral("lua script not found: %1").arg(scriptPath));
+    if (!std::filesystem::exists(scriptPath))
+        return fail("lua script not found: " + scriptPath);
 
     auto impl = std::make_unique<Impl>();
     impl->id  = id;
@@ -102,12 +102,10 @@ std::shared_ptr<LuaCodec> LuaCodec::fromFile(QString const& id,
         impl->lua[g] = sol::nil;
 
     sol::protected_function_result res =
-        impl->lua.safe_script_file(scriptPath.toStdString(),
-                                   sol::script_pass_on_error);
+        impl->lua.safe_script_file(scriptPath, sol::script_pass_on_error);
     if (!res.valid()) {
         sol::error e = res;
-        return fail(QStringLiteral("lua load error in %1: %2")
-                        .arg(scriptPath, QString::fromStdString(e.what())));
+        return fail("lua load error in " + scriptPath + ": " + e.what());
     }
 
     // Prefer the `return { decode=, encode= }` form; fall back to globals.
@@ -121,8 +119,7 @@ std::shared_ptr<LuaCodec> LuaCodec::fromFile(QString const& id,
     if (!dec.valid()) dec = impl->lua["decode"];
     if (!enc.valid()) enc = impl->lua["encode"];
     if (!dec.valid() || !enc.valid())
-        return fail(QStringLiteral("lua script %1 must provide decode/encode")
-                        .arg(scriptPath));
+        return fail("lua script " + scriptPath + " must provide decode/encode");
 
     impl->decodeFn = std::move(dec);
     impl->encodeFn = std::move(enc);
@@ -158,7 +155,8 @@ core::RegisterWords LuaCodec::encode(dp::Value const& value, dp::PortRef const& 
         // Stop at the first hole / non-numeric entry; go through double so a
         // float value can't throw the way as<integer>() would under safeties.
         if (e.get_type() != sol::type::number) break;
-        out.push_back(quint16(quint32(e.as<double>()) & 0xFFFFu));
+        out.push_back(static_cast<std::uint16_t>(
+            static_cast<std::uint32_t>(e.as<double>()) & 0xFFFFu));
     }
     return out;
 }
@@ -169,18 +167,17 @@ core::RegisterWords LuaCodec::encode(dp::Value const& value, dp::PortRef const& 
 
 namespace core::codec {
 
-class LuaCodec::Impl { public: QString id; };
+class LuaCodec::Impl { public: std::string id; };
 
 LuaCodec::LuaCodec(std::unique_ptr<Impl> impl) : m_impl(std::move(impl)) {}
 LuaCodec::~LuaCodec() = default;
 
-QString LuaCodec::id() const { return m_impl ? m_impl->id : QString(); }
+std::string LuaCodec::id() const { return m_impl ? m_impl->id : std::string(); }
 
-std::shared_ptr<LuaCodec> LuaCodec::fromFile(QString const&, QString const&,
-                                            QString const&, QString* error) {
+std::shared_ptr<LuaCodec> LuaCodec::fromFile(std::string const&, std::string const&,
+                                            std::string const&, std::string* error) {
     if (error)
-        *error = QStringLiteral("Lua codec disabled at build time "
-                                "(CORE_BUILD_LUA=OFF)");
+        *error = "Lua codec disabled at build time (CORE_BUILD_LUA=OFF)";
     return nullptr;
 }
 
