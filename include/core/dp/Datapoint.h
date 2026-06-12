@@ -64,6 +64,11 @@ public:
     DpState    state()     const;
     QString    stateText() const;
 
+    // Qt-free snapshot of the reactive runtime state (value + state +
+    // timestamp) taken atomically under one lock. Used by core-side publishers
+    // (e.g. DpChanged) that speak dp::Value / dp::Timestamp rather than Qt types.
+    State      snapshot()  const;
+
     Kind                          kind() const;
     ScalarType                    type() const;
     std::optional<PortRef> const& source() const;

@@ -93,11 +93,11 @@ public:
             if (cur == ConnectionState::Connected
                 && prev != ConnectionState::Connected) {
                 busPtr->publish(bus::TransportEvent{
-                    cfg.id, bus::TransportEventKind::Connected, {}});
+                    cfg.id.toStdString(), bus::TransportEventKind::Connected, {}});
             } else if (cur == ConnectionState::Disconnected
                        && prev == ConnectionState::Connected) {
                 busPtr->publish(bus::TransportEvent{
-                    cfg.id, bus::TransportEventKind::Disconnected, {}});
+                    cfg.id.toStdString(), bus::TransportEventKind::Disconnected, {}});
             }
         });
         QObject::connect(client, &QMqttClient::errorChanged,

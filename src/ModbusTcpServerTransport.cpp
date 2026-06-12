@@ -57,11 +57,11 @@ public:
             if (cur == ConnectionState::Connected
                 && prev != ConnectionState::Connected) {
                 busPtr->publish(bus::TransportEvent{
-                    cfg.id, bus::TransportEventKind::Connected, {}});
+                    cfg.id.toStdString(), bus::TransportEventKind::Connected, {}});
             } else if (cur == ConnectionState::Disconnected
                        && prev == ConnectionState::Connected) {
                 busPtr->publish(bus::TransportEvent{
-                    cfg.id, bus::TransportEventKind::Disconnected, {}});
+                    cfg.id.toStdString(), bus::TransportEventKind::Disconnected, {}});
             }
         });
         QObject::connect(server, &QModbusDevice::errorOccurred,
@@ -71,7 +71,7 @@ public:
             lastError = server->errorString();
             if (busPtr && prev == ConnectionState::Connected) {
                 busPtr->publish(bus::TransportEvent{
-                    cfg.id, bus::TransportEventKind::Disconnected, lastError});
+                    cfg.id.toStdString(), bus::TransportEventKind::Disconnected, lastError.toStdString()});
             }
         });
         QObject::connect(server, &QModbusTcpServer::dataWritten,
@@ -85,7 +85,7 @@ public:
                 values.push_back(v);
             }
             busPtr->publish(bus::ServerWriteEvent{
-                cfg.id, core::fromQModbus(table), address, std::move(values)});
+                cfg.id.toStdString(), core::fromQModbus(table), address, std::move(values)});
         });
     }
 

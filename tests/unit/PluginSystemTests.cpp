@@ -43,14 +43,12 @@ TEST_CASE("PortRegistry.bindIn delivers DpChanged to an InPort", "[plugin][port]
     in.onChanged([&](int v) { got = v; ++calls; });
     reg.bindIn(in, QStringLiteral("a.b"));
 
-    bus.publish(bus::DpChanged{QStringLiteral("a.b"), QVariant(42),
-                               QDateTime::currentDateTime()});
+    bus.publish(bus::DpChanged{"a.b", std::int64_t(42), {}});
     REQUIRE(calls == 1);
     REQUIRE(got == 42);
 
     // A change to a different datapoint must not reach this port.
-    bus.publish(bus::DpChanged{QStringLiteral("other"), QVariant(7),
-                               QDateTime::currentDateTime()});
+    bus.publish(bus::DpChanged{"other", std::int64_t(7), {}});
     REQUIRE(calls == 1);
 }
 

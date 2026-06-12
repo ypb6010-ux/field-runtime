@@ -35,7 +35,7 @@ TEST_CASE("AckWatch resolves on the first matching DpChanged event",
 
     std::thread publisher([&] {
         std::this_thread::sleep_for(20ms);
-        bus.publish(bus::DpChanged{"belt2.fb.contactor", true, QDateTime{}});
+        bus.publish(bus::DpChanged{"belt2.fb.contactor", true, {}});
     });
 
     auto r = watch.waitOnce();
@@ -51,7 +51,7 @@ TEST_CASE("AckWatch ignores DpChanged events for other dps",
 
     std::thread publisher([&] {
         std::this_thread::sleep_for(20ms);
-        bus.publish(bus::DpChanged{"other.dp", 42, QDateTime{}});
+        bus.publish(bus::DpChanged{"other.dp", std::int64_t(42), {}});
     });
 
     auto r = watch.waitOnce();
@@ -67,9 +67,9 @@ TEST_CASE("AckWatch ignores DpChanged events with the wrong value",
 
     std::thread publisher([&] {
         std::this_thread::sleep_for(20ms);
-        bus.publish(bus::DpChanged{"dp.x", 0, QDateTime{}});
+        bus.publish(bus::DpChanged{"dp.x", std::int64_t(0), {}});
         std::this_thread::sleep_for(10ms);
-        bus.publish(bus::DpChanged{"dp.x", 2, QDateTime{}});
+        bus.publish(bus::DpChanged{"dp.x", std::int64_t(2), {}});
     });
 
     auto r = watch.waitOnce();

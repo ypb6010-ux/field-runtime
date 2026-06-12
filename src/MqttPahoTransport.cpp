@@ -69,7 +69,7 @@ public:
                                           std::memory_order_acq_rel);
         if (busPtr && prev != ConnectionState::Connected) {
             busPtr->publish(bus::TransportEvent{
-                cfg.id, bus::TransportEventKind::Connected, {}});
+                cfg.id.toStdString(), bus::TransportEventKind::Connected, {}});
         }
     }
 
@@ -79,7 +79,7 @@ public:
         lastError = QString::fromStdString(cause);
         if (busPtr && prev == ConnectionState::Connected) {
             busPtr->publish(bus::TransportEvent{
-                cfg.id, bus::TransportEventKind::Disconnected, lastError});
+                cfg.id.toStdString(), bus::TransportEventKind::Disconnected, cause});
         }
     }
 

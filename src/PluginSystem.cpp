@@ -18,6 +18,7 @@
 #include "core/bus/Subscription.h"
 #include "core/dp/Datapoint.h"
 #include "core/dp/DatapointRegistry.h"
+#include "core/dp/ValueQt.h"
 #include "core/log/Logger.h"
 
 namespace core::plugin {
@@ -28,8 +29,9 @@ public:
     Impl(dp::DatapointRegistry& d, bus::EventBus& b) : dps(d), bus(b) {
         // One DpChanged subscription fans out to every bound InPort by id.
         sub = bus.subscribe<bus::DpChanged>([this](bus::DpChanged const& e) {
-            auto range = handlers.equal_range(e.id);
-            for (auto it = range.first; it != range.second; ++it) it->second(e.value);
+            auto range = handlers.equal_range(QString::fromStdString(e.id));
+            auto const v = dp::toQVariant(e.value);
+            for (auto it = range.first; it != range.second; ++it) it->second(v);
         });
     }
 

@@ -282,7 +282,7 @@ public:
 
     void publishSchedulerStatsOnce() {
         for (auto& [id, t] : m_transports) {
-            m_bus->publish(bus::SchedulerStatsEvent{id, t->scheduler().stats()});
+            m_bus->publish(bus::SchedulerStatsEvent{id.toStdString(), t->scheduler().stats()});
         }
     }
 
@@ -357,7 +357,7 @@ private:
                     logTransportEvent(e);
                     if (e.kind != bus::TransportEventKind::Connected) return;
                     for (auto* sw : m_sinkWindowPtrs) {
-                        if (sw->transportId() == e.transportId) sw->forceFlush();
+                        if (sw->transportId() == qs(e.transportId)) sw->forceFlush();
                     }
                 }));
         // On operator-box write into a server transport, fan out into a
@@ -367,13 +367,13 @@ private:
                 [this](bus::ServerWriteEvent const& e) {
                     m_logger->logOperation(log::OperationRecord{
                         {}, QStringLiteral("operator-box"),
-                        QStringLiteral("server-write"), e.transportId,
+                        QStringLiteral("server-write"), qs(e.transportId),
                         {}, QString::number(e.values.size()) + " regs @ "
                             + QString::number(e.startAddress),
                         QStringLiteral("ok"), {},
                         QStringLiteral("audit"),
                         QStringLiteral("server-write:") + QString::number(e.startAddress)});
-                    if (!serverForwardEnabled(e.transportId)) return;   // 业务闸门:不转发
+                    if (!serverForwardEnabled(qs(e.transportId))) return;   // 业务闸门:不转发
                     routeServerWrite(e);
                     forwardBridges(e);
                 }));
@@ -392,7 +392,7 @@ private:
             case bus::TransportEventKind::CircuitHalfOpen: what = "circuit half-open"; break;
             default: return;   // Read/WriteCompleted are too noisy for the log
         }
-        m_logger->logf(level, QStringLiteral("transport"), e.transportId,
+        m_logger->logf(level, QStringLiteral("transport"), qs(e.transportId),
                        QString::fromLatin1(what));
     }
 
@@ -409,7 +409,7 @@ private:
             auto const& toDp   = toIt->second;
             if (!fromDp->source().has_value()) continue;
             auto const& fromSrc = *fromDp->source();
-            if (fromSrc.transport != e.transportId) continue;
+            if (fromSrc.transport != qs(e.transportId)) continue;
             if (fromSrc.table     != e.table)       continue;
             int const offset = fromSrc.address - e.startAddress;
             if (offset < 0 || offset >= e.values.size()) continue;
@@ -492,7 +492,7 @@ private:
         if (e.table != core::RegisterTable::HoldingRegister) return;
         for (int i = 0; i < int(m_bridges.size()); ++i) {
             auto const& b = m_bridges[size_t(i)];
-            if (qs(b.server) != e.transportId) continue;
+            if (b.server != e.transportId) continue;
             auto* sink = m_bridgeFwdSinks[size_t(i)];
             if (!sink) continue;
             int const eStart = e.startAddress;
@@ -835,8 +835,9 @@ private:
                 m_bus.get(), [this, weak] {
                     auto sp = weak.lock();
                     if (!sp) return;
+                    auto const snap = sp->snapshot();
                     m_bus->publish(bus::DpChanged{
-                        sp->id(), sp->value(), sp->timestamp()});
+                        sp->id().toStdString(), snap.value, snap.timestamp});
                 });
 
             // For Command / Bidirectional datapoints with a SinkWindow sink,

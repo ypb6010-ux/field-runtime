@@ -10,6 +10,7 @@
 
 #include "core/bus/BusEvents.h"
 #include "core/bus/EventBus.h"
+#include "core/dp/ValueQt.h"
 
 namespace core::module {
 
@@ -44,8 +45,8 @@ AckWatch::AckResult AckWatch::waitOnce() {
 
     auto sub = m_impl->bus->subscribe<bus::DpChanged>(
         [this, &mtx, &cv, &matched](bus::DpChanged const& e) {
-            if (e.id != m_impl->cfg.dpId) return;
-            if (e.value != m_impl->cfg.expected) return;
+            if (e.id != m_impl->cfg.dpId.toStdString()) return;
+            if (e.value != dp::fromQVariant(m_impl->cfg.expected)) return;
             {
                 std::lock_guard lk(mtx);
                 matched = true;

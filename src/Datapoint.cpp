@@ -59,6 +59,11 @@ DpState Datapoint::state() const {
     return m_impl->st.state;
 }
 
+State Datapoint::snapshot() const {
+    QMutexLocker lk(&m_impl->mtx);
+    return m_impl->st;
+}
+
 QString Datapoint::stateText() const {
     switch (state()) {
         case DpState::Ok:      return QStringLiteral("Ok");
