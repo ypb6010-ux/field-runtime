@@ -7,6 +7,7 @@
 #include <mutex>
 #include <vector>
 
+#include "core/dp/TimeQt.h"
 #include "core/log/DedupFilter.h"
 #include "core/log/LogFilter.h"
 #include "core/log/Logger.h"
@@ -202,7 +203,7 @@ TEST_CASE("DedupFilter suppresses repeats within window", "[dedup]") {
 
 TEST_CASE("formatLine renders a system record", "[logger]") {
     LogRecord r;
-    r.ts       = QDateTime(QDate(2026, 5, 29), QTime(14, 23, 45, 678));
+    r.ts       = core::dp::fromQDateTime(QDateTime(QDate(2026, 5, 29), QTime(14, 23, 45, 678)));
     r.level    = LogLevel::Warn;
     r.category = "transport";
     r.source   = "PLC1";

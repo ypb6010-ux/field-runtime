@@ -177,7 +177,7 @@ public:
         }
 
         if (!schema->meta.logLevel.empty()) {
-            m_logger->setThreshold(log::levelFromString(qs(schema->meta.logLevel)));
+            m_logger->setThreshold(log::levelFromString(schema->meta.logLevel));
         }
         // Resolve config-relative paths (e.g. lua codec scripts) against the
         // config file's directory.
@@ -365,14 +365,16 @@ private:
         m_serverWriteSub = std::make_unique<bus::Subscription>(
             m_bus->subscribe<bus::ServerWriteEvent>(
                 [this](bus::ServerWriteEvent const& e) {
-                    m_logger->logOperation(log::OperationRecord{
-                        {}, QStringLiteral("operator-box"),
-                        QStringLiteral("server-write"), qs(e.transportId),
-                        {}, QString::number(e.values.size()) + " regs @ "
-                            + QString::number(e.startAddress),
-                        QStringLiteral("ok"), {},
-                        QStringLiteral("audit"),
-                        QStringLiteral("server-write:") + QString::number(e.startAddress)});
+                    log::OperationRecord op;
+                    op.actor    = "operator-box";
+                    op.action   = "server-write";
+                    op.target   = e.transportId;
+                    op.newValue = std::to_string(e.values.size()) + " regs @ "
+                                + std::to_string(e.startAddress);
+                    op.result   = "ok";
+                    op.category = "audit";
+                    op.eventKey = "server-write:" + std::to_string(e.startAddress);
+                    m_logger->logOperation(std::move(op));
                     if (!serverForwardEnabled(qs(e.transportId))) return;   // 业务闸门:不转发
                     routeServerWrite(e);
                     forwardBridges(e);

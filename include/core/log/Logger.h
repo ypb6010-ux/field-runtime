@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <QString>
+#include <QVariantMap>
 
 #include "core/core_global.h"
 #include "core/log/ILogSink.h"

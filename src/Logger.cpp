@@ -3,12 +3,17 @@
 #include "core/log/Logger.h"
 
 #include <atomic>
+#include <cctype>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <variant>
 #include <vector>
+
+#include "core/dp/ValueQt.h"
 
 namespace core::log {
 
@@ -24,8 +29,13 @@ const char* levelName(LogLevel level) noexcept {
     return "INFO";
 }
 
-LogLevel levelFromString(QString const& s) noexcept {
-    QString const v = s.trimmed().toLower();
+LogLevel levelFromString(std::string const& s) noexcept {
+    auto const begin = s.find_first_not_of(" \t\r\n");
+    auto const end   = s.find_last_not_of(" \t\r\n");
+    std::string v = (begin == std::string::npos)
+                  ? std::string{}
+                  : s.substr(begin, end - begin + 1);
+    for (auto& c : v) c = char(std::tolower(static_cast<unsigned char>(c)));
     if (v == "trace")                       return LogLevel::Trace;
     if (v == "debug")                       return LogLevel::Debug;
     if (v == "info" || v == "log")          return LogLevel::Info;
@@ -181,7 +191,7 @@ void Logger::setThreshold(LogLevel min) {
 
 void Logger::setCategoryThreshold(QString const& category, LogLevel min) {
     std::lock_guard lk(m_impl->filterMtx);
-    m_impl->coreFilter.setCategory(category, true, min);
+    m_impl->coreFilter.setCategory(category.toStdString(), true, min);
 }
 
 LogLevel Logger::threshold() const {
@@ -212,7 +222,7 @@ void Logger::removeSink(ILogSink* sink) {
 }
 
 void Logger::log(LogRecord rec) {
-    if (rec.ts.isNull()) rec.ts = QDateTime::currentDateTime();
+    if (rec.ts == LogTime{}) rec.ts = std::chrono::system_clock::now();
     {
         std::lock_guard lk(m_impl->filterMtx);
         if (!m_impl->coreFilter.passes(rec)) return;
@@ -221,8 +231,8 @@ void Logger::log(LogRecord rec) {
 }
 
 void Logger::logOperation(OperationRecord rec) {
-    if (rec.ts.isNull()) rec.ts = QDateTime::currentDateTime();
-    if (rec.category.isEmpty()) rec.category = QStringLiteral("audit");
+    if (rec.ts == LogTime{}) rec.ts = std::chrono::system_clock::now();
+    if (rec.category.empty()) rec.category = "audit";
     {
         // Audit is gated on the category axis only (see LogFilter); a raised
         // level threshold never drops it, but disabling its category does.
@@ -235,12 +245,14 @@ void Logger::logOperation(OperationRecord rec) {
 void Logger::logf(LogLevel level, QString category, QString source,
                   QString message, QVariantMap fields) {
     LogRecord rec;
-    rec.ts       = QDateTime::currentDateTime();
+    rec.ts       = std::chrono::system_clock::now();
     rec.level    = level;
-    rec.category = std::move(category);
-    rec.source   = std::move(source);
-    rec.message  = std::move(message);
-    rec.fields   = std::move(fields);
+    rec.category = category.toStdString();
+    rec.source   = source.toStdString();
+    rec.message  = message.toStdString();
+    for (auto it = fields.constBegin(); it != fields.constEnd(); ++it) {
+        rec.fields.emplace(it.key().toStdString(), dp::fromQVariant(it.value()));
+    }
     log(std::move(rec));
 }
 

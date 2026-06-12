@@ -128,7 +128,13 @@ if(MSVC)
     # toml++ switches to its non-throwing parse_result API (whose table
     # conversion makes `root = toml::parse(...)` ambiguous) when C++ exceptions
     # are off. Some preset/Qt configs don't add /EHsc by default, so force it.
-    target_compile_options(Core PRIVATE /W4 /permissive- /utf-8 /EHsc)
+    #
+    # /wd4251: the de-Qt migration exports value types (e.g. LogFilter) that hold
+    # std:: containers as members. C4251 ("needs dll-interface") is the MSVC
+    # notice for that; it is benign here because Core and every consumer build
+    # with the same toolchain/runtime (/MD). Qt's own QHash/QString suppress it
+    # the same way.
+    target_compile_options(Core PRIVATE /W4 /permissive- /utf-8 /EHsc /wd4251)
 else()
     target_compile_options(Core PRIVATE -Wall -Wextra -Wpedantic)
 endif()

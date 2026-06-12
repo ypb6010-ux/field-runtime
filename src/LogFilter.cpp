@@ -12,24 +12,24 @@ void LogFilter::setDefaultMinLevel(LogLevel minLevel) {
     m_default.minLevel = minLevel;
 }
 
-void LogFilter::setCategory(QString const& category, bool enabled, LogLevel minLevel) {
-    m_categories.insert(category, Rule{enabled, minLevel});
+void LogFilter::setCategory(std::string const& category, bool enabled, LogLevel minLevel) {
+    m_categories.insert_or_assign(category, Rule{enabled, minLevel});
 }
 
-void LogFilter::clearCategory(QString const& category) {
-    m_categories.remove(category);
+void LogFilter::clearCategory(std::string const& category) {
+    m_categories.erase(category);
 }
 
-bool LogFilter::hasCategory(QString const& category) const {
+bool LogFilter::hasCategory(std::string const& category) const {
     return m_categories.contains(category);
 }
 
-LogFilter::Rule LogFilter::ruleFor(QString const& category) const {
-    auto it = m_categories.constFind(category);
-    return it != m_categories.constEnd() ? it.value() : m_default;
+LogFilter::Rule LogFilter::ruleFor(std::string const& category) const {
+    auto it = m_categories.find(category);
+    return it != m_categories.end() ? it->second : m_default;
 }
 
-bool LogFilter::passes(QString const& category, LogLevel level) const {
+bool LogFilter::passes(std::string const& category, LogLevel level) const {
     Rule const r = ruleFor(category);
     return r.enabled && level >= r.minLevel;
 }
@@ -45,8 +45,8 @@ bool LogFilter::passes(OperationRecord const& r) const {
 
 void LogFilter::overrideWith(LogFilter const& over) {
     m_default = over.m_default;
-    for (auto it = over.m_categories.constBegin(); it != over.m_categories.constEnd(); ++it) {
-        m_categories.insert(it.key(), it.value());
+    for (auto const& [category, rule] : over.m_categories) {
+        m_categories.insert_or_assign(category, rule);
     }
 }
 

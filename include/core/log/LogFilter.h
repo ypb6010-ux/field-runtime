@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include <QHash>
-#include <QString>
+#include <string>
+#include <unordered_map>
 
 #include "core/core_global.h"
 #include "core/log/LogTypes.h"
@@ -41,15 +41,15 @@ public:
     // ── configuration ──────────────────────────────────────────────────
     void setDefault(bool enabled, LogLevel minLevel);
     void setDefaultMinLevel(LogLevel minLevel);   // keep enabled, raise/lower floor
-    void setCategory(QString const& category, bool enabled, LogLevel minLevel);
-    void clearCategory(QString const& category);  // fall back to default
+    void setCategory(std::string const& category, bool enabled, LogLevel minLevel);
+    void clearCategory(std::string const& category);  // fall back to default
 
     Rule defaultRule() const { return m_default; }
-    bool hasCategory(QString const& category) const;
-    Rule ruleFor(QString const& category) const;
+    bool hasCategory(std::string const& category) const;
+    Rule ruleFor(std::string const& category) const;
 
     // ── evaluation ─────────────────────────────────────────────────────
-    bool passes(QString const& category, LogLevel level) const;
+    bool passes(std::string const& category, LogLevel level) const;
     bool passes(LogRecord const& r) const;
     bool passes(OperationRecord const& r) const;   // category axis only
 
@@ -60,8 +60,8 @@ public:
     void overrideWith(LogFilter const& over);
 
 private:
-    Rule                 m_default{};
-    QHash<QString, Rule> m_categories;
+    Rule                                  m_default{};
+    std::unordered_map<std::string, Rule> m_categories;
 };
 
 } // namespace core::log

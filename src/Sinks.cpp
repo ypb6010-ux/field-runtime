@@ -3,29 +3,40 @@
 #include "core/log/Sinks.h"
 
 #include <cstdio>
+#include <map>
 #include <mutex>
+#include <string>
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QTextStream>
 
+#include "core/dp/TimeQt.h"
+#include "core/dp/ValueQt.h"
+
 namespace core::log {
 
 namespace {
 
-QString categoryTag(QString const& category) {
-    QString c = category.isEmpty() ? QStringLiteral("app") : category;
+QString tsString(LogTime ts) {
+    return dp::toQDateTime(ts).toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"));
+}
+
+QString categoryTag(std::string const& category) {
+    QString c = category.empty() ? QStringLiteral("app")
+                                  : QString::fromStdString(category);
     if (!c.isEmpty()) c[0] = c[0].toUpper();
     return QStringLiteral("[Core/%1]").arg(c);
 }
 
-QString fieldsToString(QVariantMap const& fields) {
-    if (fields.isEmpty()) return {};
+QString fieldsToString(std::map<std::string, dp::Value> const& fields) {
+    if (fields.empty()) return {};
     QStringList parts;
-    parts.reserve(fields.size());
-    for (auto it = fields.constBegin(); it != fields.constEnd(); ++it) {
-        parts << QStringLiteral("%1=%2").arg(it.key(), it.value().toString());
+    parts.reserve(int(fields.size()));
+    for (auto const& [key, value] : fields) {
+        parts << QStringLiteral("%1=%2").arg(QString::fromStdString(key),
+                                             QString::fromStdString(dp::toString(value)));
     }
     return QLatin1Char(' ') + parts.join(QLatin1Char(' '));
 }
@@ -45,28 +56,30 @@ const char* ansiColour(LogLevel level) {
 } // namespace
 
 QString formatLine(LogRecord const& rec) {
+    QString const source  = QString::fromStdString(rec.source);
+    QString const message = QString::fromStdString(rec.message);
     return QStringLiteral("%1 %2 %3 %4%5")
-        .arg(rec.ts.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")),
+        .arg(tsString(rec.ts),
              QString::fromLatin1(levelName(rec.level)).leftJustified(5),
              categoryTag(rec.category).leftJustified(16),
-             rec.source.isEmpty() ? rec.message
-                                  : QStringLiteral("%1 %2").arg(rec.source, rec.message),
+             source.isEmpty() ? message
+                              : QStringLiteral("%1 %2").arg(source, message),
              fieldsToString(rec.fields));
 }
 
 QString formatLine(OperationRecord const& rec) {
     return QStringLiteral("%1 %2 %3 action=%4 target=%5 %6->%7 result=%8%9")
-        .arg(rec.ts.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")),
+        .arg(tsString(rec.ts),
              QStringLiteral("OP   "),
              QStringLiteral("[Core/Operation]"),
-             rec.action,
-             rec.target,
-             rec.oldValue.toString(),
-             rec.newValue.toString(),
-             rec.result,
-             rec.note.isEmpty() ? QString()
-                                : QStringLiteral(" note=%1").arg(rec.note))
-        + QStringLiteral(" actor=%1").arg(rec.actor);
+             QString::fromStdString(rec.action),
+             QString::fromStdString(rec.target),
+             QString::fromStdString(dp::toString(rec.oldValue)),
+             QString::fromStdString(dp::toString(rec.newValue)),
+             QString::fromStdString(rec.result),
+             rec.note.empty() ? QString()
+                              : QStringLiteral(" note=%1").arg(QString::fromStdString(rec.note)))
+        + QStringLiteral(" actor=%1").arg(QString::fromStdString(rec.actor));
 }
 
 // ---------------------------------------------------------------------------

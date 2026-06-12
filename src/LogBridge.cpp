@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "core/qml/LogBridge.h"
 
+#include "core/dp/ValueQt.h"
 #include "core/log/Logger.h"
 
 namespace core::qml {
@@ -36,13 +37,13 @@ void LogBridge::operation(QString action, QString target,
                           QVariant oldValue, QVariant newValue,
                           QString result, QString note) {
     log::OperationRecord rec;
-    rec.actor    = QStringLiteral("ui:user");
-    rec.action   = std::move(action);
-    rec.target   = std::move(target);
-    rec.oldValue = std::move(oldValue);
-    rec.newValue = std::move(newValue);
-    rec.result   = std::move(result);
-    rec.note     = std::move(note);
+    rec.actor    = "ui:user";
+    rec.action   = action.toStdString();
+    rec.target   = target.toStdString();
+    rec.oldValue = dp::fromQVariant(oldValue);
+    rec.newValue = dp::fromQVariant(newValue);
+    rec.result   = result.toStdString();
+    rec.note     = note.toStdString();
     m_logger.logOperation(std::move(rec));
 }
 
