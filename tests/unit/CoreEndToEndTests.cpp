@@ -46,7 +46,7 @@ bool waitConnected(ICore& core, QString const& id, int timeoutMs = 2000) {
     auto const deadline = std::chrono::steady_clock::now()
                         + std::chrono::milliseconds(timeoutMs);
     while (std::chrono::steady_clock::now() < deadline) {
-        auto* t = core.transport(id);
+        auto* t = core.transport(id.toStdString());
         if (t && t->state() == transport::ConnectionState::Connected) return true;
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -111,8 +111,8 @@ type = "F32"
 source = { port="tcp1", table="HR", addr=4, wordOrder="CDAB" }
 )toml").arg(port), cfg);
 
-    auto core = ICore::create(nullptr);
-    auto loaded = core->loadConfig(path);
+    auto core = ICore::create();
+    auto loaded = core->loadConfig(path.toStdString());
     REQUIRE(loaded.has_value());
     REQUIRE(core->transport("tcp1") != nullptr);
     REQUIRE(core->datapoints().find("raw_u16") != nullptr);
@@ -157,15 +157,15 @@ type = "U16"
 source = { port="nope", table="HR", addr=0 }
 )toml", cfg);
 
-    auto core = ICore::create(nullptr);
-    auto loaded = core->loadConfig(path);
+    auto core = ICore::create();
+    auto loaded = core->loadConfig(path.toStdString());
     REQUIRE_FALSE(loaded.has_value());
     REQUIRE_FALSE(loaded.error().empty());
 }
 
 TEST_CASE("ICore registers builtin codecs at construction",
           "[core][codec]") {
-    auto core = ICore::create(nullptr);
+    auto core = ICore::create();
     REQUIRE(core->codecs().find("builtin.u16") != nullptr);
     REQUIRE(core->codecs().find("builtin.f32") != nullptr);
     REQUIRE(core->codecs().find("builtin.bool") != nullptr);
@@ -229,8 +229,8 @@ to     = "cmd_in"
 policy = "ContinuousMirror"
 )toml").arg(plcPort).arg(boxPort), cfg);
 
-    auto core = ICore::create(nullptr);
-    auto loaded = core->loadConfig(path);
+    auto core = ICore::create();
+    auto loaded = core->loadConfig(path.toStdString());
     REQUIRE(loaded.has_value());
 
     // Sanity probe — verify the SinkWindow router actually receives writes.

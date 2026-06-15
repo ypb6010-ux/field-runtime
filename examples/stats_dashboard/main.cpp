@@ -34,8 +34,8 @@ int main(int argc, char* argv[]) {
         ? QString::fromLocal8Bit(argv[1])
         : QStringLiteral("dashboard.toml");
 
-    auto core = core::ICore::create(nullptr);
-    auto loaded = core->loadConfig(path);
+    auto core = core::ICore::create();
+    auto loaded = core->loadConfig(path.toStdString());
     if (!loaded.has_value()) {
         for (auto const& e : loaded.error()) {
             out << "[config] " << e.section.c_str() << "." << e.field.c_str()
@@ -46,7 +46,7 @@ int main(int argc, char* argv[]) {
 
     auto subStats = core->bus().subscribe<core::bus::SchedulerStatsEvent>(
         [&out, &core](core::bus::SchedulerStatsEvent const& s) {
-            auto* t = core->transport(QString::fromStdString(s.transportId));
+            auto* t = core->transport(s.transportId);
             out << QStringLiteral("[%1] %2  q=%3  inflight=%4  p50=%5ms  "
                                    "p99=%6ms  done=%7  fail=%8  circuit=%9\n")
                        .arg(QString::fromStdString(s.transportId))

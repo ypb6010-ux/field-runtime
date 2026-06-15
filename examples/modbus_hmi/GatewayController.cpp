@@ -54,7 +54,7 @@ void GatewayController::setPeriodMs(int v)   { if (v != m_periodMs) { m_periodMs
 void GatewayController::setForwarding(bool v) {
     if (v == m_forwarding) return;
     m_forwarding = v;
-    if (m_core) m_core->setServerForwardEnabled(QStringLiteral("opbox"), v);
+    if (m_core) m_core->setServerForwardEnabled("opbox", v);
     setStatus(v ? QStringLiteral("转发已开启:操作箱写入将下发到 PLC")
                 : QStringLiteral("转发已关闭:操作箱写入被拦截,不下发 PLC"));
     emit forwardingChanged();
@@ -147,8 +147,8 @@ bool GatewayController::apply() {
         f.write(QByteArray::fromStdString(toml));
     }
 
-    m_core = core::ICore::create(nullptr);
-    if (auto r = m_core->loadConfig(path); !r.has_value()) {
+    m_core = core::ICore::create();
+    if (auto r = m_core->loadConfig(path.toStdString()); !r.has_value()) {
         QString msg;
         for (auto const& e : r.error())
             msg += QStringLiteral("[%1.%2] %3\n")
@@ -161,7 +161,7 @@ bool GatewayController::apply() {
         return false;
     }
     if (m_logSink) m_core->logger().addSink(m_logSink);
-    m_core->setServerForwardEnabled(QStringLiteral("opbox"), m_forwarding);
+    m_core->setServerForwardEnabled("opbox", m_forwarding);
     m_core->start();
     m_timer.start();
     setStatus(QStringLiteral("运行中:PLC %1:%2,操作箱端口 %3,共 %4 个点")

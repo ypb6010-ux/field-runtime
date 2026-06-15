@@ -29,8 +29,8 @@ int main(int argc, char* argv[]) {
         ? QString::fromLocal8Bit(argv[1])
         : QStringLiteral("bridge.toml");
 
-    auto core = core::ICore::create(nullptr);
-    auto loaded = core->loadConfig(path);
+    auto core = core::ICore::create();
+    auto loaded = core->loadConfig(path.toStdString());
     if (!loaded.has_value()) {
         for (auto const& e : loaded.error()) {
             out << "[config] " << e.section.c_str() << "." << e.field.c_str()

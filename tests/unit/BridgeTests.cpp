@@ -41,7 +41,7 @@ bool waitConnected(ICore& core, QString const& id, int timeoutMs = 2000) {
     auto const deadline = std::chrono::steady_clock::now()
                         + std::chrono::milliseconds(timeoutMs);
     while (std::chrono::steady_clock::now() < deadline) {
-        auto* t = core.transport(id);
+        auto* t = core.transport(id.toStdString());
         if (t && t->state() == transport::ConnectionState::Connected) return true;
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -203,8 +203,8 @@ TEST_CASE("Bridge mirrors PLC reads into the server table and forwards operator 
     QTemporaryFile temp;
     auto path = writeToml(bridgeToml(plcPort, serverPort), temp);
 
-    auto core = ICore::create(nullptr);
-    auto loaded = core->loadConfig(path);
+    auto core = ICore::create();
+    auto loaded = core->loadConfig(path.toStdString());
     REQUIRE(loaded.has_value());
     core->start();
     REQUIRE(waitConnected(*core, QStringLiteral("default")));
@@ -213,7 +213,7 @@ TEST_CASE("Bridge mirrors PLC reads into the server table and forwards operator 
     REQUIRE(waitDp(*core, QStringLiteral("raw.default.HR.50"), 0x1234));
     REQUIRE(waitDp(*core, QStringLiteral("raw.default.HR.51"), 0x5678));
 
-    auto* server = core->transport(QStringLiteral("main"));
+    auto* server = core->transport("main");
     REQUIRE(server != nullptr);
     bool mirrored = false;
     auto const deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);

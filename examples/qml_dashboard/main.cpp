@@ -17,6 +17,7 @@
 
 #include "core/ICore.h"
 #include "core/log/Logger.h"
+#include "core/qml/CoreQml.h"
 #include "core/transport/Transport.h"
 
 #include "DemoController.h"
@@ -44,11 +45,11 @@ int main(int argc, char* argv[]) {
 
     // 2. Core with the QML context, so the `log` bridge is auto-injected.
     QQmlApplicationEngine engine;
-    auto core = core::ICore::create(engine.rootContext());
+    auto core = core::qml::createWithQml(engine.rootContext());
 
     QString const toml = (argc > 1) ? QString::fromLocal8Bit(argv[1])
                                     : QStringLiteral(DASHBOARD_TOML);
-    if (auto r = core->loadConfig(toml); !r.has_value()) {
+    if (auto r = core->loadConfig(toml.toStdString()); !r.has_value()) {
         for (auto const& e : r.error())
             qWarning("[config] %s.%s: %s", e.section.c_str(),
                      e.field.c_str(), e.message.c_str());
@@ -80,7 +81,7 @@ int main(int argc, char* argv[]) {
     // (flushing logger + persistence), then count what landed and quit.
     if (qEnvironmentVariableIsSet("DASHBOARD_SELFTEST")) {
         QTimer::singleShot(4000, &app, [&]() {
-            if (auto* t = core->transport(QStringLiteral("plc1"))) {
+            if (auto* t = core->transport("plc1")) {
                 auto s = t->scheduler().stats();
                 qInfo("SELFTEST plc1 submitted=%llu completed=%llu p50=%dms p99=%dms",
                       (unsigned long long)s.totalSubmitted,

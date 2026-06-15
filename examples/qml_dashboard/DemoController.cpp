@@ -63,7 +63,7 @@ void DemoController::refresh() {
         if (!t) continue;
         auto st = t->scheduler().stats();
         transports.append(QVariantMap{
-            {QStringLiteral("id"),       id},
+            {QStringLiteral("id"),       QString::fromStdString(id)},
             {QStringLiteral("kind"),     kindText(t->kind())},
             {QStringLiteral("state"),    stateText(t->state())},
             {QStringLiteral("connected"),
@@ -77,7 +77,8 @@ void DemoController::refresh() {
     // Datapoints — value, state, and the source transport's kind.
     QVariantList datapoints;
     for (auto const& dp : m_core.datapoints().all()) {
-        QString srcId, srcKind;
+        std::string srcId;
+        QString srcKind;
         if (dp->source().has_value()) {
             srcId = dp->source()->transport;
             if (auto* t = m_core.transport(srcId)) srcKind = kindText(t->kind());
@@ -86,7 +87,7 @@ void DemoController::refresh() {
             {QStringLiteral("id"),         QString::fromStdString(dp->id())},
             {QStringLiteral("value"),      core::dp::toQVariant(dp->value())},
             {QStringLiteral("state"),      QString::fromStdString(dp->stateText())},
-            {QStringLiteral("sourceId"),   srcId},
+            {QStringLiteral("sourceId"),   QString::fromStdString(srcId)},
             {QStringLiteral("sourceKind"), srcKind.isEmpty()
                                               ? QStringLiteral("—") : srcKind},
         });

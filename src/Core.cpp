@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -31,6 +32,7 @@
 #include "core/dp/ValueQt.h"
 #include "core/log/Logger.h"
 #include "core/log/Sinks.h"
+#include "core/qml/CoreQml.h"
 #include "core/qml/LogBridge.h"
 #include "core/module/AckWatch.h"
 #include "core/module/Command.h"
@@ -107,9 +109,8 @@ dp::PortRef makePortRef(config::PortRefConfig const& pc,
 
 class CoreImpl : public ICore {
 public:
-    CoreImpl(QQmlContext* qml, bool installDefaultConsole)
-        : m_qml(qml)
-        , m_logger(std::make_unique<log::Logger>())
+    explicit CoreImpl(bool installDefaultConsole)
+        : m_logger(std::make_unique<log::Logger>())
         , m_bus(std::make_unique<bus::EventBus>())
         , m_codecs(std::make_unique<codec::CodecRegistry>())
         , m_dps(std::make_unique<dp::DatapointRegistry>())
@@ -123,7 +124,15 @@ public:
         if (installDefaultConsole) {
             m_logger->addSink(std::make_shared<log::ConsoleSink>());
         }
-        installLogBridge();
+        // QML `log` bridge is opt-in via wireQml() (Qt layer); not wired here.
+    }
+
+    // Qt-only: expose the `log` bridge (owned by Core) on a QML context.
+    // Called by core::qml::createWithQml; not part of the Qt-free ICore API.
+    void wireQml(QQmlContext* qml) {
+        if (!qml) return;
+        m_logBridge = std::make_unique<qml::LogBridge>(*m_logger);
+        qml->setContextProperty(QStringLiteral("log"), m_logBridge.get());
     }
 
     ~CoreImpl() override {
@@ -165,13 +174,13 @@ public:
     }
 
     std::expected<void, config::ValidationErrors>
-    loadConfig(QString const& path) override {
+    loadConfig(std::string const& path) override {
         config::ConfigLoader loader;
-        auto schema = loader.loadFromToml(path.toStdString());
+        auto schema = loader.loadFromToml(path);
         if (!schema.has_value()) {
             for (auto const& err : schema.error()) {
                 m_logger->logf(log::LogLevel::Error,
-                               "config", path.toStdString(),
+                               "config", path,
                                err.message);
             }
             return std::unexpected(schema.error());
@@ -182,9 +191,9 @@ public:
         }
         // Resolve config-relative paths (e.g. lua codec scripts) against the
         // config file's directory.
-        m_configDir = QFileInfo(path).absolutePath();
+        m_configDir = QFileInfo(QString::fromStdString(path)).absolutePath();
         wireFromSchema(*schema);
-        m_logger->logf(log::LogLevel::Info, "config", path.toStdString(),
+        m_logger->logf(log::LogLevel::Info, "config", path,
                        "loaded",
                        {{"transports", std::int64_t(schema->transports.size())},
                         {"datapoints", std::int64_t(schema->datapoints.size())}});
@@ -198,23 +207,24 @@ public:
     plugin::PluginRegistry&   plugins()    override { return *m_plugins; }
     log::Logger&              logger()     override { return *m_logger; }
 
-    transport::Transport* transport(QString const& id) const override {
-        auto it = m_transports.find(id.toStdString());
+    transport::Transport* transport(std::string const& id) const override {
+        auto it = m_transports.find(id);
         return it == m_transports.end() ? nullptr : it->second.get();
     }
 
-    QStringList transportIds() const override {
-        QStringList ids;
-        ids.reserve(int(m_transports.size()));
-        for (auto const& [id, t] : m_transports) ids << qs(id);
+    std::vector<std::string> transportIds() const override {
+        std::vector<std::string> ids;
+        ids.reserve(m_transports.size());
+        for (auto const& [id, t] : m_transports) ids.push_back(id);
         return ids;
     }
 
-    void setServerForwardEnabled(QString const& serverTransportId, bool enabled) override {
+    void setServerForwardEnabled(std::string const& serverTransportId, bool enabled) override {
         bool wasEnabled;
         {
             std::lock_guard lk(m_forwardMtx);
-            wasEnabled = m_forwardEnabled.value(serverTransportId, true);
+            auto it = m_forwardEnabled.find(serverTransportId);
+            wasEnabled = (it != m_forwardEnabled.end()) ? it->second : true;
             m_forwardEnabled[serverTransportId] = enabled;
         }
         // 关闭瞬间(true→false):把该 server 桥接的转发区在程序内置 0,取消尚未写入
@@ -224,9 +234,10 @@ public:
         }
     }
 
-    bool serverForwardEnabled(QString const& serverTransportId) const override {
+    bool serverForwardEnabled(std::string const& serverTransportId) const override {
         std::lock_guard lk(m_forwardMtx);
-        return m_forwardEnabled.value(serverTransportId, true);
+        auto it = m_forwardEnabled.find(serverTransportId);
+        return (it != m_forwardEnabled.end()) ? it->second : true;
     }
 
     void start() override {
@@ -337,11 +348,6 @@ private:
         m_statsTimer = nullptr;
     }
 
-    void installLogBridge() {
-        if (!m_qml) return;
-        m_logBridge = std::make_unique<qml::LogBridge>(*m_logger);
-        m_qml->setContextProperty(QStringLiteral("log"), m_logBridge.get());
-    }
 
     void installEventWiring() {
         // On Transport reconnect (Connected after Disconnected), force every
@@ -372,7 +378,7 @@ private:
                     op.category = "audit";
                     op.eventKey = "server-write:" + std::to_string(e.startAddress);
                     m_logger->logOperation(std::move(op));
-                    if (!serverForwardEnabled(qs(e.transportId))) return;   // 业务闸门:不转发
+                    if (!serverForwardEnabled(e.transportId)) return;   // 业务闸门:不转发
                     routeServerWrite(e);
                     forwardBridges(e);
                 }));
@@ -465,7 +471,7 @@ private:
             // 由 TickDriver 在生命周期线程带重试/coalesce 地刷到 PLC —— 避免单次
             // submitAsync 在调度器繁忙时被丢弃。
             if (b.writeCount > 0) {
-                if (auto* plc = transport(qs(b.plc))) {
+                if (auto* plc = transport(b.plc)) {
                     module::SinkWindow::Config cfg;
                     cfg.moduleId       = "bridge.fwd." + b.server;
                     cfg.table          = core::RegisterTable::HoldingRegister;
@@ -505,10 +511,10 @@ private:
 
     // 关闭转发瞬间:把该 server 桥接的整个转发写区在 PLC 侧 SinkWindow 内置 0,
     // 由 TickDriver 下发 —— 取消尚未写入 PLC 的操作箱指令。
-    void zeroBridgeForward(QString const& server) {
+    void zeroBridgeForward(std::string const& server) {
         for (int i = 0; i < int(m_bridges.size()); ++i) {
             auto const& b = m_bridges[size_t(i)];
-            if (qs(b.server) != server) continue;
+            if (b.server != server) continue;
             auto* sink = m_bridgeFwdSinks[size_t(i)];
             if (!sink) continue;
             for (int a = b.writeStart; a < b.writeStart + b.writeCount; ++a) {
@@ -524,7 +530,7 @@ public:
         for (int i = 0; i < int(m_bridges.size()); ++i) {
             auto const& b = m_bridges[size_t(i)];
             if (b.mirrorCount <= 0) continue;
-            auto* server = transport(qs(b.server));
+            auto* server = transport(b.server);
             if (!server) continue;
             core::RegisterWords values(b.mirrorCount, quint16(0));
             for (auto const& [addr, dp] : m_bridgeMirrors[size_t(i)]) {
@@ -726,7 +732,7 @@ private:
 
     void buildSinkWindows(config::ConfigSchema const& schema) {
         for (auto const& sc : schema.sinkWindows) {
-            auto* t = transport(qs(sc.transport));
+            auto* t = transport(sc.transport);
             if (!t) continue;
             module::SinkWindow::Config cfg;
             cfg.moduleId          = sc.moduleId;
@@ -747,7 +753,7 @@ private:
 
     void buildHeartbeats(config::ConfigSchema const& schema) {
         for (auto const& hc : schema.heartbeats) {
-            auto* t = transport(qs(hc.transport));
+            auto* t = transport(hc.transport);
             if (!t) continue;
             module::Heartbeat::Config cfg;
             cfg.moduleId = hc.moduleId;
@@ -775,7 +781,7 @@ private:
 
     void buildCommands(config::ConfigSchema const& schema) {
         for (auto const& cc : schema.commands) {
-            auto* t = transport(qs(cc.transport));
+            auto* t = transport(cc.transport);
             if (!t) continue;
             module::Command::Config cfg;
             cfg.moduleId      = cc.moduleId;
@@ -876,7 +882,7 @@ private:
     void buildPollRanges(config::ConfigSchema const& schema,
                           DpById const&                byId) {
         for (auto const& pc : schema.pollRanges) {
-            auto* t = transport(qs(pc.transport));
+            auto* t = transport(pc.transport);
             if (!t) continue;
             transport::ReadRequest req;
             req.table        = tableFromString(qs(pc.table));
@@ -917,7 +923,6 @@ private:
     }
 
 private:
-    QQmlContext*                                                m_qml;
     // Qt-thread anchor for the (now Qt-free) EventBus: owns the stats/mirror
     // QTimers and is the target for queued DpChanged publication, so value
     // changes pushed on a transport worker thread are published on this (GUI)
@@ -943,7 +948,7 @@ private:
     std::vector<std::vector<std::pair<int, std::shared_ptr<dp::Datapoint>>>> m_bridgeMirrors;
     std::vector<module::SinkWindow*>                            m_bridgeFwdSinks;
     mutable std::mutex                                          m_forwardMtx;
-    QHash<QString, bool>                                        m_forwardEnabled;   // server id → 转发使能(默认 true)
+    std::unordered_map<std::string, bool>                       m_forwardEnabled;   // server id → 转发使能(默认 true)
     QTimer*                                                     m_mirrorTimer = nullptr;
     std::unique_ptr<bus::Subscription>                          m_transportEventSub;
     std::unique_ptr<bus::Subscription>                          m_serverWriteSub;
@@ -951,9 +956,17 @@ private:
     int                                                         m_statsIntervalMs = 1000;
 };
 
-std::unique_ptr<ICore> ICore::create(QQmlContext* qml, bool installDefaultConsole) {
-    return std::make_unique<CoreImpl>(qml, installDefaultConsole);
+std::unique_ptr<ICore> ICore::create(bool installDefaultConsole) {
+    return std::make_unique<CoreImpl>(installDefaultConsole);
 }
+
+namespace qml {
+std::unique_ptr<ICore> createWithQml(QQmlContext* ctx, bool installDefaultConsole) {
+    auto impl = std::make_unique<CoreImpl>(installDefaultConsole);
+    impl->wireQml(ctx);
+    return impl;
+}
+} // namespace qml
 
 namespace internal {
 void pollAllOnce(ICore& core) {
