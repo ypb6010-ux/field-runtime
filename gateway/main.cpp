@@ -46,6 +46,21 @@ int main(int argc, char** argv) {
     auto snapshotTimer = std::make_shared<gateway_asio::steady_timer>(io);
     scheduleSnapshot(io, gateway, snapshotTimer);
 
+    auto gateTimer = std::make_shared<gateway_asio::steady_timer>(io);
+    if (auto const* serverId = std::getenv("FIELD_GATEWAY_FORWARD_SERVER")) {
+        if (auto const* delay = std::getenv("FIELD_GATEWAY_DISABLE_FORWARD_AFTER_MS")) {
+            gateTimer->expires_after(std::chrono::milliseconds(std::stoi(delay)));
+            gateTimer->async_wait([&gateway, server = std::string(serverId)](auto const& ec) {
+                if (ec) return;
+                gateway.setServerForwardEnabled(server, false);
+                gateway.logger().logf(core::log::LogLevel::Warn,
+                                      "gateway",
+                                      server,
+                                      "forward disabled");
+            });
+        }
+    }
+
     gateway.start();
     io.run();
     gateway.stop();

@@ -39,6 +39,10 @@ struct ResponseHeader {
 std::vector<std::uint8_t> buildReadRequest(ReadRequest const& req);
 std::vector<std::uint8_t> buildWriteMultipleRegistersRequest(
     WriteMultipleRegistersRequest const& req);
+std::vector<std::uint8_t> buildWriteSingleRegisterRequest(std::uint16_t transactionId,
+                                                          std::uint8_t unitId,
+                                                          std::uint16_t address,
+                                                          std::uint16_t value);
 
 bool parseReadResponse(std::span<std::uint8_t const> adu,
                        std::uint16_t expectedTransactionId,
@@ -66,6 +70,10 @@ std::vector<std::uint8_t> buildWriteMultipleRegistersResponse(
     std::uint8_t unitId,
     std::uint16_t startAddress,
     std::uint16_t count);
+std::vector<std::uint8_t> buildWriteSingleRegisterResponse(std::uint16_t transactionId,
+                                                           std::uint8_t unitId,
+                                                           std::uint16_t address,
+                                                           std::uint16_t value);
 std::vector<std::uint8_t> buildExceptionResponse(std::uint16_t transactionId,
                                                  std::uint8_t unitId,
                                                  std::uint8_t function,

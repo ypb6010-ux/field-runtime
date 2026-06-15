@@ -17,12 +17,13 @@ endif()
 add_executable(field_gateway
     main.cpp
     AsioModbusTcpClient.cpp
+    AsioModbusTcpServer.cpp
     GatewayAssembly.cpp
     StubTransport.cpp
 )
 
 set_target_properties(field_gateway PROPERTIES AUTOMOC OFF)
-target_compile_definitions(field_gateway PRIVATE _WIN32_WINNT=0x0601)
+target_compile_definitions(field_gateway PRIVATE _WIN32_WINNT=0x0601 _CRT_SECURE_NO_WARNINGS)
 
 find_package(asio CONFIG QUIET)
 if(TARGET asio::asio)
@@ -92,6 +93,27 @@ else()
     target_compile_options(field_gateway_mock_server PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_executable(field_gateway_opbox_client
+    OpboxClient.cpp
+)
+set_target_properties(field_gateway_opbox_client PROPERTIES AUTOMOC OFF)
+target_compile_definitions(field_gateway_opbox_client PRIVATE _WIN32_WINNT=0x0601)
+target_link_libraries(field_gateway_opbox_client
+    PRIVATE
+        gateway_nanomodbus
+        asio
+)
+target_include_directories(field_gateway_opbox_client
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+if(MSVC)
+    target_compile_options(field_gateway_opbox_client PRIVATE /W4 /permissive- /utf-8 /EHsc)
+else()
+    target_compile_options(field_gateway_opbox_client PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 install(TARGETS field_gateway RUNTIME DESTINATION bin)
 install(TARGETS field_gateway_mock_server RUNTIME DESTINATION bin)
+install(TARGETS field_gateway_opbox_client RUNTIME DESTINATION bin)
 install(FILES gateway.toml DESTINATION share/field_gateway)

@@ -98,6 +98,18 @@ std::vector<std::uint8_t> buildWriteMultipleRegistersRequest(
     return makeAdu(req.transactionId, req.unitId, pdu);
 }
 
+std::vector<std::uint8_t> buildWriteSingleRegisterRequest(std::uint16_t transactionId,
+                                                          std::uint8_t unitId,
+                                                          std::uint16_t address,
+                                                          std::uint16_t value) {
+    std::vector<std::uint8_t> pdu;
+    pdu.reserve(5);
+    pdu.push_back(0x06);
+    putU16(pdu, address);
+    putU16(pdu, value);
+    return makeAdu(transactionId, unitId, pdu);
+}
+
 bool parseReadResponse(std::span<std::uint8_t const> adu,
                        std::uint16_t expectedTransactionId,
                        Function expectedFunction,
@@ -176,6 +188,18 @@ std::vector<std::uint8_t> buildWriteMultipleRegistersResponse(
     pdu.push_back(static_cast<std::uint8_t>(Function::WriteMultipleRegisters));
     putU16(pdu, startAddress);
     putU16(pdu, count);
+    return makeAdu(transactionId, unitId, pdu);
+}
+
+std::vector<std::uint8_t> buildWriteSingleRegisterResponse(std::uint16_t transactionId,
+                                                           std::uint8_t unitId,
+                                                           std::uint16_t address,
+                                                           std::uint16_t value) {
+    std::vector<std::uint8_t> pdu;
+    pdu.reserve(5);
+    pdu.push_back(0x06);
+    putU16(pdu, address);
+    putU16(pdu, value);
     return makeAdu(transactionId, unitId, pdu);
 }
 

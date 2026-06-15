@@ -16,11 +16,28 @@ max_inflight = 1
 max_queue_depth = 64
 inter_request_gap_ms = 0
 
+[[transport]]
+id = "opbox"
+kind = "modbus_tcp_server"
+listen_address = "127.0.0.1"
+listen_port = 15021
+slave_id = 1
+
+[[transport.listen_ranges]]
+table = "HR"
+range = [0, 32]
+
+[transport.scheduler]
+kind = "serial"
+max_inflight = 1
+max_queue_depth = 64
+inter_request_gap_ms = 0
+
 [[poll_range]]
 module_id = "poll_mock_hr"
 transport = "mock_plc"
 table = "HR"
-range = [0, 4]
+range = [0, 12]
 period_ms = 200
 
 [[datapoint]]
@@ -54,3 +71,23 @@ port = "mock_plc"
 table = "HR"
 addr = 2
 wordOrder = "CDAB"
+
+[[datapoint]]
+id = "mock.forward"
+kind = "Status"
+type = "U16"
+
+[datapoint.source]
+port = "mock_plc"
+table = "HR"
+addr = 10
+
+[[bridge]]
+server = "opbox"
+plc = "mock_plc"
+offset = 0
+write_start = 10
+write_count = 1
+mirror_start = 0
+mirror_count = 4
+mirror_period_ms = 100
