@@ -1,14 +1,38 @@
 # FieldRuntime — Industrial Field-Device Runtime
 
-FieldRuntime is a C++23/Qt 6 runtime for building industrial field-device
+FieldRuntime is a **C++23** runtime for building industrial field-device
 integrations. It turns protocol-specific registers, tags, and messages into
 typed datapoints, then connects polling, writeback, routing, logging, plugins,
-QML bindings, and persistence through a declarative TOML configuration and a
-typed event bus.
+and persistence through a declarative TOML configuration and a typed event bus.
+
+Its core — types, config IR, datapoints, event bus, logging, schedulers, codecs,
+module algorithms, and the transport/plugin **abstractions** — is **Qt-free**.
+It is packaged as the `FieldRuntimeBase` static library, which builds with **no
+Qt at all** (verified by `cmake -DCORE_WITH_QT=OFF`), for embedded / OpenWRT /
+gateway targets. Qt is an optional **adapter layer**, not a core dependency.
 
 It is designed for HMI/SCADA applications, equipment gateways, edge collectors,
 and device-control tools that need to talk to PLCs and industrial protocols
 without hard-coding register logic into UI code.
+
+## Targets & build modes
+
+| Target | Qt? | Contents | Use |
+|---|---|---|---|
+| **`FieldRuntimeBase`** (STATIC) | **No** | Qt-free types + algorithms: config / datapoints / bus / log / schedulers / codecs / module algorithms / transport & plugin abstractions | embedded / OpenWRT / link into a daemon |
+| **`Core`** (SHARED, default) | Yes | The Qt assembly: ICore facade, Qt Modbus/RTU/OPC UA/MQTT transports, QML bridges (`log`, `QtDatapoint`), Qt log sinks | HMI / SCADA / desktop apps |
+| **`FieldRuntimeGateway`** (exe) | **No** | Without-Qt field daemon: asio event loop + nanoMODBUS implementing the Qt-free `transport::Transport`, linking `FieldRuntimeBase` | field gateways, OpenWRT |
+
+```powershell
+# Full Qt build (default): Core + tests + examples
+cmake -S . -B build -DQt6_DIR=.../lib/cmake/Qt6
+
+# Qt-free base only (no Qt found/needed): FieldRuntimeBase + header self-test
+cmake -S . -B build-base -DCORE_WITH_QT=OFF
+
+# Without-Qt gateway (asio + nanoMODBUS)
+cmake -S . -B build-gw -DCORE_WITH_QT=OFF -DCORE_BUILD_GATEWAY=ON
+```
 
 ## What It Provides
 
@@ -23,7 +47,7 @@ without hard-coding register logic into UI code.
 - Built-in scalar, enum, and optional Lua codecs for protocol-specific parsing.
 - EventBus-based integration for datapoint changes, transport state, server
   writes, scheduler statistics, and lifecycle events.
-- QML bridge and plugin APIs for production HMI applications.
+- QML bridge (Qt assembly) and plugin APIs for production HMI applications.
 - Optional persistence module intended for telemetry and operation/system logs.
 
 ## Quick Start
