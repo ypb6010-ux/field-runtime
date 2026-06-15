@@ -13,6 +13,7 @@
 
 #include "GatewayAsio.h"
 
+#include "AsioMqttClient.h"
 #include "core/bus/EventBus.h"
 #include "core/bus/BusEvents.h"
 #include "core/bus/Subscription.h"
@@ -82,6 +83,12 @@ private:
     void buildBridges(config::ConfigSchema const& schema);
     void installEventWiring();
     void forwardBridges(bus::ServerWriteEvent const& e);
+    void publishMqttDatapoint(std::string const& id,
+                              dp::Value const& value,
+                              dp::DpState state,
+                              dp::Timestamp timestamp);
+    void publishMqttSnapshot();
+    void startMqttSnapshotPump();
     void zeroBridgeForward(std::string const& serverTransportId);
     bool serverForwardEnabled(std::string const& serverTransportId) const;
     void mirrorBridgesOnce();
@@ -108,10 +115,14 @@ private:
     std::vector<std::vector<std::pair<int, std::shared_ptr<dp::Datapoint>>>> m_bridgeMirrors;
     std::vector<module::SinkWindow*> m_bridgeFwdSinks;
     std::unique_ptr<bus::Subscription> m_serverWriteSub;
+    std::unique_ptr<bus::Subscription> m_mqttDpChangedSub;
     std::unique_ptr<gateway_asio::steady_timer> m_mirrorTimer;
+    std::unique_ptr<gateway_asio::steady_timer> m_mqttSnapshotTimer;
+    std::unique_ptr<AsioMqttClient> m_mqtt;
     mutable std::mutex m_forwardMtx;
     std::unordered_map<std::string, bool> m_forwardEnabled;
     std::optional<ControlConfig> m_control;
+    std::optional<MqttNorthboundConfig> m_mqttConfig;
     bool m_started = false;
 };
 

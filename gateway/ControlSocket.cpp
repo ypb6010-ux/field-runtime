@@ -3,18 +3,13 @@
 #include "ControlSocket.h"
 
 #include <algorithm>
-#include <chrono>
-#include <cmath>
 #include <cctype>
-#include <cstdint>
-#include <iomanip>
 #include <istream>
-#include <sstream>
 #include <stdexcept>
 #include <string_view>
-#include <type_traits>
 #include <utility>
-#include <variant>
+
+#include "GatewayJson.h"
 
 namespace core::gateway {
 
@@ -28,57 +23,6 @@ std::string trim(std::string_view s) {
         s.remove_suffix(1);
     }
     return std::string(s);
-}
-
-void appendJsonString(std::string& out, std::string_view value) {
-    out.push_back('"');
-    for (unsigned char c : value) {
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\b': out += "\\b"; break;
-            case '\f': out += "\\f"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default:
-                if (c < 0x20) {
-                    std::ostringstream os;
-                    os << "\\u" << std::hex << std::setw(4) << std::setfill('0') << int(c);
-                    out += os.str();
-                } else {
-                    out.push_back(char(c));
-                }
-                break;
-        }
-    }
-    out.push_back('"');
-}
-
-std::string jsonString(std::string_view value) {
-    std::string out;
-    appendJsonString(out, value);
-    return out;
-}
-
-std::string valueJson(dp::Value const& value) {
-    return std::visit([](auto const& x) -> std::string {
-        using T = std::decay_t<decltype(x)>;
-        if constexpr (std::is_same_v<T, std::monostate>) {
-            return "null";
-        } else if constexpr (std::is_same_v<T, bool>) {
-            return x ? "true" : "false";
-        } else if constexpr (std::is_same_v<T, std::string>) {
-            return jsonString(x);
-        } else if constexpr (std::is_same_v<T, double>) {
-            if (!std::isfinite(x)) return "null";
-            std::ostringstream os;
-            os << std::setprecision(17) << x;
-            return os.str();
-        } else {
-            return std::to_string(x);
-        }
-    }, value);
 }
 
 std::string transportKindText(transport::TransportKind kind) {
@@ -113,21 +57,6 @@ std::string circuitStateText(sched::CircuitState state) {
     return "Unknown";
 }
 
-std::string datapointStateText(dp::DpState state) {
-    switch (state) {
-        case dp::DpState::Ok: return "Ok";
-        case dp::DpState::Stale: return "Stale";
-        case dp::DpState::Error: return "Error";
-        case dp::DpState::Missing: return "Missing";
-    }
-    return "Unknown";
-}
-
-std::int64_t timestampMs(dp::Timestamp ts) {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        ts.time_since_epoch()).count();
-}
-
 void appendStatsJson(std::string& out, sched::SchedulerStats const& stats) {
     out += "{";
     out += "\"queueDepth\":" + std::to_string(stats.queueDepth);
@@ -146,7 +75,7 @@ void appendStatsJson(std::string& out, sched::SchedulerStats const& stats) {
         out += std::to_string(stats.laneQueueDepth[i]);
     }
     out += "],\"circuitState\":";
-    appendJsonString(out, circuitStateText(stats.circuitState));
+    json::appendString(out, circuitStateText(stats.circuitState));
     out += ",\"circuitErrorStreak\":" + std::to_string(stats.circuitErrorStreak);
     out += "}";
 }
@@ -250,11 +179,11 @@ std::string ControlSocket::statusJson() {
         auto const& t = transports[i];
         if (i > 0) out.push_back(',');
         out += "{\"id\":";
-        appendJsonString(out, t.id);
+        json::appendString(out, t.id);
         out += ",\"kind\":";
-        appendJsonString(out, transportKindText(t.kind));
+        json::appendString(out, transportKindText(t.kind));
         out += ",\"state\":";
-        appendJsonString(out, connectionStateText(t.state));
+        json::appendString(out, connectionStateText(t.state));
         out += ",\"stats\":";
         appendStatsJson(out, t.stats);
         out += "}";
@@ -270,12 +199,12 @@ std::string ControlSocket::liveJson() const {
         auto const& dp = datapoints[i];
         if (i > 0) out.push_back(',');
         out += "{\"id\":";
-        appendJsonString(out, dp.id);
+        json::appendString(out, dp.id);
         out += ",\"value\":";
-        out += valueJson(dp.value);
+        out += json::value(dp.value);
         out += ",\"quality\":";
-        appendJsonString(out, datapointStateText(dp.state));
-        out += ",\"ts\":" + std::to_string(timestampMs(dp.timestamp));
+        json::appendString(out, json::dpState(dp.state));
+        out += ",\"ts\":" + std::to_string(json::timestampMs(dp.timestamp));
         out += "}";
     }
     out += "]}";

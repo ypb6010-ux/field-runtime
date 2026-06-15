@@ -18,8 +18,10 @@ add_executable(field_gateway
     main.cpp
     AsioModbusTcpClient.cpp
     AsioModbusTcpServer.cpp
+    AsioMqttClient.cpp
     ControlSocket.cpp
     GatewayAssembly.cpp
+    GatewayJson.cpp
     StubTransport.cpp
 )
 
@@ -133,8 +135,28 @@ else()
     target_compile_options(field_gateway_control_client PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_executable(field_gateway_mqtt_mock_broker
+    MqttMockBroker.cpp
+)
+set_target_properties(field_gateway_mqtt_mock_broker PROPERTIES AUTOMOC OFF)
+target_compile_definitions(field_gateway_mqtt_mock_broker PRIVATE _WIN32_WINNT=0x0601)
+target_link_libraries(field_gateway_mqtt_mock_broker
+    PRIVATE
+        asio
+)
+target_include_directories(field_gateway_mqtt_mock_broker
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+if(MSVC)
+    target_compile_options(field_gateway_mqtt_mock_broker PRIVATE /W4 /permissive- /utf-8 /EHsc)
+else()
+    target_compile_options(field_gateway_mqtt_mock_broker PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 install(TARGETS field_gateway RUNTIME DESTINATION bin)
 install(TARGETS field_gateway_mock_server RUNTIME DESTINATION bin)
 install(TARGETS field_gateway_opbox_client RUNTIME DESTINATION bin)
 install(TARGETS field_gateway_control_client RUNTIME DESTINATION bin)
+install(TARGETS field_gateway_mqtt_mock_broker RUNTIME DESTINATION bin)
 install(FILES gateway.toml DESTINATION share/field_gateway)

@@ -7,6 +7,16 @@ log_level = "info"
 listen_address = "127.0.0.1"
 listen_port = 15022
 
+[northbound.mqtt]
+enable = true
+host = "127.0.0.1"
+port = 1883
+client_id = "field_gateway_mock"
+keepalive_s = 10
+topic_prefix = "field"
+qos = 0
+publish_interval_ms = 0
+
 [[transport]]
 id = "mock_plc"
 kind = "modbus_tcp_client"

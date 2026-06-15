@@ -16,6 +16,7 @@
 
 #include "AsioModbusTcpClient.h"
 #include "AsioModbusTcpServer.h"
+#include "GatewayJson.h"
 #include "StubTransport.h"
 
 #include "core/bus/BusEvents.h"
@@ -160,6 +161,90 @@ std::optional<ControlConfig> parseControlConfig(std::string const& path,
     return cfg;
 }
 
+bool parseBool(std::string value) {
+    value = trim(value);
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return char(std::tolower(c));
+    });
+    return value == "true" || value == "1" || value == "yes" || value == "on";
+}
+
+std::optional<MqttNorthboundConfig> parseMqttConfig(std::string const& path,
+                                                    std::string& error) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        error = "cannot open '" + path + "'";
+        return std::nullopt;
+    }
+
+    MqttNorthboundConfig cfg;
+    bool inMqtt = false;
+    bool seenMqtt = false;
+    std::string line;
+    while (std::getline(in, line)) {
+        auto const trimmed = trim(stripComment(line));
+        if (trimmed.empty()) continue;
+        if (trimmed.front() == '[') {
+            inMqtt = trimmed == "[northbound.mqtt]";
+            seenMqtt = seenMqtt || inMqtt;
+            continue;
+        }
+        if (!inMqtt) continue;
+
+        auto const eq = trimmed.find('=');
+        if (eq == std::string::npos) continue;
+        auto const key = trim(std::string_view(trimmed).substr(0, eq));
+        auto const value = unquote(trimmed.substr(eq + 1));
+        try {
+            if (key == "enable") {
+                cfg.enable = parseBool(value);
+            } else if (key == "host") {
+                cfg.host = value;
+            } else if (key == "port") {
+                cfg.port = std::stoi(value);
+            } else if (key == "client_id") {
+                cfg.clientId = value;
+            } else if (key == "keepalive_s") {
+                cfg.keepaliveS = std::stoi(value);
+            } else if (key == "topic_prefix") {
+                cfg.topicPrefix = value;
+            } else if (key == "qos") {
+                cfg.qos = std::stoi(value);
+            } else if (key == "publish_interval_ms") {
+                cfg.publishIntervalMs = std::stoi(value);
+            }
+        } catch (...) {
+            error = "northbound.mqtt." + key + " has invalid value";
+            return std::nullopt;
+        }
+    }
+
+    if (!seenMqtt || !cfg.enable) return std::nullopt;
+    if (cfg.host.empty()) {
+        error = "northbound.mqtt.host must not be empty";
+        return std::nullopt;
+    }
+    if (cfg.port <= 0 || cfg.port > 65535) {
+        error = "northbound.mqtt.port must be in 1..65535";
+        return std::nullopt;
+    }
+    if (cfg.keepaliveS <= 0) {
+        error = "northbound.mqtt.keepalive_s must be > 0";
+        return std::nullopt;
+    }
+    if (cfg.qos != 0) {
+        error = "northbound.mqtt.qos currently supports only 0";
+        return std::nullopt;
+    }
+    if (cfg.publishIntervalMs < 0) {
+        error = "northbound.mqtt.publish_interval_ms must be >= 0";
+        return std::nullopt;
+    }
+    if (cfg.clientId.empty()) cfg.clientId = "field_gateway";
+    if (cfg.topicPrefix.empty()) cfg.topicPrefix = "field";
+    return cfg;
+}
+
 } // namespace
 
 GatewayAssembly::GatewayAssembly(gateway_asio::io_context& io)
@@ -202,7 +287,18 @@ bool GatewayAssembly::load(std::string const& tomlPath) {
         return false;
     }
 
+    std::string mqttError;
+    m_mqttConfig = parseMqttConfig(tomlPath, mqttError);
+    if (!mqttError.empty()) {
+        m_logger.logf(log::LogLevel::Error, "config", "northbound.mqtt", mqttError);
+        std::cerr << "northbound.mqtt: " << mqttError << '\n';
+        return false;
+    }
+
     wireFromSchema(*loaded);
+    if (m_mqttConfig) {
+        m_mqtt = std::make_unique<AsioMqttClient>(*m_io, *m_mqttConfig);
+    }
     m_logger.logf(log::LogLevel::Info, "gateway", "assembly", "loaded",
                   {{"transports", std::int64_t(loaded->transports.size())},
                    {"datapoints", std::int64_t(loaded->datapoints.size())},
@@ -214,6 +310,16 @@ void GatewayAssembly::start() {
     if (m_started) return;
     m_started = true;
     installEventWiring();
+
+    if (m_mqtt) {
+        m_mqtt->start();
+        m_logger.logf(log::LogLevel::Info,
+                      "gateway",
+                      "mqtt",
+                      "northbound connecting "
+                          + m_mqttConfig->host + ":"
+                          + std::to_string(m_mqttConfig->port));
+    }
 
     for (auto& [id, transport] : m_transports) {
         auto connected = transport->connect();
@@ -230,6 +336,7 @@ void GatewayAssembly::start() {
     for (auto& timer : m_pollTimers) schedulePoll(timer);
     for (auto& timer : m_sinkTimers) scheduleSink(timer);
     startMirrorPump();
+    startMqttSnapshotPump();
     m_bus.publish(bus::CoreReady{});
 }
 
@@ -244,6 +351,7 @@ void GatewayAssembly::stop() {
         if (timer.timer) timer.timer->cancel();
     }
     if (m_mirrorTimer) m_mirrorTimer->cancel();
+    if (m_mqttSnapshotTimer) m_mqttSnapshotTimer->cancel();
     for (auto& poll : m_pollRanges) poll->stop();
     for (auto& sink : m_sinkWindows) sink->stop();
     for (auto& [id, transport] : m_transports) {
@@ -251,6 +359,8 @@ void GatewayAssembly::stop() {
         m_bus.publish(bus::TransportEvent{id, bus::TransportEventKind::Disconnected, {}});
     }
     m_serverWriteSub.reset();
+    m_mqttDpChangedSub.reset();
+    if (m_mqtt) m_mqtt->stop();
     m_bus.publish(bus::CoreStopping{});
     m_logger.flush();
 }
@@ -494,6 +604,52 @@ void GatewayAssembly::installEventWiring() {
                 if (!serverForwardEnabled(e.transportId)) return;
                 forwardBridges(e);
             }));
+    if (m_mqtt && !m_mqttDpChangedSub) {
+        m_mqttDpChangedSub = std::make_unique<bus::Subscription>(
+            m_bus.subscribe<bus::DpChanged>(
+                [this](bus::DpChanged const& e) {
+                    auto dp = m_datapoints.find(e.id);
+                    if (!dp) return;
+                    auto const snap = dp->snapshot();
+                    publishMqttDatapoint(e.id, snap.value, snap.state, snap.timestamp);
+                }));
+    }
+}
+
+void GatewayAssembly::publishMqttDatapoint(std::string const& id,
+                                           dp::Value const& value,
+                                           dp::DpState state,
+                                           dp::Timestamp timestamp) {
+    if (!m_mqtt || !m_mqttConfig) return;
+    auto topic = m_mqttConfig->topicPrefix + "/" + id;
+    std::string payload = "{\"value\":";
+    payload += json::value(value);
+    payload += ",\"quality\":";
+    json::appendString(payload, json::dpState(state));
+    payload += ",\"ts\":" + std::to_string(json::timestampMs(timestamp));
+    payload += "}";
+    m_mqtt->publish(std::move(topic), std::move(payload), m_mqttConfig->qos);
+}
+
+void GatewayAssembly::publishMqttSnapshot() {
+    if (!m_mqtt) return;
+    for (auto const& dp : datapointSnapshots()) {
+        publishMqttDatapoint(dp.id, dp.value, dp.state, dp.timestamp);
+    }
+}
+
+void GatewayAssembly::startMqttSnapshotPump() {
+    if (!m_mqttConfig || m_mqttConfig->publishIntervalMs <= 0) return;
+    if (!m_mqttSnapshotTimer) {
+        m_mqttSnapshotTimer = std::make_unique<gateway_asio::steady_timer>(*m_io);
+    }
+    m_mqttSnapshotTimer->expires_after(
+        std::chrono::milliseconds(m_mqttConfig->publishIntervalMs));
+    m_mqttSnapshotTimer->async_wait([this](auto const& ec) {
+        if (ec || !m_started) return;
+        publishMqttSnapshot();
+        startMqttSnapshotPump();
+    });
 }
 
 bool GatewayAssembly::serverForwardEnabled(std::string const& serverTransportId) const {
