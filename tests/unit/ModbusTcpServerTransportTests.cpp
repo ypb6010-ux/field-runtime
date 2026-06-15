@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 #include <catch2/catch_test_macros.hpp>
 
+#include <QtGlobal>   // quint16 — no longer transitively via the now Qt-free EventBus.h
+
 #include <atomic>
 #include <chrono>
 #include <thread>
