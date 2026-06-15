@@ -8,8 +8,8 @@ project(FieldRuntime
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_AUTOMOC ON)
 
+option(CORE_WITH_QT        "Build the Qt assembly (Core SHARED + transports/QML/tests/examples). OFF builds only the Qt-free FieldRuntimeBase + its header self-test." ON)
 option(CORE_BUILD_TESTS    "Build Core unit tests"                   ON)
 option(CORE_BUILD_EXAMPLES "Build Core example apps"                 ON)
 option(CORE_BUILD_QML      "Build QML integration"                   ON)
@@ -23,20 +23,22 @@ option(CORE_BUILD_PERSISTENCE "Build CorePersistence module (QxOrm)" OFF)
 # Dependencies
 # ---------------------------------------------------------------------------
 
-set(CORE_QT_COMPONENTS Core Network SerialBus SerialPort Sql)
-if(CORE_BUILD_QML)
-    list(APPEND CORE_QT_COMPONENTS Qml)
+if(CORE_WITH_QT)
+    set(CMAKE_AUTOMOC ON)
+    set(CORE_QT_COMPONENTS Core Network SerialBus SerialPort Sql)
+    if(CORE_BUILD_QML)
+        list(APPEND CORE_QT_COMPONENTS Qml)
+    endif()
+    if(CORE_BUILD_OPCUA)
+        list(APPEND CORE_QT_COMPONENTS OpcUa)
+    endif()
+    if(CORE_BUILD_MQTT_QT)
+        list(APPEND CORE_QT_COMPONENTS Mqtt)
+    endif()
+    find_package(Qt6 6.8 REQUIRED COMPONENTS ${CORE_QT_COMPONENTS})
 endif()
-if(CORE_BUILD_OPCUA)
-    list(APPEND CORE_QT_COMPONENTS OpcUa)
-endif()
-if(CORE_BUILD_MQTT_QT)
-    list(APPEND CORE_QT_COMPONENTS Mqtt)
-endif()
-
-find_package(Qt6 6.8 REQUIRED COMPONENTS ${CORE_QT_COMPONENTS})
 find_package(async_simple CONFIG REQUIRED)
-if(CORE_BUILD_MQTT_PAHO)
+if(CORE_WITH_QT AND CORE_BUILD_MQTT_PAHO)
     find_package(PahoMqttCpp CONFIG QUIET)
     if(NOT PahoMqttCpp_FOUND)
         message(STATUS "PahoMqttCpp not found — disabling MqttPahoTransport. "
@@ -54,6 +56,82 @@ if(NOT tomlplusplus_FOUND)
     )
     FetchContent_MakeAvailable(tomlplusplus)
 endif()
+
+# ---------------------------------------------------------------------------
+# FieldRuntimeBase — the Qt-free base library (types + algorithms). No Qt, no
+# QModbus. This is what the without-Qt gateway (and OpenWRT/musl builds) link.
+# Built unconditionally; its sources are the .cpp that carry zero Qt. Because it
+# links no Qt6:: target, its TUs are compiled with NO Qt on the include path —
+# so this target itself is the "base compiles without Qt" red line.
+# ---------------------------------------------------------------------------
+
+set(FIELDRUNTIME_BASE_SOURCES
+    src/Version.cpp
+    src/EventBus.cpp
+    src/SerialScheduler.cpp
+    src/CreditScheduler.cpp
+    src/PriorityScheduler.cpp
+    src/CodecRegistry.cpp
+    src/BuiltinCodecs.cpp
+    src/LuaCodec.cpp
+    src/ConfigLoader.cpp
+    src/Datapoint.cpp
+    src/DatapointRegistry.cpp
+    src/PollRange.cpp
+    src/SinkWindow.cpp
+    src/Heartbeat.cpp
+    src/Command.cpp
+    src/AckWatch.cpp
+    src/Logger.cpp
+    src/LogFilter.cpp
+    src/DedupFilter.cpp
+    src/Sinks.cpp
+    src/S7ClientTransport.cpp
+)
+
+add_library(FieldRuntimeBase STATIC ${FIELDRUNTIME_BASE_SOURCES})
+add_library(FieldRuntime::Base ALIAS FieldRuntimeBase)
+set_target_properties(FieldRuntimeBase PROPERTIES AUTOMOC OFF)
+target_compile_definitions(FieldRuntimeBase
+    PUBLIC  CORE_STATIC_BUILD
+    PRIVATE CORE_BUILDING_LIBRARY)
+target_include_directories(FieldRuntimeBase
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>)
+target_link_libraries(FieldRuntimeBase
+    PUBLIC  async_simple::async_simple_static
+    PRIVATE tomlplusplus::tomlplusplus)
+if(CORE_BUILD_LUA)
+    find_package(sol2 CONFIG REQUIRED)
+    find_package(Lua QUIET)
+    if(NOT LUA_FOUND)
+        find_path(LUA_INCLUDE_DIR NAMES lua.h)
+        find_library(LUA_LIBRARIES NAMES lua lua54 lua5.4 liblua)
+    endif()
+    target_link_libraries(FieldRuntimeBase PRIVATE sol2::sol2 ${LUA_LIBRARIES})
+    target_include_directories(FieldRuntimeBase PRIVATE ${LUA_INCLUDE_DIR})
+    target_compile_definitions(FieldRuntimeBase PRIVATE CORE_HAS_LUA=1)
+endif()
+if(MSVC)
+    target_compile_options(FieldRuntimeBase PRIVATE /W4 /permissive- /utf-8 /EHsc /wd4251)
+else()
+    target_compile_options(FieldRuntimeBase PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# No-Qt red line: the freestanding header self-test must compile + link against
+# FieldRuntimeBase with no Qt anywhere. If a base header pulls QtCore back in,
+# this target stops building.
+if(CORE_BUILD_TESTS)
+    add_executable(fieldruntime_base_selftest tests/freestanding/qtfree_headers.cpp)
+    set_target_properties(fieldruntime_base_selftest PROPERTIES AUTOMOC OFF)
+    target_link_libraries(fieldruntime_base_selftest PRIVATE FieldRuntimeBase)
+endif()
+
+# ---------------------------------------------------------------------------
+# Qt assembly (gated): Core SHARED facade + Qt transports + QML + tests/examples
+# ---------------------------------------------------------------------------
+if(CORE_WITH_QT)
 
 # ---------------------------------------------------------------------------
 # Library target
@@ -173,3 +251,5 @@ install(TARGETS Core
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+endif()  # CORE_WITH_QT

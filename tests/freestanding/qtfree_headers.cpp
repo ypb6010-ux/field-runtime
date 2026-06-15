@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 
+#include "core/ICore.h"
 #include "core/base/RegisterTable.h"
 #include "core/bus/BusEvents.h"
 #include "core/bus/EventBus.h"
