@@ -18,6 +18,7 @@ option(CORE_BUILD_OPCUA    "Enable OPC UA Transport (Qt6::OpcUa)"    ON)
 option(CORE_BUILD_MQTT_QT  "Enable MQTT Transport (Qt6::Mqtt)"       ON)
 option(CORE_BUILD_MQTT_PAHO "Enable MQTT Transport (paho.mqtt.cpp)"  ON)
 option(CORE_BUILD_PERSISTENCE "Build CorePersistence module (QxOrm)" OFF)
+option(CORE_BUILD_GATEWAY  "Build the Qt-free field gateway executable" OFF)
 
 # ---------------------------------------------------------------------------
 # Dependencies
@@ -126,6 +127,10 @@ if(CORE_BUILD_TESTS)
     add_executable(fieldruntime_base_selftest tests/freestanding/qtfree_headers.cpp)
     set_target_properties(fieldruntime_base_selftest PROPERTIES AUTOMOC OFF)
     target_link_libraries(fieldruntime_base_selftest PRIVATE FieldRuntimeBase)
+endif()
+
+if(CORE_BUILD_GATEWAY)
+    add_subdirectory(gateway)
 endif()
 
 # ---------------------------------------------------------------------------

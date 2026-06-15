@@ -1,0 +1,44 @@
+[meta]
+project = "field_gateway_stub"
+version = "0.1"
+log_level = "info"
+
+[[transport]]
+id = "stub_plc"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+port = 502
+slave_id = 1
+
+[transport.scheduler]
+kind = "serial"
+max_inflight = 1
+max_queue_depth = 64
+inter_request_gap_ms = 0
+
+[[poll_range]]
+module_id = "poll_stub_hr"
+transport = "stub_plc"
+table = "HR"
+range = [0, 4]
+period_ms = 200
+
+[[datapoint]]
+id = "stub.hr0"
+kind = "Status"
+type = "U16"
+
+[datapoint.source]
+port = "stub_plc"
+table = "HR"
+addr = 0
+
+[[datapoint]]
+id = "stub.hr1"
+kind = "Status"
+type = "U16"
+
+[datapoint.source]
+port = "stub_plc"
+table = "HR"
+addr = 1
