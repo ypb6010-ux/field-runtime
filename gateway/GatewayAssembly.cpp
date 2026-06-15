@@ -8,6 +8,7 @@
 #include <iostream>
 #include <utility>
 
+#include "AsioModbusTcpClient.h"
 #include "StubTransport.h"
 
 #include "core/bus/BusEvents.h"
@@ -166,7 +167,12 @@ void GatewayAssembly::wireFromSchema(config::ConfigSchema const& schema) {
 
 void GatewayAssembly::buildTransports(config::ConfigSchema const& schema) {
     for (auto const& tc : schema.transports) {
-        auto transport = std::make_unique<StubTransport>(tc, *m_io);
+        std::unique_ptr<transport::Transport> transport;
+        if (tc.kind == transport::TransportKind::ModbusTcpClient) {
+            transport = std::make_unique<AsioModbusTcpClient>(tc, *m_io);
+        } else {
+            transport = std::make_unique<StubTransport>(tc, *m_io);
+        }
         m_transports.emplace(tc.id, std::move(transport));
     }
 }

@@ -1,8 +1,22 @@
 # SPDX-FileCopyrightText: 2026 ypb6010-ux
 # SPDX-License-Identifier: MPL-2.0
 
+add_library(gateway_nanomodbus STATIC
+    third_party/nanomodbus/nanomodbus.cpp
+)
+set_target_properties(gateway_nanomodbus PROPERTIES AUTOMOC OFF)
+target_include_directories(gateway_nanomodbus PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nanomodbus
+)
+if(MSVC)
+    target_compile_options(gateway_nanomodbus PRIVATE /W4 /permissive- /utf-8 /EHsc)
+else()
+    target_compile_options(gateway_nanomodbus PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_executable(field_gateway
     main.cpp
+    AsioModbusTcpClient.cpp
     GatewayAssembly.cpp
     StubTransport.cpp
 )
@@ -43,6 +57,7 @@ endif()
 target_link_libraries(field_gateway
     PRIVATE
         FieldRuntime::Base
+        gateway_nanomodbus
         asio
 )
 
@@ -57,5 +72,26 @@ else()
     target_compile_options(field_gateway PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_executable(field_gateway_mock_server
+    MockModbusTcpServer.cpp
+)
+set_target_properties(field_gateway_mock_server PROPERTIES AUTOMOC OFF)
+target_compile_definitions(field_gateway_mock_server PRIVATE _WIN32_WINNT=0x0601)
+target_link_libraries(field_gateway_mock_server
+    PRIVATE
+        gateway_nanomodbus
+        asio
+)
+target_include_directories(field_gateway_mock_server
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+if(MSVC)
+    target_compile_options(field_gateway_mock_server PRIVATE /W4 /permissive- /utf-8 /EHsc)
+else()
+    target_compile_options(field_gateway_mock_server PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 install(TARGETS field_gateway RUNTIME DESTINATION bin)
+install(TARGETS field_gateway_mock_server RUNTIME DESTINATION bin)
 install(FILES gateway.toml DESTINATION share/field_gateway)

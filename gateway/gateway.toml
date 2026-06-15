@@ -1,13 +1,13 @@
 [meta]
-project = "field_gateway_stub"
-version = "0.1"
+project = "field_gateway_modbus_mock"
+version = "0.2"
 log_level = "info"
 
 [[transport]]
-id = "stub_plc"
+id = "mock_plc"
 kind = "modbus_tcp_client"
 host = "127.0.0.1"
-port = 502
+port = 15020
 slave_id = 1
 
 [transport.scheduler]
@@ -17,28 +17,40 @@ max_queue_depth = 64
 inter_request_gap_ms = 0
 
 [[poll_range]]
-module_id = "poll_stub_hr"
-transport = "stub_plc"
+module_id = "poll_mock_hr"
+transport = "mock_plc"
 table = "HR"
 range = [0, 4]
 period_ms = 200
 
 [[datapoint]]
-id = "stub.hr0"
+id = "mock.temperature"
 kind = "Status"
 type = "U16"
 
 [datapoint.source]
-port = "stub_plc"
+port = "mock_plc"
 table = "HR"
 addr = 0
+scale = 0.1
 
 [[datapoint]]
-id = "stub.hr1"
+id = "mock.speed"
 kind = "Status"
 type = "U16"
 
 [datapoint.source]
-port = "stub_plc"
+port = "mock_plc"
 table = "HR"
 addr = 1
+
+[[datapoint]]
+id = "mock.word32"
+kind = "Status"
+type = "U32"
+
+[datapoint.source]
+port = "mock_plc"
+table = "HR"
+addr = 2
+wordOrder = "CDAB"
