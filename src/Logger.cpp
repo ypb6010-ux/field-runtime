@@ -13,8 +13,6 @@
 #include <variant>
 #include <vector>
 
-#include "core/dp/ValueQt.h"
-
 namespace core::log {
 
 const char* levelName(LogLevel level) noexcept {
@@ -168,8 +166,8 @@ public:
     std::deque<Entry>               queue;
     bool                            stopping   = false;
     bool                            processing = false;   // a batch is mid-delivery
-    std::atomic<quint64>            dropped{0};
-    std::atomic<quint64>            drainedGen{0};
+    std::atomic<std::uint64_t>      dropped{0};
+    std::atomic<std::uint64_t>      drainedGen{0};
 
     mutable std::mutex              filterMtx;
     LogFilter                       coreFilter;    // gate, guarded by filterMtx
@@ -189,9 +187,9 @@ void Logger::setThreshold(LogLevel min) {
     m_impl->coreFilter.setDefaultMinLevel(min);
 }
 
-void Logger::setCategoryThreshold(QString const& category, LogLevel min) {
+void Logger::setCategoryThreshold(std::string const& category, LogLevel min) {
     std::lock_guard lk(m_impl->filterMtx);
-    m_impl->coreFilter.setCategory(category.toStdString(), true, min);
+    m_impl->coreFilter.setCategory(category, true, min);
 }
 
 LogLevel Logger::threshold() const {
@@ -242,23 +240,21 @@ void Logger::logOperation(OperationRecord rec) {
     m_impl->enqueue(Entry{std::move(rec)});
 }
 
-void Logger::logf(LogLevel level, QString category, QString source,
-                  QString message, QVariantMap fields) {
+void Logger::logf(LogLevel level, std::string category, std::string source,
+                  std::string message, std::map<std::string, dp::Value> fields) {
     LogRecord rec;
     rec.ts       = std::chrono::system_clock::now();
     rec.level    = level;
-    rec.category = category.toStdString();
-    rec.source   = source.toStdString();
-    rec.message  = message.toStdString();
-    for (auto it = fields.constBegin(); it != fields.constEnd(); ++it) {
-        rec.fields.emplace(it.key().toStdString(), dp::fromQVariant(it.value()));
-    }
+    rec.category = std::move(category);
+    rec.source   = std::move(source);
+    rec.message  = std::move(message);
+    rec.fields   = std::move(fields);
     log(std::move(rec));
 }
 
 void Logger::flush()             { m_impl->flush(); }
 void Logger::stop()              { m_impl->stop(); }
-quint64 Logger::droppedCount() const {
+std::uint64_t Logger::droppedCount() const {
     return m_impl->dropped.load(std::memory_order_relaxed);
 }
 

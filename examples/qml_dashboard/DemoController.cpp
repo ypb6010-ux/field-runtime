@@ -101,11 +101,9 @@ void DemoController::setLogLevel(int level) {
     if (level < 0) level = 0;
     if (level > 5) level = 5;
     m_core.logger().setThreshold(static_cast<core::log::LogLevel>(level));
-    m_core.logger().logf(core::log::LogLevel::Info, QStringLiteral("ui"),
-        QStringLiteral("dashboard"),
-        QStringLiteral("log threshold set to %1")
-            .arg(QString::fromLatin1(core::log::levelName(
-                static_cast<core::log::LogLevel>(level)))));
+    m_core.logger().logf(core::log::LogLevel::Info, "ui", "dashboard",
+        std::string("log threshold set to ")
+            + core::log::levelName(static_cast<core::log::LogLevel>(level)));
 }
 
 void DemoController::emitOperation(QString action, QString target) {

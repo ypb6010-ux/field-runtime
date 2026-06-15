@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
+#include <cstdint>
+#include <map>
 #include <memory>
-#include <QString>
-#include <QVariantMap>
+#include <string>
 
 #include "core/core_global.h"
+#include "core/dp/Value.h"
 #include "core/log/ILogSink.h"
 #include "core/log/LogFilter.h"
 #include "core/log/LogTypes.h"
@@ -37,7 +39,7 @@ public:
     // filter; setFilter/filter expose the whole thing so a business layer can
     // inherit core's baseline (filter()) and override it on its own sinks.
     void setThreshold(LogLevel min);                          // default minLevel
-    void setCategoryThreshold(QString const& category, LogLevel min);
+    void setCategoryThreshold(std::string const& category, LogLevel min);
     LogLevel threshold() const;
 
     void setFilter(LogFilter filter);   // replace the gate filter (baseline)
@@ -50,11 +52,11 @@ public:
     void log(LogRecord rec);            // system / diagnostic
     void logOperation(OperationRecord rec); // run / audit (category-axis gated)
 
-    void logf(LogLevel    level,
-              QString      category,
-              QString      source,
-              QString      message,
-              QVariantMap  fields = {});
+    void logf(LogLevel                         level,
+              std::string                      category,
+              std::string                      source,
+              std::string                      message,
+              std::map<std::string, dp::Value> fields = {});
 
     // Block until every record queued so far has been handed to all sinks.
     void flush();
@@ -64,7 +66,7 @@ public:
     // System records below threshold dropped at the gate are not counted;
     // this counts records dropped under queue overload (Trace/Debug only —
     // Warn+ and all operation records are never dropped).
-    quint64 droppedCount() const;
+    std::uint64_t droppedCount() const;
 
 private:
     class Impl;

@@ -13,24 +13,24 @@ LogBridge::LogBridge(log::Logger& logger, QObject* parent)
 LogBridge::~LogBridge() = default;
 
 void LogBridge::trace(QString category, QString message) {
-    m_logger.logf(log::LogLevel::Trace, std::move(category),
-                  QStringLiteral("qml"), std::move(message));
+    m_logger.logf(log::LogLevel::Trace, category.toStdString(),
+                  "qml", message.toStdString());
 }
 void LogBridge::debug(QString category, QString message) {
-    m_logger.logf(log::LogLevel::Debug, std::move(category),
-                  QStringLiteral("qml"), std::move(message));
+    m_logger.logf(log::LogLevel::Debug, category.toStdString(),
+                  "qml", message.toStdString());
 }
 void LogBridge::info(QString category, QString message) {
-    m_logger.logf(log::LogLevel::Info, std::move(category),
-                  QStringLiteral("qml"), std::move(message));
+    m_logger.logf(log::LogLevel::Info, category.toStdString(),
+                  "qml", message.toStdString());
 }
 void LogBridge::warn(QString category, QString message) {
-    m_logger.logf(log::LogLevel::Warn, std::move(category),
-                  QStringLiteral("qml"), std::move(message));
+    m_logger.logf(log::LogLevel::Warn, category.toStdString(),
+                  "qml", message.toStdString());
 }
 void LogBridge::error(QString category, QString message) {
-    m_logger.logf(log::LogLevel::Error, std::move(category),
-                  QStringLiteral("qml"), std::move(message));
+    m_logger.logf(log::LogLevel::Error, category.toStdString(),
+                  "qml", message.toStdString());
 }
 
 void LogBridge::operation(QString action, QString target,

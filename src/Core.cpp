@@ -171,8 +171,8 @@ public:
         if (!schema.has_value()) {
             for (auto const& err : schema.error()) {
                 m_logger->logf(log::LogLevel::Error,
-                               QStringLiteral("config"), path,
-                               qs(err.message));
+                               "config", path.toStdString(),
+                               err.message);
             }
             return std::unexpected(schema.error());
         }
@@ -184,12 +184,10 @@ public:
         // config file's directory.
         m_configDir = QFileInfo(path).absolutePath();
         wireFromSchema(*schema);
-        m_logger->logf(log::LogLevel::Info, QStringLiteral("config"), path,
-                       QStringLiteral("loaded"),
-                       {{QStringLiteral("transports"),
-                         int(schema->transports.size())},
-                        {QStringLiteral("datapoints"),
-                         int(schema->datapoints.size())}});
+        m_logger->logf(log::LogLevel::Info, "config", path.toStdString(),
+                       "loaded",
+                       {{"transports", std::int64_t(schema->transports.size())},
+                        {"datapoints", std::int64_t(schema->datapoints.size())}});
         return {};
     }
 
@@ -248,15 +246,13 @@ public:
         startStatsPump();
         startMirrorPump();
         m_bus->publish(bus::CoreReady{});
-        m_logger->logf(log::LogLevel::Info, QStringLiteral("core"),
-                       QStringLiteral("ICore"), QStringLiteral("started"));
+        m_logger->logf(log::LogLevel::Info, "core", "ICore", "started");
     }
 
     void stop() override {
         if (!m_started) return;
         m_started = false;
-        m_logger->logf(log::LogLevel::Info, QStringLiteral("core"),
-                       QStringLiteral("ICore"), QStringLiteral("stopping"));
+        m_logger->logf(log::LogLevel::Info, "core", "ICore", "stopping");
         joinConnectThreads();   // no connect in flight before we disconnect
         m_bus->publish(bus::CoreStopping{});
         stopStatsPump();
@@ -315,8 +311,8 @@ private:
             if (QFileInfo(dll).isRelative() && !m_configDir.isEmpty())
                 dll = QDir(m_configDir).filePath(dll);
             if (!m_plugins->load(dll.toStdString())) {
-                m_logger->logf(log::LogLevel::Error, QStringLiteral("plugin"), dll,
-                               QStringLiteral("failed to load plugin '%1'").arg(qs(pc.name)));
+                m_logger->logf(log::LogLevel::Error, "plugin", dll.toStdString(),
+                               "failed to load plugin '" + pc.name + "'");
             }
         }
         m_plugins->registerAllPorts(*m_ports);
@@ -395,8 +391,7 @@ private:
             case bus::TransportEventKind::CircuitHalfOpen: what = "circuit half-open"; break;
             default: return;   // Read/WriteCompleted are too noisy for the log
         }
-        m_logger->logf(level, QStringLiteral("transport"), qs(e.transportId),
-                       QString::fromLatin1(what));
+        m_logger->logf(level, "transport", e.transportId, what);
     }
 
     void routeServerWrite(bus::ServerWriteEvent const& e) {
@@ -595,11 +590,11 @@ private:
                 if (lc) {
                     m_codecs->registerCodec(std::move(lc));
                 } else {
-                    m_logger->logf(log::LogLevel::Error, QStringLiteral("config"),
-                                   script,
+                    m_logger->logf(log::LogLevel::Error, "config",
+                                   script.toStdString(),
                                    err.empty()
-                                       ? QStringLiteral("lua codec load failed")
-                                       : qs(err));
+                                       ? std::string("lua codec load failed")
+                                       : err);
                 }
             }
         }
