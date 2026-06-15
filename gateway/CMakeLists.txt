@@ -3,7 +3,6 @@
 
 add_executable(field_gateway
     main.cpp
-    BaseDpHelpers.cpp
     GatewayAssembly.cpp
     StubTransport.cpp
 )

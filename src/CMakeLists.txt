@@ -13,6 +13,7 @@ target_sources(Core PRIVATE
     LuaCodec.cpp
     Datapoint.cpp
     DatapointRegistry.cpp
+    DpTypeHelpers.cpp
     QtDatapoint.cpp
     PollRange.cpp
     SinkWindow.cpp

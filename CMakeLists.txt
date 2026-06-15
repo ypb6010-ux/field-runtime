@@ -78,6 +78,7 @@ set(FIELDRUNTIME_BASE_SOURCES
     src/ConfigLoader.cpp
     src/Datapoint.cpp
     src/DatapointRegistry.cpp
+    src/DpTypeHelpers.cpp
     src/PollRange.cpp
     src/SinkWindow.cpp
     src/Heartbeat.cpp
