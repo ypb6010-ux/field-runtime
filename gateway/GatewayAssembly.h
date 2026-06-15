@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -18,12 +19,32 @@
 #include "core/codec/CodecRegistry.h"
 #include "core/config/ConfigSchema.h"
 #include "core/dp/DatapointRegistry.h"
+#include "core/dp/State.h"
 #include "core/log/Logger.h"
 #include "core/module/PollRange.h"
 #include "core/module/SinkWindow.h"
 #include "core/transport/Transport.h"
 
 namespace core::gateway {
+
+struct ControlConfig {
+    std::string listenAddress = "127.0.0.1";
+    int listenPort = 0;
+};
+
+struct GatewayTransportSnapshot {
+    std::string id;
+    transport::TransportKind kind = transport::TransportKind::ModbusTcpClient;
+    transport::ConnectionState state = transport::ConnectionState::Disconnected;
+    sched::SchedulerStats stats;
+};
+
+struct GatewayDatapointSnapshot {
+    std::string id;
+    dp::Value value;
+    dp::DpState state = dp::DpState::Missing;
+    dp::Timestamp timestamp{};
+};
 
 class GatewayAssembly {
 public:
@@ -35,6 +56,9 @@ public:
     void stop();
     void printSnapshot(std::size_t limit = 8) const;
     void setServerForwardEnabled(std::string const& serverTransportId, bool enabled);
+    std::optional<ControlConfig> controlConfig() const;
+    std::vector<GatewayTransportSnapshot> transportSnapshots();
+    std::vector<GatewayDatapointSnapshot> datapointSnapshots() const;
 
     log::Logger& logger();
 
@@ -87,6 +111,7 @@ private:
     std::unique_ptr<gateway_asio::steady_timer> m_mirrorTimer;
     mutable std::mutex m_forwardMtx;
     std::unordered_map<std::string, bool> m_forwardEnabled;
+    std::optional<ControlConfig> m_control;
     bool m_started = false;
 };
 

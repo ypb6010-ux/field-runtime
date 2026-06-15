@@ -3,6 +3,10 @@ project = "field_gateway_modbus_mock"
 version = "0.2"
 log_level = "info"
 
+[control]
+listen_address = "127.0.0.1"
+listen_port = 15022
+
 [[transport]]
 id = "mock_plc"
 kind = "modbus_tcp_client"

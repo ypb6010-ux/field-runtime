@@ -5,8 +5,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cctype>
+#include <fstream>
 #include <iostream>
 #include <mutex>
+#include <optional>
+#include <sstream>
+#include <string_view>
 #include <utility>
 
 #include "AsioModbusTcpClient.h"
@@ -68,6 +73,93 @@ std::string valueText(dp::Value const& value) {
     return dp::toString(value);
 }
 
+std::string trim(std::string_view s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+        s.remove_prefix(1);
+    }
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+        s.remove_suffix(1);
+    }
+    return std::string(s);
+}
+
+std::string stripComment(std::string const& line) {
+    bool inQuote = false;
+    bool escaped = false;
+    for (std::size_t i = 0; i < line.size(); i++) {
+        char const c = line[i];
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (c == '\\') {
+            escaped = true;
+            continue;
+        }
+        if (c == '"') {
+            inQuote = !inQuote;
+            continue;
+        }
+        if (c == '#' && !inQuote) return line.substr(0, i);
+    }
+    return line;
+}
+
+std::string unquote(std::string value) {
+    value = trim(value);
+    if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+        value = value.substr(1, value.size() - 2);
+    }
+    return value;
+}
+
+std::optional<ControlConfig> parseControlConfig(std::string const& path,
+                                                std::string& error) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        error = "cannot open '" + path + "'";
+        return std::nullopt;
+    }
+
+    ControlConfig cfg;
+    bool inControl = false;
+    bool seenControl = false;
+    std::string line;
+    while (std::getline(in, line)) {
+        auto const trimmed = trim(stripComment(line));
+        if (trimmed.empty()) continue;
+        if (trimmed.front() == '[') {
+            inControl = trimmed == "[control]";
+            seenControl = seenControl || inControl;
+            continue;
+        }
+        if (!inControl) continue;
+
+        auto const eq = trimmed.find('=');
+        if (eq == std::string::npos) continue;
+        auto const key = trim(std::string_view(trimmed).substr(0, eq));
+        auto const value = unquote(trimmed.substr(eq + 1));
+        if (key == "listen_address") {
+            cfg.listenAddress = value;
+        } else if (key == "listen_port") {
+            try {
+                cfg.listenPort = std::stoi(value);
+            } catch (...) {
+                error = "control.listen_port must be an integer";
+                return std::nullopt;
+            }
+        }
+    }
+
+    if (!seenControl) return std::nullopt;
+    if (cfg.listenPort <= 0 || cfg.listenPort > 65535) {
+        error = "control.listen_port must be in 1..65535";
+        return std::nullopt;
+    }
+    if (cfg.listenAddress.empty()) cfg.listenAddress = "127.0.0.1";
+    return cfg;
+}
+
 } // namespace
 
 GatewayAssembly::GatewayAssembly(gateway_asio::io_context& io)
@@ -100,6 +192,14 @@ bool GatewayAssembly::load(std::string const& tomlPath) {
 
     if (!loaded->meta.logLevel.empty()) {
         m_logger.setThreshold(log::levelFromString(loaded->meta.logLevel));
+    }
+
+    std::string controlError;
+    m_control = parseControlConfig(tomlPath, controlError);
+    if (!controlError.empty()) {
+        m_logger.logf(log::LogLevel::Error, "config", "control", controlError);
+        std::cerr << "control: " << controlError << '\n';
+        return false;
     }
 
     wireFromSchema(*loaded);
@@ -165,6 +265,44 @@ void GatewayAssembly::setServerForwardEnabled(std::string const& serverTransport
         m_forwardEnabled[serverTransportId] = enabled;
     }
     if (wasEnabled && !enabled) zeroBridgeForward(serverTransportId);
+}
+
+std::optional<ControlConfig> GatewayAssembly::controlConfig() const {
+    return m_control;
+}
+
+std::vector<GatewayTransportSnapshot> GatewayAssembly::transportSnapshots() {
+    std::vector<GatewayTransportSnapshot> out;
+    out.reserve(m_transports.size());
+    for (auto& [id, transport] : m_transports) {
+        GatewayTransportSnapshot snap;
+        snap.id = id;
+        snap.kind = transport->kind();
+        snap.state = transport->state();
+        snap.stats = transport->scheduler().stats();
+        out.push_back(std::move(snap));
+    }
+    return out;
+}
+
+std::vector<GatewayDatapointSnapshot> GatewayAssembly::datapointSnapshots() const {
+    auto all = m_datapoints.all();
+    std::sort(all.begin(), all.end(), [](auto const& a, auto const& b) {
+        return a->id() < b->id();
+    });
+
+    std::vector<GatewayDatapointSnapshot> out;
+    out.reserve(all.size());
+    for (auto const& dp : all) {
+        auto const state = dp->snapshot();
+        out.push_back(GatewayDatapointSnapshot{
+            dp->id(),
+            state.value,
+            state.state,
+            state.timestamp
+        });
+    }
+    return out;
 }
 
 void GatewayAssembly::printSnapshot(std::size_t limit) const {

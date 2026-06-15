@@ -5,8 +5,10 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
+#include "ControlSocket.h"
 #include "GatewayAsio.h"
 #include "GatewayAssembly.h"
 
@@ -37,8 +39,26 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    std::unique_ptr<core::gateway::ControlSocket> control;
+    if (auto cfg = gateway.controlConfig()) {
+        control = std::make_unique<core::gateway::ControlSocket>(io, gateway, *cfg);
+        try {
+            control->start();
+            gateway.logger().logf(core::log::LogLevel::Info,
+                                  "gateway",
+                                  "control",
+                                  "listening "
+                                      + cfg->listenAddress + ":"
+                                      + std::to_string(cfg->listenPort));
+        } catch (std::runtime_error const& e) {
+            std::cerr << e.what() << '\n';
+            return EXIT_FAILURE;
+        }
+    }
+
     gateway_asio::signal_set signals(io, SIGINT, SIGTERM);
     signals.async_wait([&](auto const&, int) {
+        if (control) control->stop();
         gateway.stop();
         io.stop();
     });
@@ -63,6 +83,7 @@ int main(int argc, char** argv) {
 
     gateway.start();
     io.run();
+    if (control) control->stop();
     gateway.stop();
     return EXIT_SUCCESS;
 }
