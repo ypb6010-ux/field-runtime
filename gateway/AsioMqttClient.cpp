@@ -108,6 +108,20 @@ void AsioMqttClient::publish(std::string topic, std::string payload, int qos) {
     writePacket(buildPublish(pending.topic, pending.payload));
 }
 
+bool AsioMqttClient::publishTracked(std::string topic,
+                                    std::string payload,
+                                    int qos,
+                                    std::function<void(bool)> done) {
+    (void)qos;
+    if (!m_started || !m_connected || !m_socket.is_open()) return false;
+    writePacket(buildPublish(topic, payload), std::move(done));
+    return true;
+}
+
+void AsioMqttClient::setConnectedCallback(std::function<void()> callback) {
+    m_connectedCallback = std::move(callback);
+}
+
 bool AsioMqttClient::connected() const {
     return m_connected;
 }
@@ -149,6 +163,7 @@ void AsioMqttClient::onConnected() {
     m_connected = true;
     m_reconnectDelayMs = 500;
     flushPending();
+    if (m_connectedCallback) m_connectedCallback();
     schedulePing();
 }
 
@@ -270,21 +285,29 @@ void AsioMqttClient::flushPending() {
     }
 }
 
-void AsioMqttClient::writePacket(std::vector<std::uint8_t> packet) {
+void AsioMqttClient::writePacket(std::vector<std::uint8_t> packet,
+                                 std::function<void(bool)> done) {
     if (!m_started || !m_socket.is_open()) return;
-    m_writeQueue.push_back(std::move(packet));
+    m_writeQueue.push_back(PacketWrite{std::move(packet), std::move(done)});
     if (!m_writing) startWrite();
 }
 
 void AsioMqttClient::startWrite() {
     if (!m_started || m_writing || m_writeQueue.empty() || !m_socket.is_open()) return;
     m_writing = true;
-    gateway_asio::async_write(m_socket, gateway_asio::buffer(m_writeQueue.front()),
+    auto& item = m_writeQueue.front();
+    gateway_asio::async_write(m_socket, gateway_asio::buffer(item.packet),
         [this](gateway_error_code const& ec, std::size_t) {
             m_writing = false;
             if (ec) {
+                if (!m_writeQueue.empty() && m_writeQueue.front().done) {
+                    m_writeQueue.front().done(false);
+                }
                 if (m_started) failAndReconnect();
                 return;
+            }
+            if (!m_writeQueue.empty() && m_writeQueue.front().done) {
+                m_writeQueue.front().done(true);
             }
             if (!m_writeQueue.empty()) m_writeQueue.pop_front();
             startWrite();

@@ -19,6 +19,12 @@ topic_prefix = "field"
 qos = 0
 publish_interval_ms = 0
 
+[persistence]
+enable = true
+path = "field_gateway.db"
+max_rows = 100000
+backfill_batch = 32
+
 [[transport]]
 id = "mock_plc"
 kind = "modbus_tcp_client"

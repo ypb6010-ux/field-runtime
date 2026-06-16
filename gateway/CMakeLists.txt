@@ -22,6 +22,7 @@ add_executable(field_gateway
     ControlSocket.cpp
     GatewayAssembly.cpp
     GatewayJson.cpp
+    Persistence.cpp
     StubTransport.cpp
 )
 
@@ -58,11 +59,14 @@ else()
     endif()
 endif()
 
+find_package(SQLite3 REQUIRED)
+
 target_link_libraries(field_gateway
     PRIVATE
         FieldRuntime::Base
         gateway_nanomodbus
         asio
+        SQLite::SQLite3
 )
 
 target_include_directories(field_gateway

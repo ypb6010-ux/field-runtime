@@ -3,6 +3,7 @@
 #pragma once
 
 #include <deque>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -30,6 +31,11 @@ public:
     void start();
     void stop();
     void publish(std::string topic, std::string payload, int qos = 0);
+    bool publishTracked(std::string topic,
+                        std::string payload,
+                        int qos,
+                        std::function<void(bool)> done);
+    void setConnectedCallback(std::function<void()> callback);
 
     bool connected() const;
     MqttNorthboundConfig const& config() const;
@@ -55,9 +61,15 @@ private:
     void scheduleReconnect();
     void failAndReconnect();
     void flushPending();
-    void writePacket(std::vector<std::uint8_t> packet);
+    void writePacket(std::vector<std::uint8_t> packet,
+                     std::function<void(bool)> done = {});
     void startWrite();
     void closeSocket();
+
+    struct PacketWrite {
+        std::vector<std::uint8_t> packet;
+        std::function<void(bool)> done;
+    };
 
     gateway_asio::io_context* m_io = nullptr;
     MqttNorthboundConfig m_config;
@@ -66,7 +78,8 @@ private:
     std::unique_ptr<gateway_asio::steady_timer> m_pingTimer;
     std::unique_ptr<gateway_asio::steady_timer> m_reconnectTimer;
     std::deque<PendingPublish> m_pending;
-    std::deque<std::vector<std::uint8_t>> m_writeQueue;
+    std::deque<PacketWrite> m_writeQueue;
+    std::function<void()> m_connectedCallback;
     bool m_started = false;
     bool m_connected = false;
     bool m_writing = false;

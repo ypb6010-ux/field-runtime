@@ -15,6 +15,7 @@
 #include "GatewayAsio.h"
 
 #include "AsioMqttClient.h"
+#include "Persistence.h"
 #include "core/bus/EventBus.h"
 #include "core/bus/BusEvents.h"
 #include "core/bus/Subscription.h"
@@ -94,7 +95,10 @@ private:
                               dp::Value const& value,
                               dp::DpState state,
                               dp::Timestamp timestamp);
+    void publishMqttRow(TelemetryRow const& row);
     void publishMqttSnapshot();
+    void backfillPersistenceOnce();
+    void startPersistenceBackfillPump();
     void startMqttSnapshotPump();
     void zeroBridgeForward(std::string const& serverTransportId);
     bool serverForwardEnabled(std::string const& serverTransportId) const;
@@ -125,11 +129,14 @@ private:
     std::unique_ptr<bus::Subscription> m_mqttDpChangedSub;
     std::unique_ptr<gateway_asio::steady_timer> m_mirrorTimer;
     std::unique_ptr<gateway_asio::steady_timer> m_mqttSnapshotTimer;
+    std::unique_ptr<gateway_asio::steady_timer> m_backfillTimer;
     std::unique_ptr<AsioMqttClient> m_mqtt;
+    std::unique_ptr<Persistence> m_persistence;
     mutable std::mutex m_forwardMtx;
     std::unordered_map<std::string, bool> m_forwardEnabled;
     std::optional<ControlConfig> m_control;
     std::optional<MqttNorthboundConfig> m_mqttConfig;
+    std::optional<PersistenceConfig> m_persistenceConfig;
     bool m_started = false;
 };
 

@@ -247,6 +247,61 @@ std::optional<MqttNorthboundConfig> parseMqttConfig(std::string const& path,
     return cfg;
 }
 
+std::optional<PersistenceConfig> parsePersistenceConfig(std::string const& path,
+                                                        std::string& error) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        error = "cannot open '" + path + "'";
+        return std::nullopt;
+    }
+
+    PersistenceConfig cfg;
+    bool inPersistence = false;
+    bool seenPersistence = false;
+    std::string line;
+    while (std::getline(in, line)) {
+        auto const trimmed = trim(stripComment(line));
+        if (trimmed.empty()) continue;
+        if (trimmed.front() == '[') {
+            inPersistence = trimmed == "[persistence]";
+            seenPersistence = seenPersistence || inPersistence;
+            continue;
+        }
+        if (!inPersistence) continue;
+
+        auto const eq = trimmed.find('=');
+        if (eq == std::string::npos) continue;
+        auto const key = trim(std::string_view(trimmed).substr(0, eq));
+        auto const value = unquote(trimmed.substr(eq + 1));
+        try {
+            if (key == "enable") {
+                cfg.enable = parseBool(value);
+            } else if (key == "path") {
+                cfg.path = value;
+            } else if (key == "max_rows") {
+                cfg.maxRows = std::stoi(value);
+            } else if (key == "backfill_batch") {
+                cfg.backfillBatch = std::stoi(value);
+            }
+        } catch (...) {
+            error = "persistence." + key + " has invalid value";
+            return std::nullopt;
+        }
+    }
+
+    if (!seenPersistence || !cfg.enable) return std::nullopt;
+    if (cfg.path.empty()) cfg.path = "field_gateway.db";
+    if (cfg.maxRows <= 0) {
+        error = "persistence.max_rows must be > 0";
+        return std::nullopt;
+    }
+    if (cfg.backfillBatch <= 0) {
+        error = "persistence.backfill_batch must be > 0";
+        return std::nullopt;
+    }
+    return cfg;
+}
+
 } // namespace
 
 GatewayAssembly::GatewayAssembly(gateway_asio::io_context& io)
@@ -297,9 +352,35 @@ bool GatewayAssembly::load(std::string const& tomlPath) {
         return false;
     }
 
+    std::string persistenceParseError;
+    m_persistenceConfig = parsePersistenceConfig(tomlPath, persistenceParseError);
+    if (!persistenceParseError.empty()) {
+        m_logger.logf(log::LogLevel::Error,
+                      "config",
+                      "persistence",
+                      persistenceParseError);
+        std::cerr << "persistence: " << persistenceParseError << '\n';
+        return false;
+    }
+
     wireFromSchema(*loaded);
     if (m_mqttConfig) {
         m_mqtt = std::make_unique<AsioMqttClient>(*m_io, *m_mqttConfig);
+        m_mqtt->setConnectedCallback([this] {
+            backfillPersistenceOnce();
+        });
+    }
+    if (m_persistenceConfig) {
+        m_persistence = std::make_unique<Persistence>();
+        std::string persistenceError;
+        if (!m_persistence->open(*m_persistenceConfig, persistenceError)) {
+            m_logger.logf(log::LogLevel::Error,
+                          "persistence",
+                          m_persistenceConfig->path,
+                          persistenceError);
+            std::cerr << "persistence: " << persistenceError << '\n';
+            return false;
+        }
     }
     m_logger.logf(log::LogLevel::Info, "gateway", "assembly", "loaded",
                   {{"transports", std::int64_t(loaded->transports.size())},
@@ -339,6 +420,7 @@ void GatewayAssembly::start() {
     for (auto& timer : m_sinkTimers) scheduleSink(timer);
     startMirrorPump();
     startMqttSnapshotPump();
+    startPersistenceBackfillPump();
     m_bus.publish(bus::CoreReady{});
 }
 
@@ -354,6 +436,7 @@ void GatewayAssembly::stop() {
     }
     if (m_mirrorTimer) m_mirrorTimer->cancel();
     if (m_mqttSnapshotTimer) m_mqttSnapshotTimer->cancel();
+    if (m_backfillTimer) m_backfillTimer->cancel();
     for (auto& poll : m_pollRanges) poll->stop();
     for (auto& sink : m_sinkWindows) sink->stop();
     for (auto& [id, transport] : m_transports) {
@@ -363,6 +446,7 @@ void GatewayAssembly::stop() {
     m_serverWriteSub.reset();
     m_mqttDpChangedSub.reset();
     if (m_mqtt) m_mqtt->stop();
+    if (m_persistence) m_persistence->close();
     m_bus.publish(bus::CoreStopping{});
     m_logger.flush();
 }
@@ -665,6 +749,27 @@ void GatewayAssembly::publishMqttDatapoint(std::string const& id,
                                            dp::Value const& value,
                                            dp::DpState state,
                                            dp::Timestamp timestamp) {
+    if (m_persistence && m_persistence->enabled()) {
+        std::string error;
+        auto rowId = m_persistence->insertTelemetry(id, value, state, timestamp, error);
+        if (!rowId) {
+            if (!error.empty()) {
+                m_logger.logf(log::LogLevel::Error, "persistence", id, error);
+            }
+            return;
+        }
+        if (m_mqtt && m_mqtt->connected() && m_mqttConfig) {
+            TelemetryRow row;
+            row.rowId = *rowId;
+            row.dpId = id;
+            row.valueJson = json::value(value);
+            row.quality = json::dpState(state);
+            row.ts = json::timestampMs(timestamp);
+            publishMqttRow(row);
+        }
+        return;
+    }
+
     if (!m_mqtt || !m_mqttConfig) return;
     auto topic = m_mqttConfig->topicPrefix + "/" + id;
     std::string payload = "{\"value\":";
@@ -676,11 +781,72 @@ void GatewayAssembly::publishMqttDatapoint(std::string const& id,
     m_mqtt->publish(std::move(topic), std::move(payload), m_mqttConfig->qos);
 }
 
+void GatewayAssembly::publishMqttRow(TelemetryRow const& row) {
+    if (!m_mqtt || !m_mqttConfig || !m_persistence) return;
+    if (!m_mqtt->connected()) return;
+
+    std::string topic = m_mqttConfig->topicPrefix + "/" + row.dpId;
+    std::string payload = "{\"value\":";
+    payload += row.valueJson;
+    payload += ",\"quality\":";
+    json::appendString(payload, row.quality);
+    payload += ",\"ts\":" + std::to_string(row.ts);
+    payload += "}";
+
+    auto const rowId = row.rowId;
+    m_mqtt->publishTracked(
+        std::move(topic),
+        std::move(payload),
+        m_mqttConfig->qos,
+        [this, rowId](bool ok) {
+            if (!ok || !m_persistence) return;
+            std::string error;
+            if (!m_persistence->markPublished(rowId, error) && !error.empty()) {
+                m_logger.logf(log::LogLevel::Error, "persistence", "mark", error);
+            }
+        });
+}
+
 void GatewayAssembly::publishMqttSnapshot() {
     if (!m_mqtt) return;
     for (auto const& dp : datapointSnapshots()) {
         publishMqttDatapoint(dp.id, dp.value, dp.state, dp.timestamp);
     }
+}
+
+void GatewayAssembly::backfillPersistenceOnce() {
+    if (!m_persistence || !m_persistence->enabled()
+        || !m_mqtt || !m_mqtt->connected()) {
+        return;
+    }
+
+    std::string error;
+    auto rows = m_persistence->pendingTelemetry(
+        m_persistence->config().backfillBatch,
+        error);
+    if (!error.empty()) {
+        m_logger.logf(log::LogLevel::Error, "persistence", "backfill", error);
+        return;
+    }
+    for (auto const& row : rows) {
+        publishMqttRow(row);
+    }
+    if (!m_persistence->prune(error) && !error.empty()) {
+        m_logger.logf(log::LogLevel::Warn, "persistence", "prune", error);
+    }
+}
+
+void GatewayAssembly::startPersistenceBackfillPump() {
+    if (!m_persistence || !m_persistence->enabled()) return;
+    if (!m_backfillTimer) {
+        m_backfillTimer = std::make_unique<gateway_asio::steady_timer>(*m_io);
+    }
+    m_backfillTimer->expires_after(std::chrono::milliseconds(500));
+    m_backfillTimer->async_wait([this](auto const& ec) {
+        if (ec || !m_started) return;
+        backfillPersistenceOnce();
+        startPersistenceBackfillPump();
+    });
 }
 
 void GatewayAssembly::startMqttSnapshotPump() {
