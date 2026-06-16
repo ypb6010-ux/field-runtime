@@ -6,6 +6,8 @@ log_level = "info"
 [control]
 listen_address = "127.0.0.1"
 listen_port = 15022
+# Empty auth_token keeps write commands disabled. Read-only status/live/help remain open.
+auth_token = "field-gateway-token"
 
 [northbound.mqtt]
 enable = true
@@ -95,6 +97,16 @@ type = "U16"
 port = "mock_plc"
 table = "HR"
 addr = 10
+
+[[datapoint]]
+id = "mock.writeback"
+kind = "Status"
+type = "U16"
+
+[datapoint.source]
+port = "mock_plc"
+table = "HR"
+addr = 11
 
 [[bridge]]
 server = "opbox"

@@ -4,10 +4,13 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <istream>
+#include <sstream>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "GatewayJson.h"
 
@@ -23,6 +26,71 @@ std::string trim(std::string_view s) {
         s.remove_suffix(1);
     }
     return std::string(s);
+}
+
+std::vector<std::string> splitWords(std::string const& s) {
+    std::istringstream in(s);
+    std::vector<std::string> out;
+    std::string word;
+    while (in >> word) out.push_back(word);
+    return out;
+}
+
+std::string lower(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return char(std::tolower(c));
+    });
+    return value;
+}
+
+std::string errorJson(std::string const& error) {
+    std::string out = "{\"error\":";
+    json::appendString(out, error);
+    out += "}";
+    return out;
+}
+
+std::string okJson() {
+    return "{\"ok\":true}";
+}
+
+bool parseInt(std::string const& text, int& out) {
+    try {
+        std::size_t used = 0;
+        out = std::stoi(text, &used, 0);
+        return used == text.size();
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parseU16(std::string const& text, std::uint16_t& out) {
+    int value = 0;
+    if (!parseInt(text, value)) return false;
+    if (value < 0 || value > 0xFFFF) return false;
+    out = std::uint16_t(value);
+    return true;
+}
+
+bool parseTable(std::string const& text, core::RegisterTable& table) {
+    auto const value = lower(text);
+    if (value == "hr" || value == "holdingregister" || value == "holdingregisters") {
+        table = core::RegisterTable::HoldingRegister;
+        return true;
+    }
+    if (value == "ir" || value == "inputregister" || value == "inputregisters") {
+        table = core::RegisterTable::InputRegister;
+        return true;
+    }
+    if (value == "coil" || value == "coils") {
+        table = core::RegisterTable::Coil;
+        return true;
+    }
+    if (value == "di" || value == "discreteinput" || value == "discreteinputs") {
+        table = core::RegisterTable::DiscreteInput;
+        return true;
+    }
+    return false;
 }
 
 std::string transportKindText(transport::TransportKind kind) {
@@ -143,29 +211,171 @@ void ControlSocket::startAccept() {
 
 void ControlSocket::handleClient(std::shared_ptr<TcpSocket> socket) {
     auto buffer = std::make_shared<gateway_asio::streambuf>();
+    auto authenticated = std::make_shared<bool>(false);
+    readCommand(std::move(socket), std::move(buffer), std::move(authenticated));
+}
+
+void ControlSocket::readCommand(std::shared_ptr<TcpSocket> socket,
+                                std::shared_ptr<gateway_asio::streambuf> buffer,
+                                std::shared_ptr<bool> authenticated) {
     gateway_asio::async_read_until(*socket, *buffer, '\n',
-        [this, socket, buffer](gateway_error_code const& ec, std::size_t) {
+        [this, socket, buffer, authenticated](gateway_error_code const& ec, std::size_t) {
             if (ec) return;
             std::istream is(buffer.get());
             std::string line;
             std::getline(is, line);
-            auto response = std::make_shared<std::string>(handleCommand(line));
-            response->push_back('\n');
-            gateway_asio::async_write(*socket, gateway_asio::buffer(*response),
-                [socket, response](gateway_error_code const&, std::size_t) {
-                    gateway_error_code ignored;
-                    socket->shutdown(gateway_asio::ip::tcp::socket::shutdown_both, ignored);
-                    socket->close(ignored);
+            handleCommand(line, *authenticated,
+                [this, socket, buffer, authenticated](std::string response) {
+                    writeResponse(socket, buffer, authenticated, std::move(response));
                 });
         });
 }
 
-std::string ControlSocket::handleCommand(std::string const& command) {
+void ControlSocket::writeResponse(std::shared_ptr<TcpSocket> socket,
+                                  std::shared_ptr<gateway_asio::streambuf> buffer,
+                                  std::shared_ptr<bool> authenticated,
+                                  std::string response) {
+    auto shared = std::make_shared<std::string>(std::move(response));
+    shared->push_back('\n');
+    gateway_asio::async_write(*socket, gateway_asio::buffer(*shared),
+        [this, socket, buffer, authenticated, shared](gateway_error_code const& ec,
+                                                      std::size_t) {
+            if (ec) return;
+            readCommand(socket, buffer, authenticated);
+        });
+}
+
+void ControlSocket::handleCommand(std::string const& command,
+                                  bool& authenticated,
+                                  std::function<void(std::string)> done) {
     auto const cmd = trim(command);
-    if (cmd == "status") return statusJson();
-    if (cmd == "live") return liveJson();
-    if (cmd == "help") return "{\"commands\":[\"status\",\"live\",\"help\"]}";
-    return "{\"error\":\"unknown command\"}";
+    auto const parts = splitWords(cmd);
+    if (parts.empty()) {
+        done(errorJson("empty command"));
+        return;
+    }
+
+    auto const verb = lower(parts.front());
+    if (verb == "status") {
+        done(statusJson());
+    } else if (verb == "live") {
+        done(liveJson());
+    } else if (verb == "help") {
+        done("{\"commands\":[\"status\",\"live\",\"help\",\"auth <token>\","
+             "\"forward <server> on|off\","
+             "\"write <transport> <table> <addr> <value> [value...]\"]}");
+    } else if (verb == "auth") {
+        done(handleAuth(parts, authenticated));
+    } else if (verb == "forward") {
+        done(handleForward(parts, authenticated));
+    } else if (verb == "write") {
+        handleWrite(parts, authenticated, std::move(done));
+    } else {
+        done(errorJson("unknown command"));
+    }
+}
+
+std::string ControlSocket::handleAuth(std::vector<std::string> const& parts,
+                                      bool& authenticated) const {
+    if (m_config.authToken.empty()) return errorJson("auth disabled");
+    if (parts.size() != 2) return errorJson("usage: auth <token>");
+    if (parts[1] != m_config.authToken) {
+        authenticated = false;
+        return errorJson("invalid token");
+    }
+    authenticated = true;
+    return okJson();
+}
+
+std::string ControlSocket::handleForward(std::vector<std::string> const& parts,
+                                         bool authenticated) {
+    if (!authenticated) return errorJson("unauthorized");
+    if (parts.size() != 3) return errorJson("usage: forward <server> on|off");
+    auto const& server = parts[1];
+    auto const state = lower(parts[2]);
+    if (state != "on" && state != "off") return errorJson("forward expects on|off");
+    if (!m_gateway->hasServerTransport(server)) return errorJson("unknown server");
+
+    bool const enabled = state == "on";
+    m_gateway->setServerForwardEnabled(server, enabled);
+
+    std::string out = "{\"ok\":true,\"server\":";
+    json::appendString(out, server);
+    out += ",\"forward\":";
+    out += enabled ? "true" : "false";
+    out += "}";
+    return out;
+}
+
+void ControlSocket::handleWrite(std::vector<std::string> const& parts,
+                                bool authenticated,
+                                std::function<void(std::string)> done) {
+    if (!authenticated) {
+        done(errorJson("unauthorized"));
+        return;
+    }
+    if (parts.size() < 5) {
+        done(errorJson("usage: write <transport> <table> <addr> <value> [value...]"));
+        return;
+    }
+
+    auto const& transportId = parts[1];
+    if (!m_gateway->hasTransport(transportId)) {
+        done(errorJson("unknown transport"));
+        return;
+    }
+
+    core::RegisterTable table = core::RegisterTable::HoldingRegister;
+    if (!parseTable(parts[2], table)) {
+        done(errorJson("unknown table"));
+        return;
+    }
+
+    int address = 0;
+    if (!parseInt(parts[3], address) || address < 0) {
+        done(errorJson("invalid address"));
+        return;
+    }
+
+    core::RegisterWords values;
+    values.reserve(parts.size() - 4);
+    for (std::size_t i = 4; i < parts.size(); i++) {
+        std::uint16_t value = 0;
+        if (!parseU16(parts[i], value)) {
+            done(errorJson("invalid register value"));
+            return;
+        }
+        values.push_back(value);
+    }
+
+    transport::WriteBatch batch;
+    batch.table = table;
+    batch.startAddress = address;
+    batch.values = std::move(values);
+    auto const count = batch.values.size();
+
+    if (!m_gateway->writeTransportAsync(
+            transportId,
+            std::move(batch),
+            [transportId, tableText = parts[2], address, count,
+             done = std::move(done)](transport::WriteResult result) mutable {
+                if (!result.ok) {
+                    done(errorJson(result.errorMessage.empty()
+                        ? "write failed"
+                        : result.errorMessage));
+                    return;
+                }
+                std::string out = "{\"ok\":true,\"transport\":";
+                json::appendString(out, transportId);
+                out += ",\"table\":";
+                json::appendString(out, tableText);
+                out += ",\"addr\":" + std::to_string(address);
+                out += ",\"count\":" + std::to_string(count);
+                out += "}";
+                done(std::move(out));
+            })) {
+        done(errorJson("unknown transport"));
+    }
 }
 
 std::string ControlSocket::statusJson() {

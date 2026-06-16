@@ -3,6 +3,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -31,6 +32,7 @@ namespace core::gateway {
 struct ControlConfig {
     std::string listenAddress = "127.0.0.1";
     int listenPort = 0;
+    std::string authToken;
 };
 
 struct GatewayTransportSnapshot {
@@ -60,6 +62,11 @@ public:
     std::optional<ControlConfig> controlConfig() const;
     std::vector<GatewayTransportSnapshot> transportSnapshots();
     std::vector<GatewayDatapointSnapshot> datapointSnapshots() const;
+    bool hasTransport(std::string const& transportId) const;
+    bool hasServerTransport(std::string const& transportId) const;
+    bool writeTransportAsync(std::string const& transportId,
+                             transport::WriteBatch batch,
+                             std::function<void(transport::WriteResult)> done);
 
     log::Logger& logger();
 

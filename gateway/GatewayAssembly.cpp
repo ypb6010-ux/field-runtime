@@ -149,6 +149,8 @@ std::optional<ControlConfig> parseControlConfig(std::string const& path,
                 error = "control.listen_port must be an integer";
                 return std::nullopt;
             }
+        } else if (key == "auth_token") {
+            cfg.authToken = value;
         }
     }
 
@@ -413,6 +415,49 @@ std::vector<GatewayDatapointSnapshot> GatewayAssembly::datapointSnapshots() cons
         });
     }
     return out;
+}
+
+bool GatewayAssembly::hasTransport(std::string const& transportId) const {
+    return m_transports.find(transportId) != m_transports.end();
+}
+
+bool GatewayAssembly::hasServerTransport(std::string const& transportId) const {
+    auto it = m_transports.find(transportId);
+    if (it == m_transports.end()) return false;
+    return it->second->kind() == transport::TransportKind::ModbusTcpServer;
+}
+
+bool GatewayAssembly::writeTransportAsync(
+    std::string const& transportId,
+    transport::WriteBatch batch,
+    std::function<void(transport::WriteResult)> done) {
+    auto it = m_transports.find(transportId);
+    if (it == m_transports.end()) return false;
+    auto* transport = it->second.get();
+
+    sched::RequestTag tag;
+    tag.moduleId = "control.write." + transportId;
+    tag.priority = sched::Priority::High;
+    tag.coalesce = false;
+
+    auto doneShared = std::make_shared<std::function<void(transport::WriteResult)>>(
+        std::move(done));
+    auto submit = transport->scheduler().submitAsync(
+        std::move(tag),
+        [transport, batch = std::move(batch), doneShared](
+            sched::AsyncDone schedulerDone) mutable {
+            transport->writeAsync(batch,
+                [schedulerDone = std::move(schedulerDone),
+                 doneShared](transport::WriteResult result) mutable {
+                    bool const ok = result.ok;
+                    if (*doneShared) (*doneShared)(std::move(result));
+                    schedulerDone(ok);
+                });
+        });
+    if (submit.kind != sched::ResultKind::Ok) {
+        if (*doneShared) (*doneShared)(transport::WriteResult{false, submit.errorMessage});
+    }
+    return true;
 }
 
 void GatewayAssembly::printSnapshot(std::size_t limit) const {

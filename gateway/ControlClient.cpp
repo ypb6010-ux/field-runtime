@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
-#include <array>
 #include <cstdlib>
 #include <iostream>
+#include <istream>
 #include <string>
 #include <vector>
 
@@ -10,35 +10,28 @@
 
 namespace {
 
-std::string request(std::string const& host,
-                    int port,
-                    std::string const& command) {
-    gateway_asio::io_context io;
-    gateway_asio::ip::tcp::resolver resolver(io);
-    gateway_error_code ec;
-    auto endpoints = resolver.resolve(host, std::to_string(port), ec);
-    if (ec) return "resolve failed: " + ec.message();
-
-    gateway_asio::ip::tcp::socket socket(io);
-    gateway_asio::connect(socket, endpoints, ec);
-    if (ec) return "connect failed: " + ec.message();
-
+bool sendCommand(gateway_asio::ip::tcp::socket& socket,
+                 gateway_asio::streambuf& responseBuffer,
+                 std::string const& command,
+                 std::string& response) {
     auto line = command + "\n";
+    gateway_error_code ec;
     gateway_asio::write(socket, gateway_asio::buffer(line), ec);
-    if (ec) return "write failed: " + ec.message();
+    if (ec) {
+        response = "write failed: " + ec.message();
+        return false;
+    }
 
-    std::string response;
-    std::array<char, 1024> buf{};
-    for (;;) {
-        auto n = socket.read_some(gateway_asio::buffer(buf), ec);
-        if (n > 0) response.append(buf.data(), n);
-        if (ec) break;
+    gateway_asio::read_until(socket, responseBuffer, '\n', ec);
+    if (ec) {
+        response = "read failed: " + ec.message();
+        return false;
     }
-    while (!response.empty()
-           && (response.back() == '\n' || response.back() == '\r')) {
-        response.pop_back();
-    }
-    return response;
+
+    std::istream is(&responseBuffer);
+    std::getline(is, response);
+    if (!response.empty() && response.back() == '\r') response.pop_back();
+    return true;
 }
 
 } // namespace
@@ -53,8 +46,29 @@ int main(int argc, char** argv) {
         commands = {"status", "live", "help"};
     }
 
+    gateway_asio::io_context io;
+    gateway_asio::ip::tcp::resolver resolver(io);
+    gateway_error_code ec;
+    auto endpoints = resolver.resolve(host, std::to_string(port), ec);
+    if (ec) {
+        std::cerr << "resolve failed: " << ec.message() << '\n';
+        return EXIT_FAILURE;
+    }
+
+    gateway_asio::ip::tcp::socket socket(io);
+    gateway_asio::connect(socket, endpoints, ec);
+    if (ec) {
+        std::cerr << "connect failed: " << ec.message() << '\n';
+        return EXIT_FAILURE;
+    }
+
+    gateway_asio::streambuf responseBuffer;
     for (auto const& command : commands) {
-        auto response = request(host, port, command);
+        std::string response;
+        if (!sendCommand(socket, responseBuffer, command, response)) {
+            std::cout << command << ' ' << response << '\n';
+            return EXIT_FAILURE;
+        }
         std::cout << command << " " << response << '\n';
     }
     return EXIT_SUCCESS;
