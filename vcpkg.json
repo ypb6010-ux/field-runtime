@@ -5,6 +5,7 @@
   "dependencies": [
     "async-simple",
     "asio",
+    "open62541",
     "sqlite3",
     "tomlplusplus"
   ]
