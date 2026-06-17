@@ -85,6 +85,10 @@ std::vector<std::uint8_t> handleRequest(std::vector<std::uint16_t>& holding,
 int main(int argc, char** argv) {
     auto const port = static_cast<unsigned short>(
         argc > 1 ? std::stoi(argv[1]) : 15020);
+    // "silent" mode accepts the TCP connection but never answers a request — a
+    // deaf PLC. Used to prove the gateway's per-request timeout keeps the io
+    // loop alive (control / MQTT keep responding) instead of freezing forever.
+    bool const silent = (argc > 2 && std::string(argv[2]) == "silent");
     gateway_asio::io_context io;
     gateway_asio::ip::tcp::acceptor acceptor(
         io,
@@ -95,8 +99,10 @@ int main(int argc, char** argv) {
     holding[1] = 1450;     // speed
     holding[2] = 0x5678;   // CDAB word order for 0x12345678
     holding[3] = 0x1234;
+    holding[4] = 2;        // run_state -> enum_u16 "fault"
 
-    std::cout << "mock Modbus TCP server listening on 127.0.0.1:" << port << std::endl;
+    std::cout << "mock Modbus TCP server listening on 127.0.0.1:" << port
+              << (silent ? " (silent)" : "") << std::endl;
     for (;;) {
         gateway_asio::ip::tcp::socket socket(io);
         gateway_error_code ec;
@@ -105,6 +111,7 @@ int main(int argc, char** argv) {
         for (;;) {
             auto request = readAdu(socket);
             if (request.empty()) break;
+            if (silent) continue;   // read and drop; never reply
             auto response = handleRequest(holding, request);
             if (response.empty()) break;
             gateway_asio::write(socket, gateway_asio::buffer(response), ec);

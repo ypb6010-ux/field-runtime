@@ -6,12 +6,14 @@
 #include <chrono>
 #include <cstdint>
 #include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <mutex>
 #include <optional>
 #include <sstream>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 
 #include "AsioModbusTcpClient.h"
@@ -21,6 +23,7 @@
 
 #include "core/bus/BusEvents.h"
 #include "core/codec/BuiltinCodecs.h"
+#include "core/codec/LuaCodec.h"
 #include "core/config/ConfigLoader.h"
 #include "core/dp/Datapoint.h"
 #include "core/dp/ScalarType.h"
@@ -336,6 +339,8 @@ bool GatewayAssembly::load(std::string const& tomlPath) {
         m_logger.setThreshold(log::levelFromString(loaded->meta.logLevel));
     }
 
+    m_configDir = std::filesystem::path(tomlPath).parent_path().string();
+
     std::string controlError;
     m_control = parseControlConfig(tomlPath, controlError);
     if (!controlError.empty()) {
@@ -562,11 +567,56 @@ void GatewayAssembly::printSnapshot(std::size_t limit) const {
 }
 
 void GatewayAssembly::wireFromSchema(config::ConfigSchema const& schema) {
+    registerCodecs(schema);
     buildTransports(schema);
     auto byId = buildDatapoints(schema);
     buildPollRanges(schema, byId);
     buildSinkWindows(schema);
     buildBridges(schema);
+}
+
+// Register the schema's `[[codec]]` entries (enum_u16 / lua) into m_codecs
+// BEFORE datapoints are built. Without this, buildDatapoints / wireBindings
+// look up the configured codec id, miss, and silently fall back to the builtin
+// scalar codec — so any configured enum/lua transform was being ignored.
+// Mirrors Core::registerCustomCodecs (Qt assembly). If the Base library was
+// built without Lua (CORE_BUILD_LUA=OFF) LuaCodec::fromFile returns nullptr and
+// we log, exactly like the Qt path.
+void GatewayAssembly::registerCodecs(config::ConfigSchema const& schema) {
+    for (auto const& cc : schema.codecs) {
+        if (cc.kind == "enum_u16") {
+            std::unordered_map<std::uint16_t, std::string> map;
+            for (auto const& [k, v] : cc.map) {
+                try {
+                    auto const raw = std::uint16_t(std::stoul(k));
+                    map.emplace(raw, dp::toString(v));
+                } catch (...) {
+                    // skip non-numeric enum keys
+                }
+            }
+            m_codecs.registerCodec(
+                std::make_shared<codec::EnumU16Codec>(cc.id, std::move(map)));
+        } else if (cc.kind == "lua") {
+            std::string script = cc.script;
+            std::filesystem::path scriptPath(script);
+            if (scriptPath.is_relative() && !m_configDir.empty()) {
+                script = (std::filesystem::path(m_configDir) / scriptPath).string();
+            }
+            std::string err;
+            auto lc = codec::LuaCodec::fromFile(cc.id, script, cc.arg, &err);
+            if (lc) {
+                m_codecs.registerCodec(std::move(lc));
+            } else {
+                m_logger.logf(log::LogLevel::Error, "config", script,
+                              err.empty()
+                                  ? std::string("lua codec load failed (CORE_BUILD_LUA?)")
+                                  : err);
+            }
+        } else {
+            m_logger.logf(log::LogLevel::Warn, "config", cc.id,
+                          "unknown codec kind '" + cc.kind + "'");
+        }
+    }
 }
 
 void GatewayAssembly::buildTransports(config::ConfigSchema const& schema) {
@@ -674,26 +724,10 @@ void GatewayAssembly::buildSinkWindows(config::ConfigSchema const& schema) {
 
 void GatewayAssembly::buildBridges(config::ConfigSchema const& schema) {
     m_bridges = schema.bridges;
-    m_bridgeMirrors.assign(m_bridges.size(), {});
     m_bridgeFwdSinks.assign(m_bridges.size(), nullptr);
 
-    auto allDps = m_datapoints.all();
     for (int i = 0; i < int(m_bridges.size()); i++) {
         auto const& bridge = m_bridges[size_t(i)];
-        auto& mirrors = m_bridgeMirrors[size_t(i)];
-        for (auto const& dp : allDps) {
-            auto const& src = dp->source();
-            if (!src.has_value()) continue;
-            if (src->transport != bridge.plc) continue;
-            if (src->table != core::RegisterTable::HoldingRegister) continue;
-            int const address = src->address;
-            if (address < bridge.mirrorStart
-                || address >= bridge.mirrorStart + bridge.mirrorCount) {
-                continue;
-            }
-            mirrors.emplace_back(address, dp);
-        }
-
         if (bridge.writeCount <= 0) continue;
         auto it = m_transports.find(bridge.plc);
         if (it == m_transports.end()) continue;
@@ -909,11 +943,16 @@ void GatewayAssembly::mirrorBridgesOnce() {
         if (it == m_transports.end()) continue;
         auto* server = it->second.get();
 
+        // Mirror the RAW holding-register words the PLC last returned — NOT the
+        // decoded engineering value. Decoding would corrupt the mirror: a
+        // scale=0.1 point reading raw 230 decodes to 23, and a U32 would lose
+        // its high word. The operator box reads these as raw registers.
         core::RegisterWords values(size_t(bridge.mirrorCount), 0);
-        for (auto const& [address, dp] : m_bridgeMirrors[size_t(i)]) {
-            int const idx = address - bridge.mirrorStart;
-            if (idx >= 0 && idx < bridge.mirrorCount) {
-                values[size_t(idx)] = std::uint16_t(dp::toUInt64(dp->value()));
+        auto plcIt = m_transports.find(bridge.plc);
+        if (plcIt != m_transports.end()) {
+            if (auto* client = dynamic_cast<AsioModbusTcpClient*>(plcIt->second.get())) {
+                values = client->snapshotHoldingRegisters(bridge.mirrorStart,
+                                                          bridge.mirrorCount);
             }
         }
 

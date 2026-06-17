@@ -84,6 +84,7 @@ private:
     using DpById = std::map<std::string, std::shared_ptr<dp::Datapoint>>;
 
     void wireFromSchema(config::ConfigSchema const& schema);
+    void registerCodecs(config::ConfigSchema const& schema);
     void buildTransports(config::ConfigSchema const& schema);
     DpById buildDatapoints(config::ConfigSchema const& schema);
     void buildPollRanges(config::ConfigSchema const& schema, DpById const& byId);
@@ -123,7 +124,6 @@ private:
     std::vector<PollTimer> m_pollTimers;
     std::vector<SinkTimer> m_sinkTimers;
     std::vector<config::BridgeConfig> m_bridges;
-    std::vector<std::vector<std::pair<int, std::shared_ptr<dp::Datapoint>>>> m_bridgeMirrors;
     std::vector<module::SinkWindow*> m_bridgeFwdSinks;
     std::unique_ptr<bus::Subscription> m_serverWriteSub;
     std::unique_ptr<bus::Subscription> m_mqttDpChangedSub;
@@ -137,6 +137,7 @@ private:
     std::optional<ControlConfig> m_control;
     std::optional<MqttNorthboundConfig> m_mqttConfig;
     std::optional<PersistenceConfig> m_persistenceConfig;
+    std::string m_configDir;
     bool m_started = false;
 };
 

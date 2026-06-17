@@ -25,12 +25,18 @@ path = "field_gateway.db"
 max_rows = 100000
 backfill_batch = 32
 
+[[codec]]
+id = "run_state"
+kind = "enum_u16"
+map = { "0" = "stopped", "1" = "running", "2" = "fault" }
+
 [[transport]]
 id = "mock_plc"
 kind = "modbus_tcp_client"
 host = "127.0.0.1"
 port = 15020
 slave_id = 1
+request_timeout_ms = 500
 
 [transport.scheduler]
 kind = "serial"
@@ -93,6 +99,17 @@ port = "mock_plc"
 table = "HR"
 addr = 2
 wordOrder = "CDAB"
+
+[[datapoint]]
+id = "mock.run_state"
+kind = "Status"
+type = "EnumU16"
+
+[datapoint.source]
+port = "mock_plc"
+table = "HR"
+addr = 4
+codec = "run_state"
 
 [[datapoint]]
 id = "mock.forward"

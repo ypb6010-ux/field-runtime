@@ -222,6 +222,213 @@ std::vector<std::uint8_t> AsioModbusTcpClient::transact(
     return response;
 }
 
+void AsioModbusTcpClient::readAsync(transport::ReadRequest const& req, ReadDone done) {
+    transport::ReadResult out;
+    out.startAddress = req.startAddress;
+    if (state() != transport::ConnectionState::Connected) {
+        out.errorMessage = "Modbus TCP client is not connected";
+        done(std::move(out));
+        return;
+    }
+    if (req.count <= 0 || req.count > 125 || req.startAddress < 0) {
+        out.errorMessage = "invalid Modbus read range";
+        done(std::move(out));
+        return;
+    }
+
+    std::string error;
+    auto const function = functionForRead(req.table, error);
+    if (!error.empty()) {
+        out.errorMessage = error;
+        done(std::move(out));
+        return;
+    }
+
+    auto const tx = nextTransactionId();
+    auto request = std::make_shared<std::vector<std::uint8_t>>(
+        nmbs::buildReadRequest(nmbs::ReadRequest{
+            tx,
+            std::uint8_t(m_cfg.slaveId),
+            function,
+            std::uint16_t(req.startAddress),
+            std::uint16_t(req.count)
+        }));
+
+    transactAsync(std::move(request),
+        [this, req, tx, function, done = std::move(done)](
+            std::vector<std::uint8_t> response, std::string err) mutable {
+            transport::ReadResult result;
+            result.startAddress = req.startAddress;
+            if (!err.empty()) {
+                result.errorMessage = std::move(err);
+                done(std::move(result));
+                return;
+            }
+            std::string parseError;
+            if (!nmbs::parseReadResponse(response, tx, function, result.values, parseError)) {
+                result.errorMessage = parseError;
+                done(std::move(result));
+                return;
+            }
+            result.ok = true;
+            if (req.table == core::RegisterTable::HoldingRegister) {
+                cacheHoldingRegisters(req.startAddress, result.values);
+            }
+            done(std::move(result));
+        });
+}
+
+void AsioModbusTcpClient::writeAsync(transport::WriteBatch const& batch, WriteDone done) {
+    if (state() != transport::ConnectionState::Connected) {
+        done({false, "Modbus TCP client is not connected"});
+        return;
+    }
+    if (batch.table != core::RegisterTable::HoldingRegister) {
+        done({false, "unsupported Modbus write table"});
+        return;
+    }
+    if (batch.startAddress < 0 || batch.values.empty() || batch.values.size() > 123) {
+        done({false, "invalid Modbus write range"});
+        return;
+    }
+
+    auto const tx = nextTransactionId();
+    auto request = std::make_shared<std::vector<std::uint8_t>>(
+        nmbs::buildWriteMultipleRegistersRequest(
+            nmbs::WriteMultipleRegistersRequest{
+                tx,
+                std::uint8_t(m_cfg.slaveId),
+                std::uint16_t(batch.startAddress),
+                batch.values
+            }));
+
+    auto const startAddress = std::uint16_t(batch.startAddress);
+    auto const count = std::uint16_t(batch.values.size());
+    transactAsync(std::move(request),
+        [tx, startAddress, count, done = std::move(done)](
+            std::vector<std::uint8_t> response, std::string err) mutable {
+            if (!err.empty()) {
+                done({false, std::move(err)});
+                return;
+            }
+            std::string parseError;
+            if (!nmbs::parseWriteMultipleRegistersResponse(
+                    response, tx, startAddress, count, parseError)) {
+                done({false, parseError});
+                return;
+            }
+            done({true, {}});
+        });
+}
+
+// Fully async request/response on the single gateway io thread: async_write →
+// async_read(header) → async_read(payload), bounded by a `requestTimeoutMs`
+// deadline timer. Whichever of the I/O chain or the deadline fires first wins
+// (guarded by `finished`); a timeout closes the socket so the next request
+// starts clean. No call ever blocks the io thread waiting on the device.
+void AsioModbusTcpClient::transactAsync(
+    std::shared_ptr<std::vector<std::uint8_t>> request,
+    TransactDone done) {
+    {
+        std::lock_guard lk(m_socketMtx);
+        if (!m_socket.is_open()) {
+            m_state.store(transport::ConnectionState::Disconnected, std::memory_order_release);
+            done({}, "Modbus TCP socket is closed");
+            return;
+        }
+    }
+
+    struct Txn {
+        std::shared_ptr<std::vector<std::uint8_t>> request;
+        std::array<std::uint8_t, 7> header{};
+        std::vector<std::uint8_t> response;
+        TransactDone done;
+        std::shared_ptr<gateway_asio::steady_timer> timer;
+        bool finished = false;
+    };
+
+    auto txn = std::make_shared<Txn>();
+    txn->request = std::move(request);
+    txn->done = std::move(done);
+    txn->timer = std::make_shared<gateway_asio::steady_timer>(*m_io);
+
+    auto finish = [this, txn](std::vector<std::uint8_t> response, std::string err) {
+        if (txn->finished) return;
+        txn->finished = true;
+        gateway_error_code ignored;
+        txn->timer->cancel(ignored);
+        if (!err.empty()) failSocketAsync(err);
+        txn->done(std::move(response), std::move(err));
+    };
+
+    auto const timeoutMs = m_cfg.requestTimeoutMs > 0 ? m_cfg.requestTimeoutMs : 1000;
+    txn->timer->expires_after(std::chrono::milliseconds(timeoutMs));
+    txn->timer->async_wait([finish](gateway_error_code const& ec) {
+        if (ec) return;  // cancelled by completion
+        finish({}, "Modbus TCP request timeout");
+    });
+
+    gateway_asio::async_write(m_socket, gateway_asio::buffer(*txn->request),
+        [this, txn, finish](gateway_error_code ec, std::size_t) {
+            if (txn->finished) return;
+            if (ec) {
+                finish({}, "Modbus TCP write failed: " + ec.message());
+                return;
+            }
+            gateway_asio::async_read(m_socket, gateway_asio::buffer(txn->header),
+                [this, txn, finish](gateway_error_code ec, std::size_t) {
+                    if (txn->finished) return;
+                    if (ec) {
+                        finish({}, "Modbus TCP read header failed: " + ec.message());
+                        return;
+                    }
+                    auto const length = std::uint16_t(
+                        (std::uint16_t(txn->header[4]) << 8) | txn->header[5]);
+                    if (length < 2 || length > 260) {
+                        finish({}, "invalid Modbus TCP response length");
+                        return;
+                    }
+                    txn->response.assign(txn->header.begin(), txn->header.end());
+                    txn->response.resize(6 + length);
+                    gateway_asio::async_read(m_socket,
+                        gateway_asio::buffer(txn->response.data() + 7, length - 1),
+                        [txn, finish](gateway_error_code ec, std::size_t) {
+                            if (txn->finished) return;
+                            if (ec) {
+                                finish({}, "Modbus TCP read payload failed: " + ec.message());
+                                return;
+                            }
+                            finish(std::move(txn->response), {});
+                        });
+                });
+        });
+}
+
+void AsioModbusTcpClient::failSocketAsync(std::string const&) {
+    std::lock_guard lk(m_socketMtx);
+    closeSocketLocked();
+    m_state.store(transport::ConnectionState::Error, std::memory_order_release);
+}
+
+void AsioModbusTcpClient::cacheHoldingRegisters(int startAddress,
+                                                core::RegisterWords const& values) {
+    std::lock_guard lk(m_cacheMtx);
+    for (std::size_t i = 0; i < values.size(); i++) {
+        m_hrCache[startAddress + int(i)] = values[i];
+    }
+}
+
+core::RegisterWords AsioModbusTcpClient::snapshotHoldingRegisters(int start, int count) const {
+    core::RegisterWords out(count > 0 ? std::size_t(count) : 0, 0);
+    if (count <= 0) return out;
+    std::lock_guard lk(m_cacheMtx);
+    for (int i = 0; i < count; i++) {
+        auto it = m_hrCache.find(start + i);
+        if (it != m_hrCache.end()) out[std::size_t(i)] = it->second;
+    }
+    return out;
+}
+
 std::uint16_t AsioModbusTcpClient::nextTransactionId() {
     auto next = m_transactionId.fetch_add(1, std::memory_order_acq_rel);
     if (next == 0) next = m_transactionId.fetch_add(1, std::memory_order_acq_rel);
