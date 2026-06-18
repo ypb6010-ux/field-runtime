@@ -132,6 +132,9 @@ endif()
 
 if(CORE_BUILD_GATEWAY)
     add_subdirectory(gateway)
+    # web_console example (Drogon backend + data simulation) — Qt-free, reuses
+    # the gateway transports/mocks. Built alongside the gateway.
+    add_subdirectory(examples/web_console)
 endif()
 
 # ---------------------------------------------------------------------------
