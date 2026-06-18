@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -45,6 +46,13 @@ public:
     void stop();
     bool running() const { return m_running.load(std::memory_order_acquire); }
 
+    // Validate a config (load into a throwaway assembly, no start). Static so it
+    // never touches the running runtime.
+    static bool validate(std::string const& tomlPath, std::string& error);
+    // Hot reload: validate -> stop current -> start new. Returns false (and keeps
+    // the old runtime stopped) only if the NEW config fails to start.
+    bool reload(std::string const& tomlPath);
+
     std::vector<DpSnap> datapoints() const;
     std::vector<TpSnap> transports() const;
 
@@ -58,7 +66,7 @@ private:
     void schedulePump();
 
     gateway_asio::io_context m_io;
-    gateway_asio::executor_work_guard<gateway_asio::io_context::executor_type> m_workGuard;
+    std::optional<gateway_asio::executor_work_guard<gateway_asio::io_context::executor_type>> m_workGuard;
     std::unique_ptr<core::gateway::GatewayAssembly> m_assembly;
     std::unique_ptr<gateway_asio::steady_timer> m_pumpTimer;
     std::thread m_thread;

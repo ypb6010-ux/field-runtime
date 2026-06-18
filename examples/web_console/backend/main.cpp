@@ -6,6 +6,7 @@
 // conversion controllers, the runtime host, WebSocket hub and RBAC.
 #include "Platform.h"
 
+#include "ConfigApply.h"
 #include "ConfigControllers.h"
 #include "DataControllers.h"
 #include "Envelope.h"
@@ -143,6 +144,7 @@ int main(int argc, char** argv) {
         }, {Get});
 
     wc::registerDataControllers(g_runtime);
+    wc::registerConfigApply(g_runtime, dbPath + ".runtime.toml");
 
     if (!g_runtime.start(WEB_CONSOLE_RUNTIME_TOML))
         std::cerr << "RuntimeHost: failed to load " << WEB_CONSOLE_RUNTIME_TOML << "\n";

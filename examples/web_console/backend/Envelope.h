@@ -55,6 +55,17 @@ inline Json::Value resultToArray(drogon::orm::Result const& r) {
     return arr;
 }
 
+// Parse a JSON string; returns objectValue (empty) on failure.
+inline Json::Value parseJsonOr(std::string const& s, Json::Value fallback = Json::Value(Json::objectValue)) {
+    if (s.empty()) return fallback;
+    Json::CharReaderBuilder b;
+    Json::Value out;
+    std::string errs;
+    auto reader = std::unique_ptr<Json::CharReader>(b.newCharReader());
+    if (reader->parse(s.data(), s.data() + s.size(), &out, &errs)) return out;
+    return fallback;
+}
+
 // core::dp::Value (variant) -> JSON, preserving the scalar type.
 inline Json::Value valueToJson(core::dp::Value const& v) {
     return std::visit([](auto const& x) -> Json::Value {

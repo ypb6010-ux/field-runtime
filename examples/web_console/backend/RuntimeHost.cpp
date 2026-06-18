@@ -43,8 +43,7 @@ std::string connStr(core::transport::ConnectionState s) {
 
 } // namespace
 
-RuntimeHost::RuntimeHost()
-    : m_workGuard(gateway_asio::make_work_guard(m_io)) {}
+RuntimeHost::RuntimeHost() = default;
 
 RuntimeHost::~RuntimeHost() {
     stop();
@@ -52,6 +51,9 @@ RuntimeHost::~RuntimeHost() {
 
 bool RuntimeHost::start(std::string const& tomlPath) {
     if (m_running.load()) return true;
+    if (m_thread.joinable()) m_thread.join();   // join a previous stopped thread
+    m_io.restart();                              // re-arm io_context for reuse
+    m_workGuard.emplace(m_io.get_executor());
     m_assembly = std::make_unique<core::gateway::GatewayAssembly>(m_io);
     if (!m_assembly->load(tomlPath)) {
         m_assembly.reset();
@@ -63,6 +65,23 @@ bool RuntimeHost::start(std::string const& tomlPath) {
     schedulePump();
     m_thread = std::thread([this] { m_io.run(); });
     return true;
+}
+
+bool RuntimeHost::validate(std::string const& tomlPath, std::string& error) {
+    gateway_asio::io_context tio;
+    auto tmp = std::make_unique<core::gateway::GatewayAssembly>(tio);
+    if (!tmp->load(tomlPath)) {
+        error = "config failed to load (see server log)";
+        return false;
+    }
+    return true;  // tmp destroyed here; never started
+}
+
+bool RuntimeHost::reload(std::string const& tomlPath) {
+    std::string err;
+    if (!validate(tomlPath, err)) return false;
+    stop();
+    return start(tomlPath);
 }
 
 void RuntimeHost::stop() {
