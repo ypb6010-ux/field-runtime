@@ -7,3 +7,4 @@ compile_commands.json
 .vscode/
 .vs/
 CMakeUserPresets.json
+examples/web_console/docs/_make_src/
