@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import type { AuthUser, PageKey, StatusTone } from "./types";
 import { canAccess, defaultPage } from "./nav";
 import { hasPermission } from "./auth";
+import { clearToken } from "./api";
 import { AppShell } from "./components/AppShell";
 import { Toaster } from "./components/ui/sonner";
 import { Login } from "./pages/Login";
@@ -152,6 +153,7 @@ export default function App() {
         onNavigate={setPage}
         onOpenProfile={() => toast.message(`${user.name} · 个人信息（演示）`)}
         onLogout={() => {
+          clearToken();
           setUser(null);
           setPage("dashboard");
         }}

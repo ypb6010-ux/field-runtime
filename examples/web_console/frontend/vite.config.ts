@@ -33,4 +33,12 @@ export default defineConfig({
 
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
+
+  // Dev: forward REST + WebSocket to the backend (web_console_backend :8080).
+  server: {
+    proxy: {
+      '/api': { target: 'http://127.0.0.1:8080', changeOrigin: true },
+      '/ws': { target: 'ws://127.0.0.1:8080', ws: true },
+    },
+  },
 })
