@@ -14,6 +14,10 @@ import { Datapoints } from "./pages/Datapoints";
 import { History } from "./pages/History";
 import { UsersRoles } from "./pages/UsersRoles";
 import { ApiDocs } from "./pages/ApiDocs";
+import { Polling } from "./pages/Polling";
+import { Conversion } from "./pages/Conversion";
+import { Logs } from "./pages/Logs";
+import { Settings } from "./pages/Settings";
 import { Placeholder } from "./pages/Placeholder";
 import { RoleNavigation } from "./pages/RoleNavigation";
 import { ButtonStates } from "./pages/ButtonStates";
@@ -50,6 +54,14 @@ function renderPage(
       return <UsersRoles canWrite={ctx.role === "admin"} />;
     case "apidocs":
       return <ApiDocs />;
+    case "polling":
+      return <Polling canWrite={ctx.role === "admin"} onDraftIncrement={ctx.onDraftIncrement} />;
+    case "conversion":
+      return <Conversion canWrite={ctx.role !== "viewer"} onDraftIncrement={ctx.onDraftIncrement} />;
+    case "logs":
+      return <Logs />;
+    case "settings":
+      return <Settings canWrite={ctx.role === "admin"} />;
     case "spec-roles":
       return <RoleNavigation />;
     case "spec-buttons":
