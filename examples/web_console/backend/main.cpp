@@ -7,6 +7,7 @@
 #include "Platform.h"
 
 #include "ConfigControllers.h"
+#include "DataControllers.h"
 #include "Envelope.h"
 #include "RuntimeHost.h"
 
@@ -140,8 +141,11 @@ int main(int argc, char** argv) {
             cb(ok(arr));
         }, {Get});
 
+    wc::registerDataControllers(g_runtime);
+
     if (!g_runtime.start(WEB_CONSOLE_RUNTIME_TOML))
         std::cerr << "RuntimeHost: failed to load " << WEB_CONSOLE_RUNTIME_TOML << "\n";
+    wc::startSampler(g_runtime);
 
     app().setDocumentRoot(wwwRoot);
     app().addListener("0.0.0.0", port);

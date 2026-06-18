@@ -44,6 +44,7 @@ find_package(unofficial-sqlite3 CONFIG REQUIRED)
 add_executable(web_console_backend
     backend/main.cpp
     backend/ConfigControllers.cpp
+    backend/DataControllers.cpp
     backend/RuntimeHost.cpp
 )
 set_target_properties(web_console_backend PROPERTIES AUTOMOC OFF)

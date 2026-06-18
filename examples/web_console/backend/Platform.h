@@ -6,6 +6,12 @@
 // drogon/orm/SqlBinder.h uses htonll/ntohll, which this MSVC SDK does not expose
 // in our translation units. Provide them (x64 host is little-endian).
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX            // keep windows.h from defining min/max macros
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <cstdlib>
