@@ -3,10 +3,30 @@ import { toast } from "sonner";
 import {
   RefreshCw, Zap, Pause, Play, Settings2, AlertCircle, RotateCcw,
 } from "lucide-react";
-import type { Datapoint, WsState } from "../live";
-import {
-  SEED_DATAPOINTS, STALE_THRESHOLD_S, simWsTick, readDatapoint,
-} from "../live";
+import type { Datapoint, WsState, DataType, Quality, Trend, DpStatus } from "../live";
+import { STALE_THRESHOLD_S } from "../live";
+import { apiGet, openStream, type WsSnapshot } from "../api";
+
+interface RawDp { id: string; value: unknown; quality: string; ts: number }
+
+/** 后端 /data/latest 或 WS snapshot 的一条 → 前端 Datapoint（保留已知元数据）。 */
+function toDatapoint(prev: Datapoint | undefined, s: RawDp): Datapoint {
+  const isNum = typeof s.value === "number";
+  const dataType: DataType = typeof s.value === "boolean" ? "boolean" : isNum ? "number" : "string";
+  const quality: Quality = s.quality === "Ok" || s.quality === "Good" ? "Good" : s.quality === "Bad" ? "Bad" : "Uncertain";
+  const value = s.value as number | boolean | string;
+  const prevVal = prev?.value;
+  const trend: Trend = isNum && typeof prevVal === "number" ? (value > prevVal ? "up" : value < prevVal ? "down" : "flat") : "flat";
+  const status: DpStatus = quality === "Bad" ? "error" : "normal";
+  return {
+    id: s.id, name: prev?.name ?? s.id, address: prev?.address ?? "—",
+    transportId: prev?.transportId ?? "", transportName: prev?.transportName ?? "运行时",
+    dataType, unit: prev?.unit ?? "", quality, status, value, prevValue: prevVal, trend,
+    timestamp: new Date(s.ts || Date.now()).toLocaleTimeString("zh-CN", { hour12: false }),
+    ageSeconds: 0, tags: prev?.tags ?? [],
+    justUpdated: prevVal !== undefined && prevVal !== value,
+  };
+}
 import type { Role } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { PermissionButton } from "../components/PermissionButton";
@@ -29,7 +49,7 @@ export function Live({ role }: LivePageProps) {
   const canControl = CAN_CONTROL.includes(role);
 
   /* ---- data ---- */
-  const [datapoints, setDatapoints] = useState<Datapoint[]>(SEED_DATAPOINTS);
+  const [datapoints, setDatapoints] = useState<Datapoint[]>([]);
   const [latestError, setLatestError] = useState(false);
   const [filters, setFilters] = useState<LiveFilters>(EMPTY_LIVE_FILTERS);
 
@@ -48,31 +68,45 @@ export function Live({ role }: LivePageProps) {
   const [lastUpdate, setLastUpdate] = useState("10:42:18");
   const [subErrDismissed, setSubErrDismissed] = useState(false);
 
-  /* ---- WS tick loop ---- */
-  useEffect(() => {
-    if (paused || wsState !== "connected") {
-      if (tickRef.current) clearInterval(tickRef.current);
-      return;
-    }
-    tickRef.current = setInterval(() => {
-      setDatapoints((prev) => simWsTick(prev));
-      setLastUpdate(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
-      setUpdateRate(280 + Math.floor(Math.random() * 80));
-    }, 2000);
-    return () => { if (tickRef.current) clearInterval(tickRef.current); };
-  }, [paused, wsState]);
+  /* ---- 实时数据：/data/latest 初始快照 + WS（dp/*）实时刷新 ---- */
+  const pausedRef = useRef(paused);
+  useEffect(() => { pausedRef.current = paused; }, [paused]);
 
-  /* ---- Simulate reconnecting cycle ---- */
-  useEffect(() => {
-    // 每 20s 模拟一次短暂重连 (2s → 恢复)
-    const id = setInterval(() => {
-      setWsState((prev) => {
-        if (prev !== "connected") return prev;
-        setTimeout(() => setWsState("connected"), 2200);
-        return "reconnecting";
+  async function refreshLatest() {
+    try {
+      const list = await apiGet<RawDp[]>("/data/latest");
+      setDatapoints((prev) => {
+        const map = new Map(prev.map((d) => [d.id, d] as const));
+        return list.map((s) => toDatapoint(map.get(s.id), s));
       });
-    }, 20000);
-    return () => clearInterval(id);
+      setLatestError(false);
+    } catch {
+      setLatestError(true);
+    }
+  }
+
+  useEffect(() => {
+    refreshLatest();
+    const ws = openStream((snap: WsSnapshot) => {
+      if (pausedRef.current) return;
+      const dps = (snap.datapoints ?? []) as RawDp[];
+      if (dps.length === 0) return;
+      setDatapoints((prev) => {
+        const map = new Map(prev.map((d) => [d.id, d] as const));
+        for (const s of dps) map.set(s.id, toDatapoint(map.get(s.id), s));
+        return [...map.values()];
+      });
+      setLastUpdate(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
+      setUpdateRate(dps.length);
+    });
+    ws.onopen = () => { setWsState("connected"); ws.send(JSON.stringify({ op: "subscribe", topics: ["dp/*", "transport/*"] })); };
+    ws.onclose = () => setWsState("reconnecting");
+    ws.onerror = () => setWsState("reconnecting");
+    tickRef.current = setInterval(
+      () => setDatapoints((prev) => prev.map((d) => ({ ...d, ageSeconds: d.ageSeconds + 1, justUpdated: false }))),
+      1000,
+    );
+    return () => { ws.close(); if (tickRef.current) clearInterval(tickRef.current); };
   }, []);
 
   /* ---- filter ---- */
@@ -99,15 +133,8 @@ export function Live({ role }: LivePageProps) {
   }
 
   async function handleReadNow(dp: Datapoint) {
-    const r = await readDatapoint(dp.id);
-    if (r.ok) {
-      setDatapoints((prev) => prev.map((d) =>
-        d.id === dp.id ? { ...d, value: r.value!, quality: r.quality!, timestamp: r.timestamp!, ageSeconds: 0, justUpdated: true } : d,
-      ));
-      toast.success(`${dp.name} 读取成功 · ${r.latencyMs}ms`);
-    } else {
-      toast.error(`${dp.name} 读取失败`, { description: r.message });
-    }
+    await refreshLatest();
+    toast.success(`已拉取最新值 · ${dp.name}`);
   }
 
   return (
@@ -119,7 +146,7 @@ export function Live({ role }: LivePageProps) {
         actions={
           <>
             <Button variant="ghost" size="sm" className="gap-1.5"
-              onClick={() => { setDatapoints(SEED_DATAPOINTS); setLatestError(false); toast.message("已刷新"); }}>
+              onClick={() => { refreshLatest(); toast.message("已刷新最新值"); }}>
               <RefreshCw className="size-3.5" />
               刷新最新值
             </Button>

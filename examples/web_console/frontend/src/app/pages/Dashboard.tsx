@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Activity,
   ArrowUpRight,
@@ -26,6 +26,7 @@ import { Card, CardContent, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Separator } from "../components/ui/separator";
+import { apiGet } from "../api";
 
 interface DashboardProps {
   role: Role;
@@ -44,14 +45,21 @@ interface Conn {
   pulse?: boolean;
 }
 
-const CONNECTIONS: Conn[] = [
-  { id: "c1", name: "车间 A · PLC-01", driver: "Modbus TCP", endpoint: "10.20.1.11:502", tone: "success", label: "已连接", points: 128 },
-  { id: "c2", name: "车间 A · PLC-02", driver: "Modbus TCP", endpoint: "10.20.1.12:502", tone: "success", label: "已连接", points: 96 },
-  { id: "c3", name: "能源站 · 电表网关", driver: "OPC UA", endpoint: "opc.tcp://10.20.2.5:4840", tone: "warning", label: "重连中", points: 64, pulse: true },
-  { id: "c4", name: "锅炉房 · 温控", driver: "MQTT", endpoint: "mqtt://10.20.3.8:1883", tone: "success", label: "已连接", points: 42 },
-  { id: "c5", name: "仓储 · RFID 读头", driver: "Modbus RTU", endpoint: "/dev/ttyS0", tone: "error", label: "断开", points: 0 },
-  { id: "c6", name: "产线 B · 视觉检测", driver: "OPC UA", endpoint: "opc.tcp://10.20.4.2:4840", tone: "disabled", label: "已禁用", points: 0 },
-];
+// 后端运行时状态 → 连接卡片
+const STATE_TONE: Record<string, { tone: StatusTone; label: string }> = {
+  connected: { tone: "success", label: "已连接" },
+  connecting: { tone: "warning", label: "连接中" },
+  error: { tone: "error", label: "错误" },
+  disconnected: { tone: "disabled", label: "未连接" },
+};
+const KIND_DRIVER: Record<string, string> = {
+  modbus_tcp_client: "Modbus TCP", modbus_rtu: "Modbus RTU",
+  opc_ua_client: "OPC UA", mqtt_client: "MQTT", s7_client: "S7",
+};
+function mapConn(t: { id: string; kind: string; state: string }): Conn {
+  const st = STATE_TONE[t.state] ?? { tone: "disabled" as StatusTone, label: t.state };
+  return { id: t.id, name: t.id, driver: KIND_DRIVER[t.kind] ?? t.kind, endpoint: "", tone: st.tone, label: st.label, points: 0, pulse: t.state === "connecting" };
+}
 
 type EventModule = "Connection" | "Config" | "Polling" | "System";
 
@@ -121,8 +129,28 @@ function Kpi({
 
 export function Dashboard({ role, draftCount, onNavigate }: DashboardProps) {
   const [inspect, setInspect] = useState<Conn | null>(null);
-  const online = CONNECTIONS.filter((c) => c.tone === "success").length;
-  const points = CONNECTIONS.reduce((s, c) => s + c.points, 0);
+  const [conns, setConns] = useState<Conn[]>([]);
+  const [points, setPoints] = useState(0);
+
+  async function load() {
+    try {
+      const [tps, dps] = await Promise.all([
+        apiGet<{ id: string; kind: string; state: string }[]>("/runtime/transports"),
+        apiGet<unknown[]>("/datapoints"),
+      ]);
+      setConns(tps.map(mapConn));
+      setPoints(dps.length);
+    } catch {
+      /* 保留上次数据 */
+    }
+  }
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  const online = conns.filter((c) => c.tone === "success").length;
   const showConfig = hasConfigAccess(role);
 
   return (
@@ -132,7 +160,7 @@ export function Dashboard({ role, draftCount, onNavigate }: DashboardProps) {
         en="Dashboard"
         description="采集网关运行总览 · 数据每 5 秒刷新"
         actions={
-          <Button variant="outline" size="sm" className="gap-1.5">
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={load}>
             <RefreshCw className="size-3.5" />
             刷新
           </Button>
@@ -142,7 +170,7 @@ export function Dashboard({ role, draftCount, onNavigate }: DashboardProps) {
       <div className="space-y-4 p-6">
         {/* KPI 行 */}
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <Kpi icon={Network} label="协议连接" value={`${online}/${CONNECTIONS.length}`} unit="在线" tone={online === CONNECTIONS.length ? "success" : "warning"} onClick={() => onNavigate("protocols")} />
+          <Kpi icon={Network} label="协议连接" value={`${online}/${conns.length}`} unit="在线" tone={conns.length > 0 && online === conns.length ? "success" : "warning"} onClick={() => onNavigate("protocols")} />
           <Kpi icon={Radar} label="活跃采集点" value={points} unit="点" delta="2.4%" onClick={() => onNavigate("datapoints")} />
           <Kpi icon={Timer} label="轮询任务" value="12" unit="运行中" tone="success" onClick={() => onNavigate("polling")} />
           {showConfig ? (
@@ -231,7 +259,8 @@ export function Dashboard({ role, draftCount, onNavigate }: DashboardProps) {
           </div>
           <CardContent>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {CONNECTIONS.map((c) => (
+              {conns.length === 0 && <div className="col-span-full py-6 text-center text-sm text-muted-foreground">暂无连接（运行时未配置或后端未启动）</div>}
+              {conns.map((c) => (
                 <button
                   key={c.id}
                   type="button"
