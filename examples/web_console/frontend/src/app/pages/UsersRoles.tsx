@@ -1,11 +1,18 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Plus, RefreshCw, Pencil, KeyRound, Trash2, ShieldAlert } from "lucide-react";
+import { AlertCircle, Loader2, Plus, RefreshCw, Pencil, KeyRound, Trash2, ShieldAlert } from "lucide-react";
+import { apiDelete, apiGet, apiPost, apiPut } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { PermissionButton } from "../components/PermissionButton";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
 import { Badge } from "../components/ui/badge";
 import { Checkbox } from "../components/ui/checkbox";
+import { Switch } from "../components/ui/switch";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "../components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -14,27 +21,123 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "../components/ui/dialog";
 
-interface User { id: string; username: string; name: string; role: string; enabled: boolean; lastLogin: string; createdAt: string; }
-const USERS: User[] = [
-  { id: "u1", username: "admin", name: "张工", role: "Admin 管理员", enabled: true, lastLogin: "2026-06-18 10:02", createdAt: "2026-01-04", },
-  { id: "u2", username: "operator", name: "李操", role: "Operator 操作员", enabled: true, lastLogin: "2026-06-18 08:31", createdAt: "2026-02-12", },
-  { id: "u3", username: "viewer", name: "王看", role: "Viewer 只读", enabled: true, lastLogin: "2026-06-17 19:44", createdAt: "2026-03-01", },
-  { id: "u4", username: "tempops", name: "临时账号", role: "Operator 操作员", enabled: false, lastLogin: "2026-05-20 14:10", createdAt: "2026-05-01", },
-];
+interface UserRow {
+  id: string;
+  username: string;
+  role_id: string;
+  enabled: string;
+  created_at: string;
+  last_login_at: string;
+}
 
-const ROLES = [
-  { id: "admin", name: "Admin 管理员", desc: "全系统配置与维护", users: 1, perms: 24, updatedAt: "2026-06-10" },
-  { id: "operator", name: "Operator 操作员", desc: "监控 + 控制写 + 转换管理", users: 2, perms: 12, updatedAt: "2026-06-08" },
-  { id: "viewer", name: "Viewer 只读", desc: "只读监控", users: 1, perms: 7, updatedAt: "2026-05-30" },
-];
+interface RoleRow {
+  id: string;
+  description: string;
+  perms: string;
+  users: string;
+  permissions: string[];
+}
+
+interface UserForm {
+  username: string;
+  role: string;
+  password: string;
+}
+
+interface EditForm {
+  id: string;
+  username: string;
+  role: string;
+  enabled: boolean;
+}
+
+const EMPTY_USER: UserForm = { username: "", role: "", password: "" };
 
 const MATRIX_ROWS = ["Dashboard", "Protocols", "Datapoints", "Polling", "Conversion", "Live", "History", "Config & Apply", "Settings", "Logs", "Users & Roles"];
 const MATRIX_COLS = ["View", "Create", "Edit", "Delete", "Apply", "Rollback", "Control", "Export"];
 const HIGH_RISK = new Set(["Apply", "Rollback", "Delete"]);
 
+const formatTime = (value: string) => {
+  if (!value) return "-";
+  return /^\d+$/.test(value) ? new Date(+value).toLocaleString() : value;
+};
+
 export function UsersRoles({ canWrite = true }: { canWrite?: boolean }) {
-  const [users, setUsers] = useState<User[]>(USERS);
-  const [del, setDel] = useState<User | null>(null);
+  const [users, setUsers] = useState<UserRow[]>([]);
+  const [roles, setRoles] = useState<RoleRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createForm, setCreateForm] = useState<UserForm>(EMPTY_USER);
+  const [editForm, setEditForm] = useState<EditForm | null>(null);
+  const [del, setDel] = useState<UserRow | null>(null);
+
+  async function load() {
+    setLoading(true);
+    setError(null);
+    try {
+      const [nextUsers, nextRoles] = await Promise.all([apiGet<UserRow[]>("/users"), apiGet<RoleRow[]>("/roles")]);
+      setUsers(nextUsers);
+      setRoles(nextRoles);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "加载失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  const roleName = (id: string) => {
+    const role = roles.find((r) => r.id === id);
+    return role ? `${role.id}${role.description ? ` ${role.description}` : ""}` : id;
+  };
+
+  const roleOptions = useMemo(() => roles.map((r) => r.id), [roles]);
+
+  function openCreate() {
+    setCreateForm({ ...EMPTY_USER, role: roles[0]?.id ?? "" });
+    setCreateOpen(true);
+  }
+
+  function openEdit(u: UserRow) {
+    setEditForm({ id: u.id, username: u.username, role: u.role_id, enabled: u.enabled === "1" });
+  }
+
+  async function createUser() {
+    try {
+      await apiPost("/users", createForm);
+      setCreateOpen(false);
+      toast.success("已新增用户");
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "新增失败");
+    }
+  }
+
+  async function saveUser() {
+    if (!editForm) return;
+    try {
+      await apiPut(`/users/${editForm.id}`, { role: editForm.role, enabled: editForm.enabled ? 1 : 0 });
+      setEditForm(null);
+      toast.success("已保存用户");
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "保存失败");
+    }
+  }
+
+  async function deleteUser() {
+    if (!del) return;
+    try {
+      await apiDelete(`/users/${del.id}`);
+      setDel(null);
+      toast.success("已删除用户");
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "删除失败");
+    }
+  }
 
   return (
     <>
@@ -44,9 +147,9 @@ export function UsersRoles({ canWrite = true }: { canWrite?: boolean }) {
         description="管理用户、角色和按钮级权限。"
         actions={
           <>
-            <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => toast.message("已刷新")}><RefreshCw className="size-3.5" />刷新</Button>
+            <Button variant="ghost" size="sm" className="gap-1.5" onClick={load}><RefreshCw className="size-3.5" />刷新</Button>
             <PermissionButton allowed={canWrite} onAction={() => toast.message("新增角色（演示）")} size="sm" variant="outline"><Plus className="size-3.5" />新增角色</PermissionButton>
-            <PermissionButton allowed={canWrite} onAction={() => toast.message("新增用户（演示）")} size="sm"><Plus className="size-3.5" />新增用户</PermissionButton>
+            <PermissionButton allowed={canWrite} onAction={openCreate} size="sm"><Plus className="size-3.5" />新增用户</PermissionButton>
           </>
         }
       />
@@ -61,63 +164,75 @@ export function UsersRoles({ canWrite = true }: { canWrite?: boolean }) {
 
           <TabsContent value="users" className="mt-4">
             <div className="rounded-md border border-border bg-card">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>用户名</TableHead><TableHead>显示名</TableHead><TableHead>角色</TableHead>
-                    <TableHead>状态</TableHead><TableHead>最近登录</TableHead><TableHead>创建时间</TableHead>
-                    <TableHead className="text-right">操作</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {users.map((u) => (
-                    <TableRow key={u.id}>
-                      <TableCell className="font-mono text-xs">{u.username}</TableCell>
-                      <TableCell className="font-medium">{u.name}</TableCell>
-                      <TableCell>{u.role}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={u.enabled ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-muted text-muted-foreground border-border"}>
-                          {u.enabled ? "启用" : "禁用"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{u.lastLogin}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{u.createdAt}</TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" className="size-7" title="编辑" disabled={!canWrite} onClick={() => toast.message(`编辑「${u.name}」`)}><Pencil className="size-3.5" /></Button>
-                          <Button variant="ghost" size="icon" className="size-7" title="重置密码" disabled={!canWrite} onClick={() => toast.message(`重置「${u.name}」密码`)}><KeyRound className="size-3.5" /></Button>
-                          <Button variant="ghost" size="icon" className="size-7 text-red-600" title="删除" disabled={!canWrite} onClick={() => setDel(u)}><Trash2 className="size-3.5" /></Button>
-                        </div>
-                      </TableCell>
+              {loading ? (
+                <LoadingState />
+              ) : error ? (
+                <ErrorState message={error} onRetry={load} />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>用户名</TableHead><TableHead>角色</TableHead>
+                      <TableHead>状态</TableHead><TableHead>最近登录</TableHead><TableHead>创建时间</TableHead>
+                      <TableHead className="text-right">操作</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {users.map((u) => (
+                      <TableRow key={u.id}>
+                        <TableCell className="font-mono text-xs">{u.username}</TableCell>
+                        <TableCell>{roleName(u.role_id)}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={u.enabled === "1" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-muted text-muted-foreground border-border"}>
+                            {u.enabled === "1" ? "启用" : "禁用"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{formatTime(u.last_login_at)}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{formatTime(u.created_at)}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            <Button variant="ghost" size="icon" className="size-7" title="编辑" disabled={!canWrite} onClick={() => openEdit(u)}><Pencil className="size-3.5" /></Button>
+                            <Button variant="ghost" size="icon" className="size-7" title="重置密码" disabled={!canWrite} onClick={() => toast.message(`重置「${u.username}」密码（演示）`)}><KeyRound className="size-3.5" /></Button>
+                            <Button variant="ghost" size="icon" className="size-7 text-red-600" title="删除" disabled={!canWrite} onClick={() => setDel(u)}><Trash2 className="size-3.5" /></Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {users.length === 0 && <TableRow><TableCell colSpan={6} className="h-24 text-center text-muted-foreground">暂无用户</TableCell></TableRow>}
+                  </TableBody>
+                </Table>
+              )}
             </div>
           </TabsContent>
 
           <TabsContent value="roles" className="mt-4">
             <div className="rounded-md border border-border bg-card">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>角色名称</TableHead><TableHead>描述</TableHead><TableHead>用户数</TableHead>
-                    <TableHead>权限数</TableHead><TableHead>更新时间</TableHead><TableHead className="text-right">操作</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {ROLES.map((r) => (
-                    <TableRow key={r.id}>
-                      <TableCell className="font-medium">{r.name}</TableCell>
-                      <TableCell className="text-muted-foreground">{r.desc}</TableCell>
-                      <TableCell>{r.users}</TableCell>
-                      <TableCell>{r.perms}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{r.updatedAt}</TableCell>
-                      <TableCell className="text-right"><Button variant="ghost" size="sm" disabled={!canWrite} onClick={() => toast.message(`编辑角色「${r.name}」`)}>编辑权限</Button></TableCell>
+              {loading ? (
+                <LoadingState />
+              ) : error ? (
+                <ErrorState message={error} onRetry={load} />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>角色名称</TableHead><TableHead>描述</TableHead><TableHead>用户数</TableHead>
+                      <TableHead>权限数</TableHead><TableHead className="text-right">操作</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {roles.map((r) => (
+                      <TableRow key={r.id}>
+                        <TableCell className="font-medium">{r.id}</TableCell>
+                        <TableCell className="text-muted-foreground">{r.description}</TableCell>
+                        <TableCell>{+r.users || 0}</TableCell>
+                        <TableCell>{+r.perms || r.permissions?.length || 0}</TableCell>
+                        <TableCell className="text-right"><Button variant="ghost" size="sm" disabled={!canWrite} onClick={() => toast.message(`编辑角色「${r.id}」（演示）`)}>编辑权限</Button></TableCell>
+                      </TableRow>
+                    ))}
+                    {roles.length === 0 && <TableRow><TableCell colSpan={5} className="h-24 text-center text-muted-foreground">暂无角色</TableCell></TableRow>}
+                  </TableBody>
+                </Table>
+              )}
             </div>
           </TabsContent>
 
@@ -153,18 +268,89 @@ export function UsersRoles({ canWrite = true }: { canWrite?: boolean }) {
         </Tabs>
       </div>
 
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>新增用户</DialogTitle>
+            <DialogDescription>创建后用户可按所选角色登录系统。</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Field label="用户名"><Input value={createForm.username} onChange={(e) => setCreateForm((f) => ({ ...f, username: e.target.value }))} /></Field>
+            <Field label="角色">
+              <Select value={createForm.role} onValueChange={(v) => setCreateForm((f) => ({ ...f, role: v }))}>
+                <SelectTrigger><SelectValue placeholder="选择角色" /></SelectTrigger>
+                <SelectContent>{roleOptions.map((r) => <SelectItem key={r} value={r}>{roleName(r)}</SelectItem>)}</SelectContent>
+              </Select>
+            </Field>
+            <Field label="初始密码"><Input type="password" value={createForm.password} onChange={(e) => setCreateForm((f) => ({ ...f, password: e.target.value }))} /></Field>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOpen(false)}>取消</Button>
+            <Button onClick={createUser} disabled={!createForm.username || !createForm.role || !createForm.password}>确认新增</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!editForm} onOpenChange={(o) => !o && setEditForm(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>编辑用户</DialogTitle>
+            <DialogDescription>修改用户「{editForm?.username}」的角色与启用状态。</DialogDescription>
+          </DialogHeader>
+          {editForm && (
+            <div className="space-y-3">
+              <Field label="角色">
+                <Select value={editForm.role} onValueChange={(v) => setEditForm((f) => f ? { ...f, role: v } : f)}>
+                  <SelectTrigger><SelectValue placeholder="选择角色" /></SelectTrigger>
+                  <SelectContent>{roleOptions.map((r) => <SelectItem key={r} value={r}>{roleName(r)}</SelectItem>)}</SelectContent>
+                </Select>
+              </Field>
+              <Field label="启用"><Switch checked={editForm.enabled} onCheckedChange={(v) => setEditForm((f) => f ? { ...f, enabled: v } : f)} /></Field>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditForm(null)}>取消</Button>
+            <Button onClick={saveUser} disabled={!editForm?.role}>保存</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!del} onOpenChange={(o) => !o && setDel(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>确认删除用户？</DialogTitle>
-            <DialogDescription>删除后用户「{del?.name}」将无法登录，该操作会写入审计日志。</DialogDescription>
+            <DialogDescription>删除后用户「{del?.username}」将无法登录，该操作会写入审计日志。</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDel(null)}>取消</Button>
-            <Button variant="destructive" onClick={() => { setUsers((p) => p.filter((x) => x.id !== del?.id)); setDel(null); toast.success("已删除用户"); }}>确认删除</Button>
+            <Button variant="destructive" onClick={deleteUser}>确认删除</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function LoadingState() {
+  return <div className="flex items-center justify-center gap-2 py-20 text-muted-foreground"><Loader2 className="size-4 animate-spin" />加载中…</div>;
+}
+
+function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="flex flex-col items-center gap-3 py-16 text-center">
+      <AlertCircle className="size-7 text-red-500" />
+      <div className="text-sm font-medium">加载失败</div>
+      <div className="text-sm text-muted-foreground">{message}</div>
+      <Button variant="outline" size="sm" onClick={onRetry}>重试</Button>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[96px_1fr] items-center gap-3">
+      <Label className="text-sm text-muted-foreground">{label}</Label>
+      <div>{children}</div>
+    </div>
   );
 }
