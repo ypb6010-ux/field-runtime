@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { apiGet, apiPost } from "../api";
 import { CheckCircle2, FileJson2, GitCompareArrows, History, RefreshCw, RotateCcw, ShieldCheck, Trash2, UploadCloud } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Button } from "../components/ui/button";
@@ -60,6 +61,45 @@ export function ConfigApply() {
   const canApply = confirmText === "APPLY";
   const json = useMemo(() => JSON.stringify({ activeVersion: "v37", draftVersion: "v38", selectedDiff: selected, validation: { status: "Passed", checkedItems: 128, warnings: 1, errors: 0 } }, null, 2), [selected]);
 
+  // ---- 真后端 /config/* ----
+  interface Ver { version: string; status: string; note: string; applied_at: string; created_at: string }
+  const [versionList, setVersionList] = useState<Ver[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  async function loadVersions() {
+    try { setVersionList(await apiGet<Ver[]>("/config/versions")); } catch { /* 忽略 */ }
+  }
+  useEffect(() => { loadVersions(); }, []);
+
+  async function doValidate() {
+    setBusy(true);
+    try {
+      const r = await apiPost<{ valid: boolean; error?: string }>("/config/validate");
+      if (r.valid) toast.success("校验通过，可以发布");
+      else toast.error("校验失败", { description: r.error });
+    } catch (e) { toast.error(e instanceof Error ? e.message : "校验失败"); }
+    finally { setBusy(false); }
+  }
+  async function doApply() {
+    setBusy(true);
+    try {
+      await apiPost("/config/apply");
+      setApplyOpen(false); setConfirmText("");
+      toast.success("已发布，运行时已热重载生效");
+      loadVersions();
+    } catch (e) { toast.error(e instanceof Error ? e.message : "发布失败"); }
+    finally { setBusy(false); }
+  }
+  async function doRollback(v: string) {
+    try {
+      await apiPost(`/config/versions/${v}/rollback`);
+      setRollback(null);
+      toast.success(`已回滚到 ${v} 并重载`);
+      loadVersions();
+    } catch (e) { toast.error(e instanceof Error ? e.message : "回滚失败"); }
+  }
+  const fmt = (s: string) => (s && /^\d+$/.test(s) ? new Date(+s * 1000).toLocaleString("zh-CN", { hour12: false }) : s || "—");
+
   return (
     <>
       <PageHeader
@@ -69,7 +109,7 @@ export function ConfigApply() {
         actions={
           <>
             <Button variant="outline" size="sm" onClick={() => toast.message("配置状态已刷新") }><RefreshCw className="size-4" />刷新</Button>
-            <Button variant="outline" size="sm" onClick={() => toast.success("Validate passed：128 checked, 1 warning") }><ShieldCheck className="size-4" />Validate 校验</Button>
+            <Button variant="outline" size="sm" disabled={busy} onClick={doValidate}><ShieldCheck className="size-4" />Validate 校验</Button>
             <Button variant="destructive" size="sm" onClick={() => setApplyOpen(true)}><UploadCloud className="size-4" />Apply 发布</Button>
             <Button variant="outline" size="sm" onClick={() => toast.warning("草稿丢弃为高风险操作，此处为演示") }><Trash2 className="size-4" />丢弃草稿</Button>
             <Button variant="ghost" size="sm"><History className="size-4" />查看审计日志</Button>
@@ -129,13 +169,13 @@ export function ConfigApply() {
 
         <section className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
           <Card><CardHeader className="pb-3"><CardTitle className="text-sm">Validate Panel</CardTitle></CardHeader><CardContent><div className="flex items-center gap-2 text-sm font-medium text-green-700"><CheckCircle2 className="size-4" />校验通过，可以发布</div><div className="mt-2 font-mono text-xs text-muted-foreground">checked items: 128 · warnings: 1 · errors: 0</div><div className="mt-4 grid gap-2">{["Schema 校验", "引用完整性校验", "协议连接依赖校验", "权限与安全校验"].map((s, i) => <div key={s} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm"><span>{i + 1}. {s}</span><Badge variant="outline" className="border-status-success-border bg-status-success-bg text-green-700">Passed</Badge></div>)}</div></CardContent></Card>
-          <Card><CardHeader className="pb-3"><CardTitle className="text-sm">Version History</CardTitle></CardHeader><CardContent className="p-0"><Table><TableHeader><TableRow><TableHead>版本号</TableHead><TableHead>发布时间</TableHead><TableHead>发布人</TableHead><TableHead>变更摘要</TableHead><TableHead>校验结果</TableHead><TableHead>运行状态</TableHead><TableHead>操作</TableHead></TableRow></TableHeader><TableBody>{versions.map((v) => <TableRow key={v.version}><TableCell className="font-mono font-semibold">{v.version}</TableCell><TableCell className="font-mono text-xs">{v.time}</TableCell><TableCell>{v.user}</TableCell><TableCell>{v.summary}</TableCell><TableCell><Badge variant="outline" className="border-status-success-border bg-status-success-bg text-green-700">{v.result}</Badge></TableCell><TableCell>{v.runtime}</TableCell><TableCell><Button variant="link" size="sm" className="px-1">查看 Diff</Button><Button variant="link" size="sm" className="px-1 text-destructive" onClick={() => setRollback(v.version)}>回滚到此版本</Button></TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
+          <Card><CardHeader className="pb-3"><CardTitle className="text-sm">Version History</CardTitle></CardHeader><CardContent className="p-0"><Table><TableHeader><TableRow><TableHead>版本号</TableHead><TableHead>发布时间</TableHead><TableHead>发布人</TableHead><TableHead>变更摘要</TableHead><TableHead>校验结果</TableHead><TableHead>运行状态</TableHead><TableHead>操作</TableHead></TableRow></TableHeader><TableBody>{versionList.length === 0 ? <TableRow><TableCell colSpan={7} className="h-16 text-center text-muted-foreground">暂无已发布版本</TableCell></TableRow> : versionList.map((v) => <TableRow key={v.version}><TableCell className="font-mono font-semibold">v{v.version}</TableCell><TableCell className="font-mono text-xs">{fmt(v.applied_at)}</TableCell><TableCell>—</TableCell><TableCell>{v.note}</TableCell><TableCell><Badge variant="outline" className="border-status-success-border bg-status-success-bg text-green-700">Passed</Badge></TableCell><TableCell>{v.status === "active" ? "Active" : v.status === "superseded" ? "Archived" : v.status}</TableCell><TableCell><Button variant="link" size="sm" className="px-1 text-destructive" disabled={v.status === "active"} onClick={() => setRollback(v.version)}>回滚到此版本</Button></TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
         </section>
       </main>
 
-      <Dialog open={applyOpen} onOpenChange={setApplyOpen}><DialogContent><DialogHeader><DialogTitle>确认发布草稿配置？</DialogTitle><DialogDescription>此操作会将 draft config 发布为新的运行配置，后端会再次执行权限与版本校验。</DialogDescription></DialogHeader><div className="grid gap-2 rounded-md border bg-muted/30 p-3 text-sm"><div>当前版本：v37</div><div>新版本：v38</div><div>差异：3 项</div><div>影响对象：1 transport, 1 datapoint, 1 conversion rule</div><div>校验状态：Passed</div><div>操作者：张工</div></div><Input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder="请输入 APPLY 以确认发布" className="font-mono" /><DialogFooter><Button variant="outline" onClick={() => setApplyOpen(false)}>取消</Button><Button variant="destructive" disabled={!canApply} onClick={() => { setApplyOpen(false); setConfirmText(""); toast.success("发布任务已提交：v38"); }}>确认发布</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={applyOpen} onOpenChange={setApplyOpen}><DialogContent><DialogHeader><DialogTitle>确认发布草稿配置？</DialogTitle><DialogDescription>此操作会将 draft config 发布为新的运行配置，后端会再次执行权限与版本校验。</DialogDescription></DialogHeader><div className="grid gap-2 rounded-md border bg-muted/30 p-3 text-sm"><div>当前版本：v37</div><div>新版本：v38</div><div>差异：3 项</div><div>影响对象：1 transport, 1 datapoint, 1 conversion rule</div><div>校验状态：Passed</div><div>操作者：张工</div></div><Input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder="请输入 APPLY 以确认发布" className="font-mono" /><DialogFooter><Button variant="outline" onClick={() => setApplyOpen(false)}>取消</Button><Button variant="destructive" disabled={!canApply || busy} onClick={doApply}>确认发布</Button></DialogFooter></DialogContent></Dialog>
 
-      <Dialog open={!!rollback} onOpenChange={(o) => !o && setRollback(null)}><DialogContent><DialogHeader><DialogTitle>确认回滚到版本 {rollback}？</DialogTitle><DialogDescription>回滚会创建一个新的 draft config，仍需 Validate 和 Apply 后才会生效。</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" onClick={() => setRollback(null)}>取消</Button><Button onClick={() => { toast.message(`已基于 ${rollback} 创建回滚草稿`); setRollback(null); }}><RotateCcw className="size-4" />创建回滚草稿</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={!!rollback} onOpenChange={(o) => !o && setRollback(null)}><DialogContent><DialogHeader><DialogTitle>确认回滚到版本 {rollback}？</DialogTitle><DialogDescription>回滚会创建一个新的 draft config，仍需 Validate 和 Apply 后才会生效。</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" onClick={() => setRollback(null)}>取消</Button><Button onClick={() => rollback && doRollback(rollback)}><RotateCcw className="size-4" />确认回滚并重载</Button></DialogFooter></DialogContent></Dialog>
     </>
   );
 }
