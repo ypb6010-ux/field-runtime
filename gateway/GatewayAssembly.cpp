@@ -16,6 +16,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include "AsioModbusRtuClient.h"
 #include "AsioModbusTcpClient.h"
 #include "AsioModbusTcpServer.h"
 #include "AsioOpcUaClient.h"
@@ -627,6 +628,8 @@ void GatewayAssembly::buildTransports(config::ConfigSchema const& schema) {
             transport = std::make_unique<AsioModbusTcpClient>(tc, *m_io);
         } else if (tc.kind == transport::TransportKind::ModbusTcpServer) {
             transport = std::make_unique<AsioModbusTcpServer>(tc, *m_io, m_bus);
+        } else if (tc.kind == transport::TransportKind::ModbusRtu) {
+            transport = std::make_unique<AsioModbusRtuClient>(tc, *m_io);
         } else if (tc.kind == transport::TransportKind::OpcUaClient) {
             transport = std::make_unique<AsioOpcUaClient>(tc, *m_io);
         } else {

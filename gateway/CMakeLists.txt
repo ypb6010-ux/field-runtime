@@ -16,6 +16,7 @@ endif()
 
 add_executable(field_gateway
     main.cpp
+    AsioModbusRtuClient.cpp
     AsioModbusTcpClient.cpp
     AsioModbusTcpServer.cpp
     AsioMqttClient.cpp
@@ -118,6 +119,37 @@ else()
     target_compile_options(field_gateway_opcua_mock_server PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_executable(field_gateway_rtu_selftest
+    RtuFramingSelfTest.cpp
+)
+set_target_properties(field_gateway_rtu_selftest PROPERTIES AUTOMOC OFF)
+target_link_libraries(field_gateway_rtu_selftest PRIVATE gateway_nanomodbus)
+if(MSVC)
+    target_compile_options(field_gateway_rtu_selftest PRIVATE /W4 /permissive- /utf-8 /EHsc)
+else()
+    target_compile_options(field_gateway_rtu_selftest PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_executable(field_gateway_rtu_mock_slave
+    RtuMockSlave.cpp
+)
+set_target_properties(field_gateway_rtu_mock_slave PROPERTIES AUTOMOC OFF)
+target_compile_definitions(field_gateway_rtu_mock_slave PRIVATE _WIN32_WINNT=0x0601)
+target_link_libraries(field_gateway_rtu_mock_slave
+    PRIVATE
+        gateway_nanomodbus
+        asio
+)
+target_include_directories(field_gateway_rtu_mock_slave
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+if(MSVC)
+    target_compile_options(field_gateway_rtu_mock_slave PRIVATE /W4 /permissive- /utf-8 /EHsc)
+else()
+    target_compile_options(field_gateway_rtu_mock_slave PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_executable(field_gateway_opbox_client
     OpboxClient.cpp
 )
@@ -179,6 +211,7 @@ endif()
 install(TARGETS field_gateway RUNTIME DESTINATION bin)
 install(TARGETS field_gateway_mock_server RUNTIME DESTINATION bin)
 install(TARGETS field_gateway_opcua_mock_server RUNTIME DESTINATION bin)
+install(TARGETS field_gateway_rtu_mock_slave RUNTIME DESTINATION bin)
 install(TARGETS field_gateway_opbox_client RUNTIME DESTINATION bin)
 install(TARGETS field_gateway_control_client RUNTIME DESTINATION bin)
 install(TARGETS field_gateway_mqtt_mock_broker RUNTIME DESTINATION bin)

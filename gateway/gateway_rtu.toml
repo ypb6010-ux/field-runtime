@@ -1,0 +1,70 @@
+[meta]
+project = "field_gateway_rtu_mock"
+version = "0.1"
+log_level = "info"
+
+[control]
+listen_address = "127.0.0.1"
+listen_port = 15033
+
+[[codec]]
+id = "run_state"
+kind = "enum_u16"
+map = { "0" = "stopped", "1" = "running", "2" = "fault" }
+
+[[transport]]
+id = "rtu1"
+kind = "modbus_rtu"
+# Gateway end of the virtual serial pair. The e2e script points socat's link
+# here; on Windows replace with a com0com COM port (e.g. "COM21").
+port_name = "/tmp/ttyRTU_gw"
+baud_rate = 19200
+data_bits = 8
+stop_bits = 1
+parity = "none"
+slave_id = 1
+request_timeout_ms = 1000
+
+[transport.scheduler]
+kind = "credit"
+max_inflight = 1
+max_queue_depth = 64
+
+[[poll_range]]
+module_id = "poll_rtu"
+transport = "rtu1"
+table = "HR"
+range = [0, 3]
+period_ms = 300
+
+[[datapoint]]
+id = "rtu.temperature"
+kind = "Status"
+type = "U16"
+
+[datapoint.source]
+port = "rtu1"
+table = "HR"
+addr = 0
+scale = 0.1
+
+[[datapoint]]
+id = "rtu.speed"
+kind = "Status"
+type = "U16"
+
+[datapoint.source]
+port = "rtu1"
+table = "HR"
+addr = 1
+
+[[datapoint]]
+id = "rtu.run_state"
+kind = "Status"
+type = "EnumU16"
+
+[datapoint.source]
+port = "rtu1"
+table = "HR"
+addr = 2
+codec = "run_state"
