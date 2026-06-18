@@ -193,6 +193,7 @@ TransportConfig parseTransport(toml::table const& t,
     // S7
     c.rack           = getInt(t, "rack", 0);
     c.slot           = getInt(t, "slot", 1);
+    c.s7Db           = getInt(t, "db", 1);
     // Common
     c.reconnectIntervalMs = getInt(t, "reconnect_interval_ms", 15000);
     c.connectTimeoutMs    = getInt(t, "connect_timeout_ms",    3000);

@@ -6,6 +6,7 @@
     "async-simple",
     "asio",
     "open62541",
+    "snap7",
     "sqlite3",
     "tomlplusplus"
   ]

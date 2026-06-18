@@ -21,6 +21,7 @@ add_executable(field_gateway
     AsioModbusTcpServer.cpp
     AsioMqttClient.cpp
     AsioOpcUaClient.cpp
+    AsioS7Client.cpp
     ControlSocket.cpp
     GatewayAssembly.cpp
     GatewayJson.cpp
@@ -63,6 +64,7 @@ endif()
 
 find_package(SQLite3 REQUIRED)
 find_package(open62541 CONFIG REQUIRED)
+find_package(snap7 CONFIG REQUIRED)
 
 target_link_libraries(field_gateway
     PRIVATE
@@ -71,6 +73,7 @@ target_link_libraries(field_gateway
         asio
         SQLite::SQLite3
         open62541::open62541
+        snap7::snap7
 )
 
 target_include_directories(field_gateway
@@ -117,6 +120,18 @@ if(MSVC)
     target_compile_options(field_gateway_opcua_mock_server PRIVATE /W4 /permissive- /utf-8 /EHsc)
 else()
     target_compile_options(field_gateway_opcua_mock_server PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_executable(field_gateway_s7_mock_server
+    S7MockServer.cpp
+)
+set_target_properties(field_gateway_s7_mock_server PROPERTIES AUTOMOC OFF)
+target_compile_definitions(field_gateway_s7_mock_server PRIVATE _WIN32_WINNT=0x0601)
+target_link_libraries(field_gateway_s7_mock_server PRIVATE snap7::snap7)
+if(MSVC)
+    target_compile_options(field_gateway_s7_mock_server PRIVATE /W4 /permissive- /utf-8 /EHsc)
+else()
+    target_compile_options(field_gateway_s7_mock_server PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 add_executable(field_gateway_rtu_selftest
@@ -211,6 +226,7 @@ endif()
 install(TARGETS field_gateway RUNTIME DESTINATION bin)
 install(TARGETS field_gateway_mock_server RUNTIME DESTINATION bin)
 install(TARGETS field_gateway_opcua_mock_server RUNTIME DESTINATION bin)
+install(TARGETS field_gateway_s7_mock_server RUNTIME DESTINATION bin)
 install(TARGETS field_gateway_rtu_mock_slave RUNTIME DESTINATION bin)
 install(TARGETS field_gateway_opbox_client RUNTIME DESTINATION bin)
 install(TARGETS field_gateway_control_client RUNTIME DESTINATION bin)

@@ -65,6 +65,7 @@ struct TransportConfig {
     // ─── s7_client ──────────────────────────────────────────────────
     int                        rack = 0;
     int                        slot = 1;
+    int                        s7Db = 1;     // default DB number for HR-mapped reads/writes
     // ─── common ─────────────────────────────────────────────────────
     int                        reconnectIntervalMs = 15000;
     int                        connectTimeoutMs    = 3000;
