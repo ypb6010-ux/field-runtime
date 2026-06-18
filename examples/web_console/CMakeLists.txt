@@ -48,6 +48,7 @@ add_executable(web_console_backend
     backend/ConfigApply.cpp
     backend/ConversionEngine.cpp
     backend/DataControllers.cpp
+    backend/DocsControllers.cpp
     backend/WsControllers.cpp
     backend/RuntimeHost.cpp
 )
@@ -57,6 +58,7 @@ target_compile_definitions(web_console_backend PRIVATE
     WEB_CONSOLE_SCHEMA="${CMAKE_CURRENT_SOURCE_DIR}/backend/db/schema.sql"
     WEB_CONSOLE_WWW="${CMAKE_CURRENT_SOURCE_DIR}/www"
     WEB_CONSOLE_RUNTIME_TOML="${CMAKE_CURRENT_SOURCE_DIR}/backend/runtime.toml"
+    WEB_CONSOLE_OPENAPI="${CMAKE_CURRENT_SOURCE_DIR}/docs/openapi.yaml"
 )
 target_link_libraries(web_console_backend PRIVATE
     Drogon::Drogon

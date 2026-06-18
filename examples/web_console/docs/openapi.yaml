@@ -1,0 +1,99 @@
+openapi: 3.0.3
+info:
+  title: FieldRuntime Console API
+  version: "0.1"
+  description: >
+    Web console for the FieldRuntime runtime. Unified envelope:
+    `{ "code":0, "message":"ok", "data":... }` (code != 0 on error).
+    Auth: `Authorization: Bearer <token>` from POST /auth/login.
+servers:
+  - url: /api/v1
+tags:
+  - name: system
+  - name: auth
+  - name: transports
+  - name: datapoints
+  - name: conversions
+  - name: data
+  - name: config
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+security: [{ bearer: [] }]
+paths:
+  /system/health:
+    get: { tags: [system], summary: Liveness + db/runtime status, security: [], responses: { "200": { description: ok } } }
+  /system/info:
+    get: { tags: [system], summary: Build info + compiled protocols, responses: { "200": { description: ok } } }
+  /system/events:
+    get: { tags: [system], summary: Event/audit log (paged), parameters: [ { name: level, in: query, schema: { type: string } }, { name: page, in: query, schema: { type: integer } }, { name: size, in: query, schema: { type: integer } } ], responses: { "200": { description: ok } } }
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Login -> bearer token + user{role,permissions}
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { username: {type: string}, password: {type: string} } } } } }
+      responses: { "200": { description: ok }, "401": { description: bad credentials } }
+  /auth/me:
+    get: { tags: [auth], summary: Current user + permissions, responses: { "200": { description: ok } } }
+  /auth/logout:
+    post: { tags: [auth], summary: Invalidate token, responses: { "200": { description: ok } } }
+  /transports/kinds:
+    get: { tags: [transports], summary: Supported protocol kinds + param JSON schema, responses: { "200": { description: ok } } }
+  /transports:
+    get: { tags: [transports], summary: List transports, responses: { "200": { description: ok } } }
+    post: { tags: [transports], summary: Create transport (draft), responses: { "200": { description: ok } } }
+  /transports/{id}:
+    get: { tags: [transports], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+    put: { tags: [transports], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+    delete: { tags: [transports], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+  /datapoints:
+    get: { tags: [datapoints], summary: List datapoints, responses: { "200": { description: ok } } }
+    post: { tags: [datapoints], summary: Create datapoint, responses: { "200": { description: ok } } }
+  /datapoints/{id}:
+    put: { tags: [datapoints], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+    delete: { tags: [datapoints], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+  /codecs:
+    get: { tags: [datapoints], responses: { "200": { description: ok } } }
+    post: { tags: [datapoints], responses: { "200": { description: ok } } }
+  /poll_ranges:
+    get: { tags: [datapoints], responses: { "200": { description: ok } } }
+    post: { tags: [datapoints], responses: { "200": { description: ok } } }
+  /conversions:
+    get: { tags: [conversions], summary: List conversion rules, responses: { "200": { description: ok } } }
+    post: { tags: [conversions], summary: Create rule {id,source,dest,transform}, responses: { "200": { description: ok } } }
+  /conversions/{id}:
+    delete: { tags: [conversions], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+  /conversions/{id}/enable:
+    post: { tags: [conversions], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+  /conversions/{id}/disable:
+    post: { tags: [conversions], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+  /conversions/{id}/stats:
+    get: { tags: [conversions], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+  /data/latest:
+    get: { tags: [data], summary: Latest value of all live datapoints, responses: { "200": { description: ok } } }
+  /data/points/{id}:
+    get: { tags: [data], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+  /data/history:
+    get:
+      tags: [data]
+      summary: Paged history of a datapoint
+      parameters:
+        - { name: id, in: query, required: true, schema: { type: string } }
+        - { name: from, in: query, schema: { type: integer } }
+        - { name: to, in: query, schema: { type: integer } }
+        - { name: page, in: query, schema: { type: integer } }
+        - { name: size, in: query, schema: { type: integer } }
+      responses: { "200": { description: ok } }
+  /data/write:
+    post: { tags: [data], summary: "Control write { transport, addr, values[] }", responses: { "200": { description: ok } } }
+  /runtime/transports:
+    get: { tags: [data], summary: Runtime transport connection states, responses: { "200": { description: ok } } }
+  /config/validate:
+    post: { tags: [config], summary: Validate DB config (dry-run), responses: { "200": { description: ok } } }
+  /config/apply:
+    post: { tags: [config], summary: Apply DB config to the runtime (hot reload), responses: { "200": { description: ok } } }
+  /config/versions:
+    get: { tags: [config], summary: Config version history, responses: { "200": { description: ok } } }
+  /config/versions/{v}/rollback:
+    post: { tags: [config], parameters: [ { name: v, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }

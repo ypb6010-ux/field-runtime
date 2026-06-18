@@ -11,6 +11,7 @@
 #include "ConfigControllers.h"
 #include "ConversionEngine.h"
 #include "DataControllers.h"
+#include "DocsControllers.h"
 #include "Envelope.h"
 #include "RuntimeHost.h"
 #include "WsControllers.h"
@@ -21,6 +22,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
 
 #include <drogon/drogon.h>
 
@@ -109,6 +111,7 @@ int main(int argc, char** argv) {
         {Get});
 
     wc::registerAuth();
+    wc::registerDocs();
     wc::registerConfigControllers();
 
     // ── E 数据: live values from the embedded RuntimeHost ──
@@ -149,8 +152,13 @@ int main(int argc, char** argv) {
     wc::registerDataControllers(g_runtime);
     wc::registerConfigApply(g_runtime, dbPath + ".runtime.toml");
 
-    if (!g_runtime.start(WEB_CONSOLE_RUNTIME_TOML))
-        std::cerr << "RuntimeHost: failed to load " << WEB_CONSOLE_RUNTIME_TOML << "\n";
+    // Start the runtime off the main thread: device connects (OPC/S7) can block
+    // for seconds when a device is down, which would otherwise delay the HTTP
+    // listener. The pumps tolerate an empty snapshot until the runtime is up.
+    std::thread([] {
+        if (!g_runtime.start(WEB_CONSOLE_RUNTIME_TOML))
+            std::cerr << "RuntimeHost: failed to load " << WEB_CONSOLE_RUNTIME_TOML << "\n";
+    }).detach();
     wc::registerConversionControllers();
     wc::startSampler(g_runtime);
     wc::startWsPump(g_runtime);
