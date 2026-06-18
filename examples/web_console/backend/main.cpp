@@ -8,6 +8,7 @@
 
 #include "ConfigApply.h"
 #include "ConfigControllers.h"
+#include "ConversionEngine.h"
 #include "DataControllers.h"
 #include "Envelope.h"
 #include "RuntimeHost.h"
@@ -148,8 +149,10 @@ int main(int argc, char** argv) {
 
     if (!g_runtime.start(WEB_CONSOLE_RUNTIME_TOML))
         std::cerr << "RuntimeHost: failed to load " << WEB_CONSOLE_RUNTIME_TOML << "\n";
+    wc::registerConversionControllers();
     wc::startSampler(g_runtime);
     wc::startWsPump(g_runtime);
+    wc::startConversionEngine(g_runtime);
 
     app().setDocumentRoot(wwwRoot);
     app().addListener("0.0.0.0", port);
