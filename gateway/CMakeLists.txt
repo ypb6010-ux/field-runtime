@@ -14,24 +14,6 @@ else()
     target_compile_options(gateway_nanomodbus PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-add_executable(field_gateway
-    main.cpp
-    AsioModbusRtuClient.cpp
-    AsioModbusTcpClient.cpp
-    AsioModbusTcpServer.cpp
-    AsioMqttClient.cpp
-    AsioOpcUaClient.cpp
-    AsioS7Client.cpp
-    ControlSocket.cpp
-    GatewayAssembly.cpp
-    GatewayJson.cpp
-    Persistence.cpp
-    StubTransport.cpp
-)
-
-set_target_properties(field_gateway PROPERTIES AUTOMOC OFF)
-target_compile_definitions(field_gateway PRIVATE _WIN32_WINNT=0x0601 _CRT_SECURE_NO_WARNINGS)
-
 find_package(asio CONFIG QUIET)
 if(TARGET asio::asio)
     if(NOT TARGET asio)
@@ -66,21 +48,51 @@ find_package(SQLite3 REQUIRED)
 find_package(open62541 CONFIG REQUIRED)
 find_package(snap7 CONFIG REQUIRED)
 
-target_link_libraries(field_gateway
-    PRIVATE
-        FieldRuntime::Base
-        gateway_nanomodbus
-        asio
-        SQLite::SQLite3
-        open62541::open62541
-        snap7::snap7
-)
+# Promote imported targets to GLOBAL so a sibling subdirectory
+# (examples/web_console) can consume them transitively via field_gateway_core.
+foreach(_t SQLite::SQLite3 open62541::open62541 snap7::snap7)
+    if(TARGET ${_t})
+        set_target_properties(${_t} PROPERTIES IMPORTED_GLOBAL TRUE)
+    endif()
+endforeach()
 
-target_include_directories(field_gateway
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
+# ── Reusable runtime library: transports + assembly + control/persistence
+#    (everything the gateway exe is, minus main.cpp). The web_console backend
+#    embeds this to host a FieldRuntime runtime in-process. ──
+add_library(field_gateway_core STATIC
+    AsioModbusRtuClient.cpp
+    AsioModbusTcpClient.cpp
+    AsioModbusTcpServer.cpp
+    AsioMqttClient.cpp
+    AsioOpcUaClient.cpp
+    AsioS7Client.cpp
+    ControlSocket.cpp
+    GatewayAssembly.cpp
+    GatewayJson.cpp
+    Persistence.cpp
+    StubTransport.cpp
 )
+set_target_properties(field_gateway_core PROPERTIES AUTOMOC OFF)
+target_compile_definitions(field_gateway_core PRIVATE _WIN32_WINNT=0x0601 _CRT_SECURE_NO_WARNINGS)
+target_include_directories(field_gateway_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(field_gateway_core PUBLIC
+    FieldRuntime::Base
+    gateway_nanomodbus
+    asio
+    SQLite::SQLite3
+    open62541::open62541
+    snap7::snap7
+)
+if(MSVC)
+    target_compile_options(field_gateway_core PRIVATE /W4 /permissive- /utf-8 /EHsc)
+else()
+    target_compile_options(field_gateway_core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
+add_executable(field_gateway main.cpp)
+set_target_properties(field_gateway PROPERTIES AUTOMOC OFF)
+target_compile_definitions(field_gateway PRIVATE _WIN32_WINNT=0x0601 _CRT_SECURE_NO_WARNINGS)
+target_link_libraries(field_gateway PRIVATE field_gateway_core)
 if(MSVC)
     target_compile_options(field_gateway PRIVATE /W4 /permissive- /utf-8 /EHsc)
 else()

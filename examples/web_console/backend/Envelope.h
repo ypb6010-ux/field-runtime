@@ -5,11 +5,15 @@
 #include "Platform.h"
 
 #include <string>
+#include <type_traits>
+#include <variant>
 
 #include <drogon/drogon.h>
 #include <drogon/orm/Result.h>
 #include <drogon/orm/Row.h>
 #include <drogon/orm/Field.h>
+
+#include "core/dp/Value.h"
 
 namespace wc {
 
@@ -49,6 +53,20 @@ inline Json::Value resultToArray(drogon::orm::Result const& r) {
     Json::Value arr(Json::arrayValue);
     for (auto const& row : r) arr.append(rowToJson(row));
     return arr;
+}
+
+// core::dp::Value (variant) -> JSON, preserving the scalar type.
+inline Json::Value valueToJson(core::dp::Value const& v) {
+    return std::visit([](auto const& x) -> Json::Value {
+        using T = std::decay_t<decltype(x)>;
+        if constexpr (std::is_same_v<T, std::monostate>)        return Json::Value(Json::nullValue);
+        else if constexpr (std::is_same_v<T, bool>)             return Json::Value(x);
+        else if constexpr (std::is_same_v<T, std::string>)      return Json::Value(x);
+        else if constexpr (std::is_same_v<T, double>)           return Json::Value(x);
+        else if constexpr (std::is_same_v<T, std::int64_t>)     return Json::Value(Json::Int64(x));
+        else if constexpr (std::is_same_v<T, std::uint64_t>)    return Json::Value(Json::UInt64(x));
+        else                                                    return Json::Value(Json::nullValue);
+    }, v);
 }
 
 // Serialize a JSON value to a compact string for storage in a *_json column.

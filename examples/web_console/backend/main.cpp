@@ -8,6 +8,7 @@
 
 #include "ConfigControllers.h"
 #include "Envelope.h"
+#include "RuntimeHost.h"
 
 #include <chrono>
 #include <cstdint>
@@ -21,6 +22,7 @@
 namespace {
 
 std::chrono::steady_clock::time_point g_start;
+wc::RuntimeHost g_runtime;
 
 std::string readFile(std::string const& path) {
     std::ifstream f(path, std::ios::binary);
@@ -103,10 +105,49 @@ int main(int argc, char** argv) {
 
     wc::registerConfigControllers();
 
+    // ── E 数据: live values from the embedded RuntimeHost ──
+    app().registerHandler("/api/v1/data/latest",
+        [](HttpRequestPtr const&, std::function<void(HttpResponsePtr const&)>&& cb) {
+            Json::Value arr(Json::arrayValue);
+            for (auto const& d : g_runtime.datapoints()) {
+                Json::Value o;
+                o["id"] = d.id; o["value"] = wc::valueToJson(d.value);
+                o["quality"] = d.state; o["ts"] = Json::Int64(d.ts);
+                arr.append(o);
+            }
+            cb(ok(arr));
+        }, {Get});
+
+    app().registerHandler("/api/v1/data/points/{id}",
+        [](HttpRequestPtr const&, std::function<void(HttpResponsePtr const&)>&& cb, std::string id) {
+            for (auto const& d : g_runtime.datapoints()) {
+                if (d.id != id) continue;
+                Json::Value o;
+                o["id"] = d.id; o["value"] = wc::valueToJson(d.value);
+                o["quality"] = d.state; o["ts"] = Json::Int64(d.ts);
+                cb(ok(o)); return;
+            }
+            cb(wc::fail(1404, "datapoint not found", k404NotFound));
+        }, {Get});
+
+    app().registerHandler("/api/v1/runtime/transports",
+        [](HttpRequestPtr const&, std::function<void(HttpResponsePtr const&)>&& cb) {
+            Json::Value arr(Json::arrayValue);
+            for (auto const& t : g_runtime.transports()) {
+                Json::Value o; o["id"] = t.id; o["kind"] = t.kind; o["state"] = t.state;
+                arr.append(o);
+            }
+            cb(ok(arr));
+        }, {Get});
+
+    if (!g_runtime.start(WEB_CONSOLE_RUNTIME_TOML))
+        std::cerr << "RuntimeHost: failed to load " << WEB_CONSOLE_RUNTIME_TOML << "\n";
+
     app().setDocumentRoot(wwwRoot);
     app().addListener("0.0.0.0", port);
     std::cout << "web_console backend on http://0.0.0.0:" << port
               << " (db=" << dbPath << ", www=" << wwwRoot << ")" << std::endl;
     app().run();
+    g_runtime.stop();
     return EXIT_SUCCESS;
 }

@@ -44,22 +44,24 @@ find_package(unofficial-sqlite3 CONFIG REQUIRED)
 add_executable(web_console_backend
     backend/main.cpp
     backend/ConfigControllers.cpp
+    backend/RuntimeHost.cpp
 )
 set_target_properties(web_console_backend PROPERTIES AUTOMOC OFF)
 target_compile_definitions(web_console_backend PRIVATE
     _WIN32_WINNT=0x0601
     WEB_CONSOLE_SCHEMA="${CMAKE_CURRENT_SOURCE_DIR}/backend/db/schema.sql"
     WEB_CONSOLE_WWW="${CMAKE_CURRENT_SOURCE_DIR}/www"
+    WEB_CONSOLE_RUNTIME_TOML="${CMAKE_CURRENT_SOURCE_DIR}/backend/runtime.toml"
 )
 target_link_libraries(web_console_backend PRIVATE
     Drogon::Drogon
     unofficial::sqlite3::sqlite3
+    field_gateway_core
 )
 if(MSVC)
-    # /Zc:twoPhase- : drogon headers use htonll as a non-dependent name in a
-    # template; strict two-phase lookup under /std:c++latest rejects it even
-    # though winsock2.h declares it at the instantiation point.
-    target_compile_options(web_console_backend PRIVATE /utf-8 /EHsc /Zc:twoPhase-)
+    # htonll is provided by backend/Platform.h before any drogon header, so no
+    # /Zc:twoPhase- needed (that flag breaks asio's executor templates).
+    target_compile_options(web_console_backend PRIVATE /utf-8 /EHsc)
 endif()
 
 install(TARGETS web_console_backend RUNTIME DESTINATION bin)

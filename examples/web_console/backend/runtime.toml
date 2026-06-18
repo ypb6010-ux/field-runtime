@@ -1,0 +1,137 @@
+# Default runtime wiring for the web_console RuntimeHost: pulls live data from
+# field_console_dataservice (Modbus :1502 / S7 :102 / OPC UA :4840). In W6 this
+# is regenerated from the DB config on "apply".
+[meta]
+project = "web_console_runtime"
+log_level = "warn"
+
+[[codec]]
+id = "run_state"
+kind = "enum_u16"
+map = { "0" = "stopped", "1" = "running", "2" = "fault" }
+
+# ── Modbus TCP face ──
+[[transport]]
+id = "sim_modbus"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+port = 1502
+slave_id = 1
+request_timeout_ms = 1000
+[transport.scheduler]
+kind = "credit"
+max_inflight = 1
+
+[[poll_range]]
+module_id = "poll_modbus"
+transport = "sim_modbus"
+table = "HR"
+range = [0, 8]
+period_ms = 300
+
+# ── S7 face ──
+[[transport]]
+id = "sim_s7"
+kind = "s7_client"
+host = "127.0.0.1"
+rack = 0
+slot = 1
+db = 1
+request_timeout_ms = 1000
+[transport.scheduler]
+kind = "credit"
+max_inflight = 1
+
+[[poll_range]]
+module_id = "poll_s7"
+transport = "sim_s7"
+table = "HR"
+range = [0, 5]
+period_ms = 300
+
+# ── OPC UA face ──
+[[transport]]
+id = "sim_opc"
+kind = "opc_ua_client"
+endpoint_url = "opc.tcp://127.0.0.1:4840"
+node_id_template = "ns=2;s=Sim_%1"
+connect_timeout_ms = 4000
+request_timeout_ms = 1000
+[transport.scheduler]
+kind = "credit"
+max_inflight = 4
+
+[[poll_range]]
+module_id = "poll_opc"
+transport = "sim_opc"
+table = "HR"
+range = [0, 3]
+period_ms = 300
+
+# ── Datapoints (cross-protocol) ──
+[[datapoint]]
+id = "sim.temperature"
+kind = "Status"
+type = "S16"
+[datapoint.source]
+port = "sim_modbus"
+table = "HR"
+addr = 0
+scale = 0.1
+
+[[datapoint]]
+id = "sim.pressure"
+kind = "Status"
+type = "U16"
+[datapoint.source]
+port = "sim_modbus"
+table = "HR"
+addr = 1
+
+[[datapoint]]
+id = "sim.run_state"
+kind = "Status"
+type = "EnumU16"
+[datapoint.source]
+port = "sim_modbus"
+table = "HR"
+addr = 4
+codec = "run_state"
+
+[[datapoint]]
+id = "s7.motor_temp"
+kind = "Status"
+type = "S16"
+[datapoint.source]
+port = "sim_s7"
+table = "HR"
+addr = 0
+scale = 0.1
+
+[[datapoint]]
+id = "s7.cycle"
+kind = "Status"
+type = "U32"
+[datapoint.source]
+port = "sim_s7"
+table = "HR"
+addr = 3
+wordOrder = "ABCD"
+
+[[datapoint]]
+id = "opc.level"
+kind = "Status"
+type = "U16"
+[datapoint.source]
+port = "sim_opc"
+table = "HR"
+addr = 0
+
+[[datapoint]]
+id = "opc.speed"
+kind = "Status"
+type = "U16"
+[datapoint.source]
+port = "sim_opc"
+table = "HR"
+addr = 1
