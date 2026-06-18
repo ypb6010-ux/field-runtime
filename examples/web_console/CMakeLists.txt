@@ -43,6 +43,7 @@ find_package(unofficial-sqlite3 CONFIG REQUIRED)
 
 add_executable(web_console_backend
     backend/main.cpp
+    backend/AuthControllers.cpp
     backend/ConfigControllers.cpp
     backend/ConfigApply.cpp
     backend/ConversionEngine.cpp

@@ -6,6 +6,7 @@
 // conversion controllers, the runtime host, WebSocket hub and RBAC.
 #include "Platform.h"
 
+#include "AuthControllers.h"
 #include "ConfigApply.h"
 #include "ConfigControllers.h"
 #include "ConversionEngine.h"
@@ -107,6 +108,7 @@ int main(int argc, char** argv) {
         },
         {Get});
 
+    wc::registerAuth();
     wc::registerConfigControllers();
 
     // ── E 数据: live values from the embedded RuntimeHost ──
