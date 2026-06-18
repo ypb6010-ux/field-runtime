@@ -1,9 +1,8 @@
 -- SPDX-FileCopyrightText: 2026 ypb6010-ux
 -- SPDX-License-Identifier: MPL-2.0
 -- web_console SQLite schema. See docs/ARCHITECTURE.md §5. Idempotent.
-
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
+-- (journal_mode/foreign_keys are per-connection PRAGMAs; set by the app's
+-- connection if needed, not baked into the schema script.)
 
 -- ── Protocol / datapoint configuration (draft set) ──────────────────────────
 CREATE TABLE IF NOT EXISTS transports (

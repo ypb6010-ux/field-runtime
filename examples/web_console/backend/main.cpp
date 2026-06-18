@@ -4,15 +4,10 @@
 // web_console backend (W1 skeleton): Drogon HTTP app + SQLite schema init +
 // system health endpoint + static SPA serving. Later stages add config/data/
 // conversion controllers, the runtime host, WebSocket hub and RBAC.
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <cstdlib>
-// drogon/orm/SqlBinder.h uses htonll/ntohll; this SDK's winsock2.h does not
-// expose them in this TU, so provide them (x64 host is little-endian).
-inline unsigned long long htonll(unsigned long long v) { return _byteswap_uint64(v); }
-inline unsigned long long ntohll(unsigned long long v) { return _byteswap_uint64(v); }
-#endif
+#include "Platform.h"
+
+#include "ConfigControllers.h"
+#include "Envelope.h"
 
 #include <chrono>
 #include <cstdint>
@@ -22,7 +17,6 @@ inline unsigned long long ntohll(unsigned long long v) { return _byteswap_uint64
 #include <string>
 
 #include <drogon/drogon.h>
-#include <sqlite3.h>
 
 namespace {
 
@@ -35,40 +29,34 @@ std::string readFile(std::string const& path) {
     return ss.str();
 }
 
-// Run the schema (multi-statement) with the raw sqlite3 C API before Drogon
-// opens its own connection. sqlite3_exec handles multiple statements in one go.
-bool initSchema(std::string const& dbPath, std::string const& schemaPath) {
-    std::string const sql = readFile(schemaPath);
-    if (sql.empty()) {
-        std::cerr << "schema file empty or missing: " << schemaPath << "\n";
-        return false;
+// Run the schema through Drogon's own DbClient so it shares the exact same
+// SQLite connection/file as every query (avoids a second sqlite layer pointing
+// at a different file). The schema uses no ';' inside literals, so a simple
+// split on ';' yields individual statements.
+void runSchema(std::string const& schemaPath) {
+    auto db = drogon::app().getDbClient();
+    // Strip `--` line comments first (they may contain ';'), then split on ';'.
+    std::istringstream in(readFile(schemaPath));
+    std::string line, clean;
+    while (std::getline(in, line)) {
+        auto p = line.find("--");
+        if (p != std::string::npos) line.erase(p);
+        clean += line;
+        clean += '\n';
     }
-    sqlite3* db = nullptr;
-    if (sqlite3_open(dbPath.c_str(), &db) != SQLITE_OK) {
-        std::cerr << "sqlite3_open(" << dbPath << ") failed: " << sqlite3_errmsg(db) << "\n";
-        sqlite3_close(db);
-        return false;
-    }
-    char* err = nullptr;
-    int rc = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &err);
-    if (rc != SQLITE_OK) {
-        std::cerr << "schema exec failed: " << (err ? err : "?") << "\n";
-        sqlite3_free(err);
-        sqlite3_close(db);
-        return false;
-    }
-    sqlite3_close(db);
-    return true;
+    std::string stmt;
+    auto flush = [&] {
+        auto a = stmt.find_first_not_of(" \t\r\n");
+        if (a != std::string::npos) {
+            try { db->execSqlSync(stmt.substr(a)); }
+            catch (std::exception const& e) { std::cerr << "schema stmt: " << e.what() << "\n"; }
+        }
+        stmt.clear();
+    };
+    for (char c : clean) { if (c == ';') flush(); else stmt += c; }
 }
 
-// Uniform response envelope: { "code":0, "message":"ok", "data":... }.
-drogon::HttpResponsePtr ok(Json::Value data) {
-    Json::Value root;
-    root["code"] = 0;
-    root["message"] = "ok";
-    root["data"] = std::move(data);
-    return drogon::HttpResponse::newHttpJsonResponse(root);
-}
+using wc::ok;
 
 } // namespace
 
@@ -78,12 +66,11 @@ int main(int argc, char** argv) {
     std::string const wwwRoot = argc > 3 ? argv[3] : WEB_CONSOLE_WWW;
     std::string const schema  = WEB_CONSOLE_SCHEMA;
 
-    if (!initSchema(dbPath, schema)) return EXIT_FAILURE;
-
     g_start = std::chrono::steady_clock::now();
 
     using namespace drogon;
     app().createDbClient("sqlite3", "", 0, dbPath, "", "", 1);
+    app().registerBeginningAdvice([schema] { runSchema(schema); });
 
     // ── A 系统: GET /api/v1/system/health ──
     app().registerHandler(
@@ -113,6 +100,8 @@ int main(int argc, char** argv) {
             cb(ok(std::move(data)));
         },
         {Get});
+
+    wc::registerConfigControllers();
 
     app().setDocumentRoot(wwwRoot);
     app().addListener("0.0.0.0", port);
