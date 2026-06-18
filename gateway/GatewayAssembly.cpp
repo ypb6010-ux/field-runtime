@@ -956,9 +956,11 @@ void GatewayAssembly::mirrorBridgesOnce() {
         core::RegisterWords values(size_t(bridge.mirrorCount), 0);
         auto plcIt = m_transports.find(bridge.plc);
         if (plcIt != m_transports.end()) {
-            if (auto* client = dynamic_cast<AsioModbusTcpClient*>(plcIt->second.get())) {
-                values = client->snapshotHoldingRegisters(bridge.mirrorStart,
-                                                          bridge.mirrorCount);
+            // Any transport that caches raw polled registers (Modbus TCP/RTU,
+            // future S7/...) exposes them via RegisterSnapshotSource.
+            if (auto* src = dynamic_cast<RegisterSnapshotSource*>(plcIt->second.get())) {
+                values = src->snapshotHoldingRegisters(bridge.mirrorStart,
+                                                       bridge.mirrorCount);
             }
         }
 

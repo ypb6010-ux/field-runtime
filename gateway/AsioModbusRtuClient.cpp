@@ -81,8 +81,13 @@ AsioModbusRtuClient::AsioModbusRtuClient(config::TransportConfig cfg,
                                          gateway_asio::io_context& io)
     : m_cfg(std::move(cfg))
     , m_io(&io)
-    , m_serial(io)
-    , m_scheduler(sched::makeScheduler(m_cfg.scheduler)) {
+    , m_serial(io) {
+    // RTU is strictly half-duplex with no transaction id: overlapping requests
+    // on the line would consume each other's replies. Force single in-flight
+    // regardless of the configured scheduler (unlike TCP, which disambiguates
+    // concurrent transactions by MBAP transaction id).
+    m_cfg.scheduler.maxInflight = 1;
+    m_scheduler = sched::makeScheduler(m_cfg.scheduler);
     m_scheduler->setDelayFn([this](int ms, std::function<void()> fn) {
         auto timer = std::make_shared<gateway_asio::steady_timer>(*m_io);
         timer->expires_after(std::chrono::milliseconds(ms));

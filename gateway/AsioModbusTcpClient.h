@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "GatewayAsio.h"
+#include "RegisterSnapshotSource.h"
 
 #include "core/config/ConfigSchema.h"
 #include "core/sched/RequestScheduler.h"
@@ -20,7 +21,8 @@
 
 namespace core::gateway {
 
-class AsioModbusTcpClient final : public transport::Transport {
+class AsioModbusTcpClient final : public transport::Transport,
+                                  public RegisterSnapshotSource {
 public:
     AsioModbusTcpClient(config::TransportConfig cfg, gateway_asio::io_context& io);
     ~AsioModbusTcpClient() override;
@@ -49,7 +51,7 @@ public:
     // absolute PLC address. Bridge mirroring copies these RAW register words to
     // the operator-box server table (it must not re-encode decoded engineering
     // values). Unknown addresses read back as 0.
-    core::RegisterWords snapshotHoldingRegisters(int start, int count) const;
+    core::RegisterWords snapshotHoldingRegisters(int start, int count) const override;
 
 private:
     // Completion form: (response ADU, error). On error the ADU is empty and the

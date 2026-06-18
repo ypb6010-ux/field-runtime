@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "GatewayAsio.h"
+#include "RegisterSnapshotSource.h"
 
 #include "core/config/ConfigSchema.h"
 #include "core/sched/RequestScheduler.h"
@@ -25,7 +26,8 @@ namespace core::gateway {
 // response length from the function code instead of a length prefix. Half-duplex
 // serialisation is provided by the owning scheduler; each request is bounded by
 // `requestTimeoutMs` so a silent slave never parks the single gateway io thread.
-class AsioModbusRtuClient final : public transport::Transport {
+class AsioModbusRtuClient final : public transport::Transport,
+                                  public RegisterSnapshotSource {
 public:
     AsioModbusRtuClient(config::TransportConfig cfg, gateway_asio::io_context& io);
     ~AsioModbusRtuClient() override;
@@ -47,7 +49,7 @@ public:
 
     // Latest raw holding-register words observed by polling, indexed by absolute
     // address. Bridge mirroring copies these RAW words; unknown addresses read 0.
-    core::RegisterWords snapshotHoldingRegisters(int start, int count) const;
+    core::RegisterWords snapshotHoldingRegisters(int start, int count) const override;
 
 private:
     // (response ADU, error). On error the ADU is empty and the port is closed /
