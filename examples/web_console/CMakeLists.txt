@@ -36,3 +36,31 @@ else()
 endif()
 
 install(TARGETS field_console_dataservice RUNTIME DESTINATION bin)
+
+# ── W1: Drogon backend skeleton (HTTP + SQLite + static SPA) ────────────────
+find_package(Drogon CONFIG REQUIRED)
+find_package(unofficial-sqlite3 CONFIG REQUIRED)
+
+add_executable(web_console_backend
+    backend/main.cpp
+)
+set_target_properties(web_console_backend PROPERTIES AUTOMOC OFF)
+target_compile_definitions(web_console_backend PRIVATE
+    _WIN32_WINNT=0x0601
+    WEB_CONSOLE_SCHEMA="${CMAKE_CURRENT_SOURCE_DIR}/backend/db/schema.sql"
+    WEB_CONSOLE_WWW="${CMAKE_CURRENT_SOURCE_DIR}/www"
+)
+target_link_libraries(web_console_backend PRIVATE
+    Drogon::Drogon
+    unofficial::sqlite3::sqlite3
+)
+if(MSVC)
+    # /Zc:twoPhase- : drogon headers use htonll as a non-dependent name in a
+    # template; strict two-phase lookup under /std:c++latest rejects it even
+    # though winsock2.h declares it at the instantiation point.
+    target_compile_options(web_console_backend PRIVATE /utf-8 /EHsc /Zc:twoPhase-)
+endif()
+
+install(TARGETS web_console_backend RUNTIME DESTINATION bin)
+install(DIRECTORY www/ DESTINATION share/web_console/www)
+install(FILES backend/db/schema.sql DESTINATION share/web_console)

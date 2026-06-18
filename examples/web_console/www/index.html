@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FieldRuntime Console</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 3rem auto; max-width: 640px; color: #1f2937; }
+    h1 { font-size: 1.4rem; }
+    pre { background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 8px; overflow:auto; }
+    .ok { color: #16a34a; } .bad { color: #dc2626; }
+  </style>
+</head>
+<body>
+  <h1>FieldRuntime Console <small id="state" class="bad">connecting…</small></h1>
+  <p>W1 骨架占位页 —— 正式前端将由 Figma 设计后填充。后端健康检查:</p>
+  <pre id="health">loading /api/v1/system/health …</pre>
+  <script>
+    fetch('/api/v1/system/health')
+      .then(r => r.json())
+      .then(j => {
+        document.getElementById('health').textContent = JSON.stringify(j, null, 2);
+        const s = document.getElementById('state');
+        s.textContent = (j.code === 0 ? 'online' : 'error');
+        s.className = (j.code === 0 ? 'ok' : 'bad');
+      })
+      .catch(e => { document.getElementById('health').textContent = String(e); });
+  </script>
+</body>
+</html>

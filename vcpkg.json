@@ -5,6 +5,7 @@
   "dependencies": [
     "async-simple",
     "asio",
+    { "name": "drogon", "features": ["sqlite3"] },
     "open62541",
     "snap7",
     "sqlite3",
