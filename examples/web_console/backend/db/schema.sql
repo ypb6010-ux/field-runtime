@@ -117,6 +117,16 @@ CREATE TABLE IF NOT EXISTS users (
     last_login_at INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS audit_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts            INTEGER NOT NULL,
+    user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    action        TEXT NOT NULL DEFAULT '',
+    target        TEXT NOT NULL DEFAULT '',
+    detail_json   TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS ix_audit_ts ON audit_log(ts);
+
 -- ── Seed defaults ───────────────────────────────────────────────────────────
 INSERT OR IGNORE INTO settings(key, value_json) VALUES
     ('sample_retention_days', '30'),

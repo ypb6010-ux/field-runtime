@@ -88,7 +88,7 @@ std::string buildRuntimeToml(DbClientPtr const& db) {
         o << "[[poll_range]]\nmodule_id = \"poll_" << r["id"].as<std::string>() << "\"\n"
           << "transport = \"" << r["transport_id"].as<std::string>() << "\"\n"
           << "table = \"" << r["reg_table"].as<std::string>() << "\"\n"
-          << "range = [" << start << ", " << (start + r["count"].as<int>()) << "]\n"
+          << "range = [" << start << ", " << r["count"].as<int>() << "]\n"  // 加载器语义 [start, count]
           << "period_ms = " << r["period_ms"].as<int>() << "\n\n";
     }
 

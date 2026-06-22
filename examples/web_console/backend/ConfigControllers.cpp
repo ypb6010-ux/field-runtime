@@ -5,12 +5,15 @@
 #include "ConfigControllers.h"
 #include "Envelope.h"
 
+#include <chrono>
 #include <functional>
 #include <string>
 #include <vector>
 
 #include <drogon/drogon.h>
 #include <drogon/orm/Exception.h>
+
+#include "GatewayAsio.h"
 
 using namespace drogon;
 using namespace drogon::orm;
@@ -30,6 +33,48 @@ int i(Json::Value const& j, char const* k, int d = 0) {
 }
 double d(Json::Value const& j, char const* k, double dv = 0) {
     return j.isMember(k) && j[k].isNumeric() ? j[k].asDouble() : dv;
+}
+
+// 从 URI(opc.tcp://host:port/path、tcp://host:port)解析 host/port。
+void parseUri(std::string uri, std::string& host, int& port, int defPort) {
+    auto p = uri.find("://");
+    if (p != std::string::npos) uri = uri.substr(p + 3);
+    auto slash = uri.find('/');
+    if (slash != std::string::npos) uri = uri.substr(0, slash);
+    auto colon = uri.rfind(':');
+    if (colon != std::string::npos) { host = uri.substr(0, colon); try { port = std::stoi(uri.substr(colon + 1)); } catch (...) {} }
+    else { host = uri; port = defPort; }
+}
+
+// 按 kind 从 params_json 取出探测目标 host:port。
+bool targetFor(std::string const& kind, Json::Value const& p, std::string& host, int& port) {
+    if (kind == "modbus_tcp_client") { host = p.get("host", "").asString(); port = p.get("port", 502).asInt(); }
+    else if (kind == "s7_client")    { host = p.get("host", "").asString(); port = 102; }
+    else if (kind == "opc_ua_client") parseUri(p.get("endpoint_url", "").asString(), host, port, 4840);
+    else if (kind == "mqtt_client")   parseUri(p.get("broker_uri", "").asString(), host, port, 1883);
+    else return false;
+    return !host.empty() && port > 0;
+}
+
+// 异步 TCP 连接探测,run_for 超时绑定;不阻塞 io 线程到 OS 默认超时。
+bool tcpProbe(std::string const& host, int port, int timeoutMs, int& latencyMs, std::string& err) {
+    gateway_asio::io_context io;
+    gateway_error_code ec;
+    gateway_asio::ip::tcp::resolver res(io);
+    auto eps = res.resolve(host, std::to_string(port), ec);
+    if (ec) { err = "解析地址失败: " + ec.message(); return false; }
+    gateway_asio::ip::tcp::socket sock(io);
+    auto const t0 = std::chrono::steady_clock::now();
+    bool done = false, good = false;
+    std::string e2;
+    gateway_asio::async_connect(sock, eps,
+        [&](gateway_error_code e, auto const&) { done = true; good = !e; if (e) e2 = e.message(); });
+    io.run_for(std::chrono::milliseconds(timeoutMs));
+    latencyMs = int(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
+    gateway_error_code ig; sock.close(ig);
+    if (!done) { err = "连接超时"; return false; }
+    if (!good) { err = e2; return false; }
+    return true;
 }
 
 // ── Generic list / get / delete (parameterless or single id bind) ───────────
@@ -128,6 +173,28 @@ void registerConfigControllers() {
         [](HttpRequestPtr const&, std::function<void(HttpResponsePtr const&)>&& cb) {
             cb(kindsResponse());
         }, {Get});
+
+    // POST /transports/{id}/test —— 用 body 的 {kind, params_json} 做 TCP 连接探测
+    app().registerHandler("/api/v1/transports/{id}/test",
+        [](HttpRequestPtr const& req, std::function<void(HttpResponsePtr const&)>&& cb, std::string) {
+            auto j = req->getJsonObject();
+            if (!j) { cb(fail(1001, "invalid JSON body")); return; }
+            std::string const kind = (*j)["kind"].asString();
+            Json::Value const& params = (*j)["params_json"];
+            std::string host; int port = 0;
+            Json::Value out;
+            if (!targetFor(kind, params, host, port)) {
+                out["ok"] = false; out["message"] = "无法从该协议参数解析连接地址";
+                cb(ok(out)); return;
+            }
+            int latency = 0; std::string err;
+            bool const good = tcpProbe(host, port, 2000, latency, err);
+            out["ok"] = good;
+            out["latencyMs"] = latency;
+            out["message"] = good ? ("连接成功 " + host + ":" + std::to_string(port)) : err;
+            if (!good) out["errorType"] = "connect";
+            cb(ok(out));
+        }, {Post});
 
     registerListGetDelete("transports", "id");
     registerListGetDelete("codecs", "id");

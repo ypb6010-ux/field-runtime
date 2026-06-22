@@ -54,7 +54,8 @@ bool whitelisted(std::string const& path, HttpMethod m) {
     if (path == "/api/v1/auth/login") return true;
     if (path == "/api/v1/system/health") return true;
     if (path.rfind("/api/docs", 0) == 0) return true;  // Swagger UI / openapi
-    if (path.rfind("/api/", 0) != 0) return true;       // static assets, /ws
+    if (path.rfind("/ws/", 0) == 0) return false;       // WebSocket needs a token (?token=)
+    if (path.rfind("/api/", 0) != 0) return true;       // static assets
     return false;
     return false;
 }
