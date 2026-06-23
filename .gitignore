@@ -8,3 +8,10 @@ compile_commands.json
 .vs/
 CMakeUserPresets.json
 examples/web_console/docs/_make_src/
+
+# Runtime / test artifacts
+*.log
+*.db
+*.db-shm
+*.db-wal
+console.db
