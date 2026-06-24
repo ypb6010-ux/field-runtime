@@ -841,6 +841,15 @@ void GatewayAssembly::publishMqttRow(TelemetryRow const& row) {
     if (!m_mqtt || !m_mqttConfig || !m_persistence) return;
     if (!m_mqtt->connected()) return;
 
+    // Max telemetry rows outstanding (handed to MQTT, awaiting PUBACK) at once.
+    static constexpr std::size_t kMaxInflightRows = 256;
+    auto const rowId = row.rowId;
+    // Already awaiting PUBACK, or too many outstanding: skip. The backfill pump
+    // retries once acks drain — so a delayed/suppressed PUBACK no longer makes
+    // us resend the same pending row every cycle (duplicates) or grow unbounded.
+    if (m_inflightRows.count(rowId)) return;
+    if (m_inflightRows.size() >= kMaxInflightRows) return;
+
     std::string topic = m_mqttConfig->topicPrefix + "/" + row.dpId;
     std::string payload = "{\"value\":";
     payload += row.valueJson;
@@ -849,18 +858,20 @@ void GatewayAssembly::publishMqttRow(TelemetryRow const& row) {
     payload += ",\"ts\":" + std::to_string(row.ts);
     payload += "}";
 
-    auto const rowId = row.rowId;
-    m_mqtt->publishTracked(
+    m_inflightRows.insert(rowId);
+    bool const sent = m_mqtt->publishTracked(
         std::move(topic),
         std::move(payload),
         m_mqttConfig->qos,
         [this, rowId](bool ok) {
+            m_inflightRows.erase(rowId);
             if (!ok || !m_persistence) return;
             std::string error;
             if (!m_persistence->markPublished(rowId, error) && !error.empty()) {
                 m_logger.logf(log::LogLevel::Error, "persistence", "mark", error);
             }
         });
+    if (!sent) m_inflightRows.erase(rowId);
 }
 
 void GatewayAssembly::publishMqttSnapshot() {

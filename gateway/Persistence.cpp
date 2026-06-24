@@ -43,6 +43,10 @@ bool Persistence::open(PersistenceConfig config, std::string& error) {
         return false;
     }
 
+    // SqliteLogSink opens a second writer on the same file (logger thread). Wait
+    // out its brief commit lock instead of failing telemetry writes with BUSY.
+    sqlite3_busy_timeout(m_db, 2000);
+
     if (!exec("PRAGMA journal_mode=WAL;", error)) return false;
     if (!exec("PRAGMA synchronous=NORMAL;", error)) return false;
     if (!exec(

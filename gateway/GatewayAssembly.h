@@ -8,8 +8,10 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "GatewayAsio.h"
@@ -132,6 +134,9 @@ private:
     std::unique_ptr<gateway_asio::steady_timer> m_backfillTimer;
     std::unique_ptr<AsioMqttClient> m_mqtt;
     std::unique_ptr<Persistence> m_persistence;
+    // telemetry rows handed to MQTT but not yet PUBACK'd. Guards the backfill
+    // pump from re-publishing a row already in flight (QoS1, delayed acks).
+    std::unordered_set<std::int64_t> m_inflightRows;
     mutable std::mutex m_forwardMtx;
     std::unordered_map<std::string, bool> m_forwardEnabled;
     std::optional<ControlConfig> m_control;

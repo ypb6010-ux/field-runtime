@@ -12,6 +12,7 @@ namespace core::gateway {
 namespace {
 
 constexpr std::size_t kMaxPendingPublishes = 256;
+constexpr std::size_t kMaxInflight = 1024;
 
 void appendU16(std::vector<std::uint8_t>& out, std::uint16_t value) {
     out.push_back(std::uint8_t(value >> 8));
@@ -125,6 +126,8 @@ bool AsioMqttClient::publishTracked(std::string topic,
         return true;
     }
     // QoS1: done 只在收到对应 PUBACK 时触发, 真正代表 broker 已确认.
+    // 上限保护: broker 久不回 PUBACK 时拒绝继续累积在途(调用方据此退避重试).
+    if (m_inflight.size() >= kMaxInflight) return false;
     std::uint16_t const id = nextPacketId();
     m_inflight[id] = std::move(done);
     writePacket(buildPublish(topic, payload, 1, id));
@@ -255,7 +258,11 @@ void AsioMqttClient::handlePacket(std::uint8_t packetType,
 }
 
 std::uint16_t AsioMqttClient::nextPacketId() {
-    if (++m_nextPacketId == 0) m_nextPacketId = 1;
+    // Skip ids still awaiting PUBACK so a wrap can never overwrite a live
+    // callback. m_inflight is bounded (<< 65535), so this loop is cheap.
+    do {
+        if (++m_nextPacketId == 0) m_nextPacketId = 1;
+    } while (m_inflight.find(m_nextPacketId) != m_inflight.end());
     return m_nextPacketId;
 }
 
