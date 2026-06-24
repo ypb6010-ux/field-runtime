@@ -4,6 +4,7 @@
 |----------|------|
 | 简体中文 | [zh/](zh/README.md) |
 | English  | [en/](en/README.md) |
+| 产品技术文档(架构图/流程图/关系图) | [field-runtime.md](field-runtime.md) |
 
 ## Contents (both languages)
 
