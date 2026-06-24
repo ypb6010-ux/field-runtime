@@ -19,6 +19,7 @@ option(CORE_BUILD_MQTT_QT  "Enable MQTT Transport (Qt6::Mqtt)"       ON)
 option(CORE_BUILD_MQTT_PAHO "Enable MQTT Transport (paho.mqtt.cpp)"  ON)
 option(CORE_BUILD_PERSISTENCE "Build CorePersistence module (QxOrm)" OFF)
 option(CORE_BUILD_GATEWAY  "Build the Qt-free field gateway executable" OFF)
+option(CORE_BUILD_WEB_CONSOLE "Build the web_console example (Drogon)"  ON)
 
 # ---------------------------------------------------------------------------
 # Dependencies
@@ -133,8 +134,11 @@ endif()
 if(CORE_BUILD_GATEWAY)
     add_subdirectory(gateway)
     # web_console example (Drogon backend + data simulation) — Qt-free, reuses
-    # the gateway transports/mocks. Built alongside the gateway.
-    add_subdirectory(examples/web_console)
+    # the gateway transports/mocks. Optional: a lean Modbus-only gateway build
+    # can skip it (and the Drogon dependency).
+    if(CORE_BUILD_WEB_CONSOLE)
+        add_subdirectory(examples/web_console)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------

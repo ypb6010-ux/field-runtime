@@ -19,8 +19,12 @@
 #include "AsioModbusRtuClient.h"
 #include "AsioModbusTcpClient.h"
 #include "AsioModbusTcpServer.h"
+#ifdef FIELDRUNTIME_GATEWAY_HAS_OPCUA
 #include "AsioOpcUaClient.h"
+#endif
+#ifdef FIELDRUNTIME_GATEWAY_HAS_S7
 #include "AsioS7Client.h"
+#endif
 #include "GatewayJson.h"
 #include "StubTransport.h"
 
@@ -631,10 +635,14 @@ void GatewayAssembly::buildTransports(config::ConfigSchema const& schema) {
             transport = std::make_unique<AsioModbusTcpServer>(tc, *m_io, m_bus);
         } else if (tc.kind == transport::TransportKind::ModbusRtu) {
             transport = std::make_unique<AsioModbusRtuClient>(tc, *m_io);
+#ifdef FIELDRUNTIME_GATEWAY_HAS_OPCUA
         } else if (tc.kind == transport::TransportKind::OpcUaClient) {
             transport = std::make_unique<AsioOpcUaClient>(tc, *m_io);
+#endif
+#ifdef FIELDRUNTIME_GATEWAY_HAS_S7
         } else if (tc.kind == transport::TransportKind::S7Client) {
             transport = std::make_unique<AsioS7Client>(tc, *m_io);
+#endif
         } else {
             transport = std::make_unique<StubTransport>(tc, *m_io);
         }
