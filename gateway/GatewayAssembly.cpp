@@ -26,6 +26,7 @@
 #include "AsioS7Client.h"
 #endif
 #include "GatewayJson.h"
+#include "SqliteLogSink.h"
 #include "StubTransport.h"
 
 #include "core/bus/BusEvents.h"
@@ -393,6 +394,10 @@ bool GatewayAssembly::load(std::string const& tomlPath) {
             std::cerr << "persistence: " << persistenceError << '\n';
             return false;
         }
+        // Persist Info+ logs into the same db's `logs` table. The sink owns its
+        // own connection and runs on the Logger dispatch thread (see its docs).
+        m_logger.addSink(
+            std::make_shared<SqliteLogSink>(m_persistenceConfig->path));
     }
     m_logger.logf(log::LogLevel::Info, "gateway", "assembly", "loaded",
                   {{"transports", std::int64_t(loaded->transports.size())},

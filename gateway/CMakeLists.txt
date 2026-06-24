@@ -89,6 +89,7 @@ set(_gw_core_sources
     GatewayAssembly.cpp
     GatewayJson.cpp
     Persistence.cpp
+    SqliteLogSink.cpp
     StubTransport.cpp
 )
 if(GATEWAY_ENABLE_OPCUA)
