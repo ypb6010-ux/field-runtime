@@ -15,6 +15,7 @@ public:
     Writer             writer;
     ChangeCallback     onValueChanged;
     ChangeCallback     onStateChanged;
+    std::optional<Value> disconnectValue;  // reset target on disconnect (nullopt = hold)
 };
 
 Datapoint::Datapoint() : m_impl(new Impl) {}
@@ -113,6 +114,32 @@ void Datapoint::setState(DpState s) {
     if (changed) {
         // value did not change, but its validity did: notify both so a QML
         // `valid` binding rebinds (mirrors the old dual-signal behaviour).
+        if (m_impl->onStateChanged) m_impl->onStateChanged();
+        if (m_impl->onValueChanged) m_impl->onValueChanged();
+    }
+}
+
+void Datapoint::setDisconnectValue(std::optional<Value> v) {
+    std::lock_guard lk(m_impl->mtx);
+    m_impl->disconnectValue = std::move(v);
+}
+
+void Datapoint::markDisconnected() {
+    bool changed = false;
+    {
+        std::lock_guard lk(m_impl->mtx);
+        if (m_impl->disconnectValue.has_value()
+            && m_impl->st.value != *m_impl->disconnectValue) {
+            m_impl->st.value     = *m_impl->disconnectValue;
+            m_impl->st.timestamp = std::chrono::system_clock::now();
+            changed = true;
+        }
+        if (m_impl->st.state != DpState::Error) {
+            m_impl->st.state = DpState::Error;
+            changed = true;
+        }
+    }
+    if (changed) {
         if (m_impl->onStateChanged) m_impl->onStateChanged();
         if (m_impl->onValueChanged) m_impl->onValueChanged();
     }

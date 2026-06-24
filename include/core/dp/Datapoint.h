@@ -77,6 +77,14 @@ public:
     void setValue(Value v, Timestamp ts = std::chrono::system_clock::now());
     void setState(DpState s);
 
+    // Disconnect policy. When the source transport drops, the poll layer calls
+    // markDisconnected() instead of a bare setState(Error). If a disconnect
+    // value was set, the datapoint is reset to it (e.g. zeroed) with state Error
+    // in one atomic step (single notification); otherwise the last value is held
+    // and only the state goes Error. Default (unset) preserves hold semantics.
+    void setDisconnectValue(std::optional<Value> v);
+    void markDisconnected();
+
     // Register a writer invoked by `write()`. The Core wires this to a
     // SinkWindow stage operation; tests can supply a lambda directly.
     void setWriter(Writer w);

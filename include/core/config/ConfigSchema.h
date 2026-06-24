@@ -178,6 +178,11 @@ struct DatapointConfig {
     bool             hasAck    = false;
     std::string      ui;
     std::string      persist;
+    // Disconnect policy: "reset" (default) zeros the datapoint to disconnectValue
+    // when its source transport drops; "hold" keeps the last value. Either way
+    // quality goes Error so HMI/consumers never read a stale value as live.
+    std::string      onDisconnect    = "reset";
+    double           disconnectValue = 0.0;
 };
 
 struct RouteConfig {

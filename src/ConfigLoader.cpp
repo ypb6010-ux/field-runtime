@@ -488,6 +488,8 @@ DatapointConfig parseDatapoint(toml::table const& t,
     c.policy  = getStr(t, "policy",  {});
     c.ui      = getStr(t, "ui",      {});
     c.persist = getStr(t, "persist", {});
+    c.onDisconnect    = getStr(t, "on_disconnect", "reset");
+    c.disconnectValue = getDouble(t, "disconnect_value", 0.0);
 
     if (auto a = t["ack"].as_table()) {
         c.ack.dp        = getStr(*a, "dp", {});

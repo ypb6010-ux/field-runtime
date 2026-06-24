@@ -45,8 +45,11 @@ transport::ReadRequest const& PollRange::request() const noexcept {
 
 void PollRange::applyResult(transport::ReadResult const& result) {
     if (!result.ok) {
+        // Transport I/O failed (PLC unreachable / not connected): apply each
+        // datapoint's disconnect policy — reset to its disconnect value (e.g.
+        // zero) with state Error, or hold the last value if none configured.
         for (auto& b : m_bindings) {
-            b.dp->setState(dp::DpState::Error);
+            b.dp->markDisconnected();
         }
         return;
     }

@@ -655,6 +655,23 @@ void GatewayAssembly::buildTransports(config::ConfigSchema const& schema) {
     }
 }
 
+namespace {
+// Build a disconnect/reset value matching the datapoint's natural scalar type.
+// Quality goes Error regardless, so the exact numeric subtype is cosmetic.
+dp::Value makeDisconnectValue(dp::ScalarType type, double dv) {
+    switch (type) {
+        case dp::ScalarType::Bool:   return dv != 0.0;
+        case dp::ScalarType::F32:
+        case dp::ScalarType::F64:    return dv;
+        case dp::ScalarType::S16:
+        case dp::ScalarType::S32:
+        case dp::ScalarType::S64:    return std::int64_t(dv);
+        case dp::ScalarType::String: return std::string();
+        default:                     return std::uint64_t(dv);  // U16/U32/U64/EnumU16
+    }
+}
+} // namespace
+
 GatewayAssembly::DpById GatewayAssembly::buildDatapoints(config::ConfigSchema const& schema) {
     DpById out;
     for (auto const& dc : schema.datapoints) {
@@ -682,6 +699,12 @@ GatewayAssembly::DpById GatewayAssembly::buildDatapoints(config::ConfigSchema co
         spec.persistTag = dc.persist;
 
         auto datapoint = std::make_shared<dp::Datapoint>(std::move(spec));
+        // Disconnect policy (#5): "reset" zeros to disconnect_value on source
+        // drop; "hold" keeps the last value. Only polled (source) datapoints.
+        if (dc.hasSource && dc.onDisconnect != "hold") {
+            datapoint->setDisconnectValue(
+                makeDisconnectValue(dc.type, dc.disconnectValue));
+        }
         std::weak_ptr<dp::Datapoint> weak = datapoint;
         datapoint->setOnValueChanged([this, weak] {
             auto sp = weak.lock();
