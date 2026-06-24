@@ -11,6 +11,8 @@
 
 namespace {
 
+bool g_suppressPuback = false;
+
 bool readExact(gateway_asio::ip::tcp::socket& socket,
                void* data,
                std::size_t size) {
@@ -63,7 +65,7 @@ void handlePublish(std::uint8_t packetType,
 
     std::string payload(body.begin() + payloadOffset, body.end());
     std::cout << topic << ' ' << payload << std::endl;
-    if (qos == 1) {
+    if (qos == 1 && !g_suppressPuback) {
         writePacket(socket, {0x40, 0x02,
                              std::uint8_t(packetId >> 8),
                              std::uint8_t(packetId & 0xFF)});
@@ -75,6 +77,9 @@ void handlePublish(std::uint8_t packetType,
 int main(int argc, char** argv) {
     auto const port = static_cast<unsigned short>(
         argc > 1 ? std::stoi(argv[1]) : 1883);
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "no-puback") g_suppressPuback = true;
+    }
     gateway_asio::io_context io;
     gateway_asio::ip::tcp::acceptor acceptor(
         io,

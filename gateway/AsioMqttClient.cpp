@@ -48,13 +48,16 @@ std::vector<std::uint8_t> buildConnect(MqttNorthboundConfig const& cfg) {
 }
 
 std::vector<std::uint8_t> buildPublish(std::string const& topic,
-                                       std::string const& payload) {
+                                       std::string const& payload,
+                                       int qos = 0,
+                                       std::uint16_t packetId = 0) {
     std::vector<std::uint8_t> variable;
     appendUtf8(variable, topic);
+    if (qos > 0) appendU16(variable, packetId);
     variable.insert(variable.end(), payload.begin(), payload.end());
 
     std::vector<std::uint8_t> packet;
-    packet.push_back(0x30);
+    packet.push_back(std::uint8_t(0x30 | ((qos & 0x03) << 1)));
     appendRemainingLength(packet, std::uint32_t(variable.size()));
     packet.insert(packet.end(), variable.begin(), variable.end());
     return packet;
@@ -73,7 +76,7 @@ AsioMqttClient::AsioMqttClient(gateway_asio::io_context& io,
     if (m_config.keepaliveS <= 0) m_config.keepaliveS = 30;
     if (m_config.clientId.empty()) m_config.clientId = "field_gateway";
     if (m_config.topicPrefix.empty()) m_config.topicPrefix = "field";
-    m_config.qos = 0;
+    if (m_config.qos < 0 || m_config.qos > 1) m_config.qos = 0;
 }
 
 AsioMqttClient::~AsioMqttClient() {
@@ -92,29 +95,39 @@ void AsioMqttClient::stop() {
     m_writing = false;
     m_pending.clear();
     m_writeQueue.clear();
+    failInflight();
     if (m_pingTimer) m_pingTimer->cancel();
     if (m_reconnectTimer) m_reconnectTimer->cancel();
     closeSocket();
 }
 
 void AsioMqttClient::publish(std::string topic, std::string payload, int qos) {
+    qos = (qos > 0) ? 1 : 0;
     PendingPublish pending{std::move(topic), std::move(payload), qos};
-    pending.qos = 0;
     if (!m_started || !m_connected) {
         if (m_pending.size() >= kMaxPendingPublishes) m_pending.pop_front();
         m_pending.push_back(std::move(pending));
         return;
     }
-    writePacket(buildPublish(pending.topic, pending.payload));
+    std::uint16_t const id = qos > 0 ? nextPacketId() : 0;
+    writePacket(buildPublish(pending.topic, pending.payload, qos, id));
 }
 
 bool AsioMqttClient::publishTracked(std::string topic,
                                     std::string payload,
                                     int qos,
                                     std::function<void(bool)> done) {
-    (void)qos;
     if (!m_started || !m_connected || !m_socket.is_open()) return false;
-    writePacket(buildPublish(topic, payload), std::move(done));
+    qos = (qos > 0) ? 1 : 0;
+    if (qos == 0) {
+        // QoS0: 没有 broker 确认, done 在 socket 写出后回调(旧语义).
+        writePacket(buildPublish(topic, payload, 0), std::move(done));
+        return true;
+    }
+    // QoS1: done 只在收到对应 PUBACK 时触发, 真正代表 broker 已确认.
+    std::uint16_t const id = nextPacketId();
+    m_inflight[id] = std::move(done);
+    writePacket(buildPublish(topic, payload, 1, id));
     return true;
 }
 
@@ -234,8 +247,34 @@ void AsioMqttClient::handlePacket(std::uint8_t packetType,
         } else {
             failAndReconnect();
         }
+    } else if (type == 4) {
+        handlePuback(body);
     } else if (type == 13) {
         // PINGRESP: liveness confirmed; next ping is already timer-driven.
+    }
+}
+
+std::uint16_t AsioMqttClient::nextPacketId() {
+    if (++m_nextPacketId == 0) m_nextPacketId = 1;
+    return m_nextPacketId;
+}
+
+void AsioMqttClient::handlePuback(std::vector<std::uint8_t> const& body) {
+    if (body.size() < 2) return;
+    auto const id = std::uint16_t((body[0] << 8) | body[1]);
+    auto it = m_inflight.find(id);
+    if (it == m_inflight.end()) return;
+    auto done = std::move(it->second);
+    m_inflight.erase(it);
+    if (done) done(true);
+}
+
+void AsioMqttClient::failInflight() {
+    if (m_inflight.empty()) return;
+    auto inflight = std::move(m_inflight);
+    m_inflight.clear();
+    for (auto& entry : inflight) {
+        if (entry.second) entry.second(false);
     }
 }
 
@@ -263,6 +302,7 @@ void AsioMqttClient::scheduleReconnect() {
     m_connected = false;
     m_writing = false;
     m_writeQueue.clear();
+    failInflight();
     closeSocket();
     auto const delay = m_reconnectDelayMs;
     m_reconnectDelayMs = std::min(m_reconnectDelayMs * 2, 10000);
@@ -281,7 +321,8 @@ void AsioMqttClient::flushPending() {
     while (m_connected && !m_pending.empty()) {
         auto pending = std::move(m_pending.front());
         m_pending.pop_front();
-        writePacket(buildPublish(pending.topic, pending.payload));
+        std::uint16_t const id = pending.qos > 0 ? nextPacketId() : 0;
+        writePacket(buildPublish(pending.topic, pending.payload, pending.qos, id));
     }
 }
 

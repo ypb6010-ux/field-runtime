@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
+#include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -49,6 +51,9 @@ private:
 
     void connect();
     void onConnected();
+    std::uint16_t nextPacketId();
+    void failInflight();
+    void handlePuback(std::vector<std::uint8_t> const& body);
     void readPacketType();
     void readRemainingLength(std::uint8_t packetType,
                              std::uint32_t value = 0,
@@ -79,11 +84,13 @@ private:
     std::unique_ptr<gateway_asio::steady_timer> m_reconnectTimer;
     std::deque<PendingPublish> m_pending;
     std::deque<PacketWrite> m_writeQueue;
+    std::map<std::uint16_t, std::function<void(bool)>> m_inflight;
     std::function<void()> m_connectedCallback;
     bool m_started = false;
     bool m_connected = false;
     bool m_writing = false;
     int m_reconnectDelayMs = 500;
+    std::uint16_t m_nextPacketId = 0;
 };
 
 } // namespace core::gateway

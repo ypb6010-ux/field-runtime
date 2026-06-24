@@ -240,8 +240,8 @@ std::optional<MqttNorthboundConfig> parseMqttConfig(std::string const& path,
         error = "northbound.mqtt.keepalive_s must be > 0";
         return std::nullopt;
     }
-    if (cfg.qos != 0) {
-        error = "northbound.mqtt.qos currently supports only 0";
+    if (cfg.qos != 0 && cfg.qos != 1) {
+        error = "northbound.mqtt.qos currently supports only 0 or 1";
         return std::nullopt;
     }
     if (cfg.publishIntervalMs < 0) {
