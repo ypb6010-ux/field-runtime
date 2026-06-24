@@ -66,11 +66,17 @@ private:
     std::uint16_t nextTransactionId();
     void closeSocketLocked();
     void failSocketAsync(std::string const& reason);
+    // Self-healing reconnect: a runtime failure parks the transport in Error;
+    // these retry an async connect every `reconnectIntervalMs` until back up.
+    void scheduleReconnect();
+    void attemptReconnect();
 
     config::TransportConfig m_cfg;
     gateway_asio::io_context* m_io = nullptr;
     gateway_asio::ip::tcp::socket m_socket;
     std::unique_ptr<sched::RequestScheduler> m_scheduler;
+    std::unique_ptr<gateway_asio::steady_timer> m_reconnectTimer;
+    bool m_reconnectPending = false;
     std::atomic<transport::ConnectionState> m_state{transport::ConnectionState::Disconnected};
     std::atomic<std::uint16_t> m_transactionId{1};
     std::mutex m_socketMtx;
