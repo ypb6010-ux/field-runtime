@@ -39,6 +39,7 @@ private:
                        std::function<void(std::string)> done);
     std::string handleAuth(std::vector<std::string> const& parts, bool& authenticated) const;
     std::string handleForward(std::vector<std::string> const& parts, bool authenticated);
+    std::string handleReconnect(std::vector<std::string> const& parts, bool authenticated);
     void handleWrite(std::vector<std::string> const& parts,
                      bool authenticated,
                      std::function<void(std::string)> done);

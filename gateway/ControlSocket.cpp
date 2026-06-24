@@ -263,11 +263,14 @@ void ControlSocket::handleCommand(std::string const& command,
     } else if (verb == "help") {
         done("{\"commands\":[\"status\",\"live\",\"help\",\"auth <token>\","
              "\"forward <server> on|off\","
+             "\"reconnect <transport>\",\"reset <transport>\","
              "\"write <transport> <table> <addr> <value> [value...]\"]}");
     } else if (verb == "auth") {
         done(handleAuth(parts, authenticated));
     } else if (verb == "forward") {
         done(handleForward(parts, authenticated));
+    } else if (verb == "reconnect" || verb == "reset") {
+        done(handleReconnect(parts, authenticated));
     } else if (verb == "write") {
         handleWrite(parts, authenticated, std::move(done));
     } else {
@@ -303,6 +306,20 @@ std::string ControlSocket::handleForward(std::vector<std::string> const& parts,
     json::appendString(out, server);
     out += ",\"forward\":";
     out += enabled ? "true" : "false";
+    out += "}";
+    return out;
+}
+
+std::string ControlSocket::handleReconnect(std::vector<std::string> const& parts,
+                                           bool authenticated) {
+    if (!authenticated) return errorJson("unauthorized");
+    if (parts.size() != 2) return errorJson("usage: reconnect <transport>");
+    auto const& id = parts[1];
+    if (!m_gateway->hasTransport(id)) return errorJson("unknown transport");
+    m_gateway->reconnectTransport(id);
+
+    std::string out = "{\"ok\":true,\"transport\":";
+    json::appendString(out, id);
     out += "}";
     return out;
 }

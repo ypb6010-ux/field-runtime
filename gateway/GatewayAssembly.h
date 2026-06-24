@@ -67,6 +67,9 @@ public:
     std::vector<GatewayDatapointSnapshot> datapointSnapshots() const;
     bool hasTransport(std::string const& transportId) const;
     bool hasServerTransport(std::string const& transportId) const;
+    // Operator-initiated reconnect: drop and re-establish the transport. On a
+    // failed re-establish the transport's own retry loop takes over (#1).
+    bool reconnectTransport(std::string const& transportId);
     bool writeTransportAsync(std::string const& transportId,
                              transport::WriteBatch batch,
                              std::function<void(transport::WriteResult)> done);
