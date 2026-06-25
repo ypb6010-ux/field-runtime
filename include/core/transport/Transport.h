@@ -61,6 +61,12 @@ public:
     virtual void writeAsync(WriteBatch  const& batch, WriteDone done) {
         done(writeBatch(batch));
     }
+
+    // Operator-initiated reconnect (e.g. control-socket `reconnect`/`reset`).
+    // Must be non-blocking and must NOT tear down the scheduler. The default is
+    // a no-op for transports without a self-healing reconnect path; transports
+    // that have one (e.g. AsioModbusTcpClient) override it to re-arm async.
+    virtual void requestReconnect() {}
 };
 
 } // namespace core::transport

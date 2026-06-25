@@ -531,15 +531,11 @@ bool GatewayAssembly::hasServerTransport(std::string const& transportId) const {
 bool GatewayAssembly::reconnectTransport(std::string const& transportId) {
     auto it = m_transports.find(transportId);
     if (it == m_transports.end()) return false;
-    it->second->disconnect();
-    auto const r = it->second->connect();
-    if (r) {
-        m_logger.logf(log::LogLevel::Info, "transport", transportId, "reconnect ok");
-    } else {
-        // connect() failed but its retry loop is now armed; report accepted.
-        m_logger.logf(log::LogLevel::Warn, "transport", transportId,
-                      "reconnect retrying: " + r.error());
-    }
+    // Async, non-blocking, scheduler-preserving (see Transport::requestReconnect).
+    // Avoid disconnect()+connect() here: disconnect() stops the async scheduler
+    // and connect() would block the single io thread on an unreachable PLC.
+    it->second->requestReconnect();
+    m_logger.logf(log::LogLevel::Info, "transport", transportId, "reconnect requested");
     return true;
 }
 

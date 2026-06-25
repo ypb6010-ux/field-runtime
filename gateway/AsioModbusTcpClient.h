@@ -47,6 +47,10 @@ public:
     void readAsync(transport::ReadRequest const& req, ReadDone done) override;
     void writeAsync(transport::WriteBatch const& batch, WriteDone done) override;
 
+    // Operator-initiated reconnect: async, non-blocking, leaves the scheduler
+    // intact (unlike disconnect()). Drops the socket and re-arms the self-heal.
+    void requestReconnect() override;
+
     // Latest raw holding-register words observed by polling, indexed by
     // absolute PLC address. Bridge mirroring copies these RAW register words to
     // the operator-box server table (it must not re-encode decoded engineering

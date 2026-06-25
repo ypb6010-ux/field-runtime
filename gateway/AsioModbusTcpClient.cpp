@@ -423,6 +423,26 @@ void AsioModbusTcpClient::failSocketAsync(std::string const&) {
     scheduleReconnect();
 }
 
+void AsioModbusTcpClient::requestReconnect() {
+    if (!m_io) return;
+    // Hop onto the io thread; never block the caller (control socket handler).
+    // Unlike disconnect() this leaves the scheduler running, then attempts an
+    // immediate async reconnect (falling back to the interval loop on failure).
+    gateway_asio::post(*m_io, [this] {
+        {
+            std::lock_guard lk(m_socketMtx);
+            closeSocketLocked();
+            m_state.store(transport::ConnectionState::Error, std::memory_order_release);
+        }
+        if (m_reconnectTimer) {
+            gateway_error_code ignored;
+            m_reconnectTimer->cancel(ignored);
+        }
+        m_reconnectPending = false;
+        attemptReconnect();
+    });
+}
+
 void AsioModbusTcpClient::scheduleReconnect() {
     if (!m_io) return;
     // Always hop onto the io thread so the timer/flag are touched single-threaded.
