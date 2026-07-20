@@ -99,6 +99,9 @@ BytePermutation permutationFor(WordOrder w, int byteCount) noexcept {
 #include "core/qml/DatapointQmlBridge.h"
 #include "core/dp/DatapointRegistry.h"
 #include "core/dp/Datapoint.h"
+#ifdef CORE_HAS_QML
+#include <QQmlEngine>
+#endif
 
 namespace core::qml {
 
@@ -108,7 +111,16 @@ DatapointQmlBridge::DatapointQmlBridge(dp::DatapointRegistry& reg, QObject* pare
 DatapointQmlBridge::~DatapointQmlBridge() = default;
 
 dp::Datapoint* DatapointQmlBridge::dp(QString const& id) const {
-    return m_registry.find(id).get();
+    auto* point = m_registry.find(id).get();
+#ifdef CORE_HAS_QML
+    if (point) {
+        // Datapoints are owned by DatapointRegistry through shared_ptr. A
+        // QObject returned from Q_INVOKABLE without a parent may otherwise be
+        // claimed and deleted by the QML garbage collector.
+        QQmlEngine::setObjectOwnership(point, QQmlEngine::CppOwnership);
+    }
+#endif
+    return point;
 }
 
 } // namespace core::qml

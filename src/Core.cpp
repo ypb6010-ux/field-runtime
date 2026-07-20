@@ -182,6 +182,8 @@ public:
 #ifdef CORE_HAS_QML
         m_dpBridge.reset();
 #endif
+        m_serverRouteBindings.clear();
+        m_datapointById.clear();
         m_dps.reset();
         m_codecs.reset();
         m_bus.reset();
