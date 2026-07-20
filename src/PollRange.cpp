@@ -5,6 +5,8 @@
 #include <utility>
 
 #include "core/codec/Codec.h"
+#include "core/bus/BusEvents.h"
+#include "core/bus/EventBus.h"
 #include "core/dp/Datapoint.h"
 #include "core/dp/PortRef.h"
 #include "core/dp/ScalarType.h"
@@ -16,10 +18,12 @@ PollRange::PollRange(QString                     moduleId,
                      transport::Transport&       transport,
                      transport::ReadRequest      request,
                      int                         periodMs,
-                     sched::Priority             priority)
+                     sched::Priority             priority,
+                     bus::EventBus*               bus)
     : m_transport(&transport)
     , m_req(std::move(request))
-    , m_periodMs(periodMs) {
+    , m_periodMs(periodMs)
+    , m_bus(bus) {
     m_id          = std::move(moduleId);
     m_transportId = transport.id();
     m_priority    = priority;
@@ -48,7 +52,7 @@ transport::ReadRequest const& PollRange::request() const noexcept {
 }
 
 void PollRange::applyResult(transport::ReadResult const& result) {
-    if (!result.ok) {
+    if (!result.ok || result.values.size() < m_req.count) {
         for (auto& b : m_bindings) {
             b.dp->setState(dp::DpState::Error);
         }
@@ -83,6 +87,11 @@ void PollRange::applyResult(transport::ReadResult const& result) {
         }
         b.dp->setValue(std::move(decoded));
     }
+    if (m_bus) {
+        m_bus->publish(bus::PollRangeCompleted{
+            m_id, m_transportId, m_req.table, m_req.startAddress, m_req.count,
+            result.values.mid(0, m_req.count), QDateTime::currentDateTimeUtc()});
+    }
 }
 
 sched::SubmitResult PollRange::pollOnce() {
@@ -110,9 +119,10 @@ sched::SubmitResult PollRange::pollOnce() {
         return submission;
     }
     applyResult(result);
-    if (!result.ok) {
+    if (!result.ok || result.values.size() < m_req.count) {
         submission.kind         = sched::ResultKind::Error;
-        submission.errorMessage = result.errorMessage;
+        submission.errorMessage = result.errorMessage.isEmpty()
+            ? QStringLiteral("incomplete read result") : result.errorMessage;
     }
     return submission;
 }
@@ -137,13 +147,14 @@ void PollRange::driveTick() {
         [this, runGeneration](sched::AsyncDone done) {
             m_transport->readAsync(m_req,
                 [this, runGeneration, done = std::move(done)](transport::ReadResult r) mutable {
+                    bool const successful = r.ok && r.values.size() >= m_req.count;
                     if (!m_paused.load(std::memory_order_acquire)
                         && m_runGeneration.load(std::memory_order_acquire)
                             == runGeneration) {
                         applyResult(r);
                     }
                     m_inFlight.store(false, std::memory_order_release);
-                    done(r.ok);
+                    done(successful);
                 });
         });
 

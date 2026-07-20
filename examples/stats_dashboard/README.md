@@ -1,7 +1,7 @@
 # Example: stats_dashboard
 
 Demonstrates real-time observability via `SchedulerStatsEvent` +
-`TransportEvent`. Output is one line per transport per second showing
+`TransportStateChanged`. Output is one line per transport per second showing
 queue depth, in-flight requests, p50/p99 latency, total throughput,
 and circuit-breaker state.
 
@@ -29,5 +29,6 @@ Sample output:
 - Two transports with different scheduler kinds (`serial` vs `credit`)
 - `SchedulerStatsEvent` shape — pipe directly to Prometheus / Grafana
   or a QML diagnostics page
-- `TransportEvent::Connected/Disconnected` as a connectivity heartbeat
+- immutable `TransportStatus` snapshots and revisioned
+  `TransportStateChanged` transitions as a connectivity heartbeat
 - Live recovery from server-side disconnects without restarting the app

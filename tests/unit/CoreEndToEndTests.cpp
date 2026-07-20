@@ -5,6 +5,7 @@
 
 #include <QTemporaryFile>
 
+#include <atomic>
 #include <chrono>
 #include <thread>
 
@@ -181,6 +182,133 @@ host = "127.0.0.1"
     REQUIRE(second.error().first().section == "core");
     REQUIRE(second.error().first().message.contains("already loaded"));
     REQUIRE(core->transportIds() == QStringList{"tcp1"});
+}
+
+TEST_CASE("ICore invalid reload leaves the running graph untouched",
+          "[core][config][reload][rollback]") {
+    auto const port = nextE2EPort();
+    QTemporaryFile active;
+    auto activePath = writeToml(QString(R"toml(
+[[transport]]
+id = "server.old"
+kind = "modbus_tcp_server"
+listen_address = "127.0.0.1"
+listen_port = %1
+[[transport.listen_ranges]]
+table = "HR"
+range = [0, 4]
+
+[[datapoint]]
+id = "old.dp"
+kind = "Status"
+type = "U16"
+source = { port="server.old", table="HR", addr=0 }
+)toml").arg(port), active);
+    QTemporaryFile invalid;
+    auto invalidPath = writeToml(QStringLiteral(R"toml(
+[[transport]]
+id = "broken"
+kind = "modbus_tcp_client"
+port = 70000
+)toml"), invalid);
+
+    auto core = ICore::create(nullptr);
+    REQUIRE(core->loadConfig(activePath).has_value());
+    core->start();
+    REQUIRE(waitConnected(*core, QStringLiteral("server.old")));
+    auto* const oldTransport = core->transport(QStringLiteral("server.old"));
+    std::atomic<int> failedEvents{0};
+    auto sub = core->bus().subscribe<bus::ConfigReloadFailed>(
+        [&](bus::ConfigReloadFailed const&) { failedEvents.fetch_add(1); });
+
+    auto reloaded = core->reloadConfig(invalidPath);
+    REQUIRE_FALSE(reloaded.has_value());
+    REQUIRE(core->transport(QStringLiteral("server.old")) == oldTransport);
+    REQUIRE(core->datapoints().find(QStringLiteral("old.dp")) != nullptr);
+    REQUIRE(core->serverForwardEnabled(QStringLiteral("server.old")));
+    REQUIRE(core->transportStatus(QStringLiteral("server.old")).state
+            == transport::ConnectionState::Connected);
+    REQUIRE(failedEvents.load() == 1);
+    core->stop();
+}
+
+TEST_CASE("ICore valid reload atomically replaces the graph and announces rebuild",
+          "[core][config][reload][model]") {
+    auto const oldPort = nextE2EPort();
+    auto const newPort = nextE2EPort();
+    QTemporaryFile oldConfig;
+    QTemporaryFile newConfig;
+    auto oldPath = writeToml(QString(R"toml(
+[[transport]]
+id = "server.old"
+kind = "modbus_tcp_server"
+listen_address = "127.0.0.1"
+listen_port = %1
+[[transport.listen_ranges]]
+table = "HR"
+range = [0, 4]
+[[datapoint]]
+id = "old.dp"
+kind = "Status"
+type = "U16"
+source = { port="server.old", table="HR", addr=0 }
+)toml").arg(oldPort), oldConfig);
+    auto newPath = writeToml(QString(R"toml(
+[[transport]]
+id = "server.new"
+kind = "modbus_tcp_server"
+listen_address = "127.0.0.1"
+listen_port = %1
+[[transport.listen_ranges]]
+table = "HR"
+range = [10, 4]
+[[datapoint]]
+id = "new.dp"
+kind = "Status"
+type = "U16"
+source = { port="server.new", table="HR", addr=10 }
+)toml").arg(newPort), newConfig);
+
+    auto core = ICore::create(nullptr);
+    REQUIRE(core->loadConfig(oldPath).has_value());
+    core->start();
+    REQUIRE(waitConnected(*core, QStringLiteral("server.old")));
+    std::atomic<int> succeeded{0};
+    std::atomic<int> rebuilt{0};
+    std::atomic<int> reentrantRejected{0};
+    auto startedSub = core->bus().subscribe<bus::ConfigReloadStarted>(
+        [&](bus::ConfigReloadStarted const&) {
+            auto nested = core->reloadConfig(newPath);
+            if (!nested.has_value()
+                && nested.error().first().message.contains(
+                    QStringLiteral("already in progress"))) {
+                reentrantRejected.fetch_add(1);
+            }
+        });
+    auto successSub = core->bus().subscribe<bus::ConfigReloadSucceeded>(
+        [&](bus::ConfigReloadSucceeded const&) { succeeded.fetch_add(1); });
+    auto rebuildSub = core->bus().subscribe<bus::DatapointModelRebuilt>(
+        [&](bus::DatapointModelRebuilt const& event) {
+            if (event.generation > 0) rebuilt.fetch_add(1);
+        });
+
+    REQUIRE(core->reloadConfig(newPath).has_value());
+    REQUIRE(waitConnected(*core, QStringLiteral("server.new")));
+    REQUIRE(core->transport(QStringLiteral("server.old")) == nullptr);
+    REQUIRE(core->transport(QStringLiteral("server.new")) != nullptr);
+    REQUIRE(core->datapoints().find(QStringLiteral("old.dp")) == nullptr);
+    REQUIRE(core->datapoints().find(QStringLiteral("new.dp")) != nullptr);
+    REQUIRE_FALSE(core->serverForwardEnabled(QStringLiteral("server.new")));
+    REQUIRE(succeeded.load() == 1);
+    REQUIRE(rebuilt.load() == 1);
+    REQUIRE(reentrantRejected.load() == 1);
+    REQUIRE(core->reloadConfig(oldPath).has_value());
+    REQUIRE(waitConnected(*core, QStringLiteral("server.old")));
+    REQUIRE_FALSE(core->serverForwardEnabled(QStringLiteral("server.old")));
+    REQUIRE(succeeded.load() == 2);
+    REQUIRE(rebuilt.load() == 2);
+    REQUIRE(reentrantRejected.load() == 2);
+    core->stop();
 }
 
 TEST_CASE("ICore rejects configuration loading after start",

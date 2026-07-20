@@ -6,6 +6,8 @@
 #include <memory>
 
 #include "core/codec/BuiltinCodecs.h"
+#include "core/bus/BusEvents.h"
+#include "core/bus/EventBus.h"
 #include "core/dp/Datapoint.h"
 #include "core/dp/PortRef.h"
 #include "core/dp/ScalarType.h"
@@ -87,6 +89,29 @@ TEST_CASE("PollRange dispatches decoded values into bound datapoints",
     REQUIRE_THAT(b->value().toDouble(), WithinAbs(20.0, 1e-9));
     REQUIRE(a->state() == dp::DpState::Ok);
     REQUIRE(b->state() == dp::DpState::Ok);
+}
+
+TEST_CASE("PollRange publishes the untouched successful register snapshot",
+          "[poll][event][bridge]") {
+    test::MockTransport mock;
+    bus::EventBus bus;
+    QList<bus::PollRangeCompleted> events;
+    auto sub = bus.subscribe<bus::PollRangeCompleted>(
+        [&events](bus::PollRangeCompleted const& event) {
+            events.append(event);
+        });
+    module::PollRange poll(QStringLiteral("poll.raw"), mock,
+                           readRange(50, 3), 100,
+                           sched::Priority::Normal, &bus);
+    mock.enqueueReadValues({0x1234, 0x00f0, 0xabcd});
+
+    REQUIRE(poll.pollOnce().kind == sched::ResultKind::Ok);
+    REQUIRE(events.size() == 1);
+    REQUIRE(events.first().moduleId == QStringLiteral("poll.raw"));
+    REQUIRE(events.first().transportId == QStringLiteral("mock"));
+    REQUIRE(events.first().startAddress == 50);
+    REQUIRE(events.first().count == 3);
+    REQUIRE(events.first().values == QList<quint16>{0x1234, 0x00f0, 0xabcd});
 }
 
 TEST_CASE("PollRange decodes multi-register datapoints honouring word order",

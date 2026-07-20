@@ -28,6 +28,19 @@ public:
     virtual TransportKind    kind()  const = 0;
     virtual ConnectionState  state() const = 0;
 
+    // Thread-safe value snapshots for initialization, diagnostics and tests.
+    // Concrete transports override status() to include endpoints, errors and
+    // monotonic revisions. The default keeps lightweight test transports
+    // source-compatible.
+    virtual TransportStatus status() const {
+        TransportStatus out;
+        out.transportId = id();
+        out.kind        = kind();
+        out.state       = state();
+        return out;
+    }
+    virtual QList<PeerSession> peerSessions() const { return {}; }
+
     virtual std::expected<void, QString> connect()    = 0;
     virtual void                          disconnect() = 0;
 

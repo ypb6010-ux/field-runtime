@@ -14,6 +14,8 @@
 #include <unordered_map>
 #include <utility>
 
+#include <QUrl>
+
 #ifdef CORE_HAS_MQTT_PAHO
   #include <mqtt/async_client.h>
   #include <mqtt/callback.h>
@@ -23,6 +25,7 @@
 #include "core/bus/BusEvents.h"
 #include "core/bus/EventBus.h"
 #include "core/sched/SerialScheduler.h"
+#include "TransportStatusTracker.h"
 
 namespace core::transport {
 
@@ -55,7 +58,9 @@ public:
 
     Impl(Config c, bus::EventBus* b)
         : cfg(std::move(c))
-        , busPtr(b)
+        , statusTracker(cfg.id, TransportKind::MqttPahoClient, b, {},
+                        EndpointInfo{QUrl(cfg.brokerUri).host(),
+                                     quint16(QUrl(cfg.brokerUri).port(1883))})
         , scheduler(sched::makeScheduler(cfg.scheduler))
         , client(cfg.brokerUri.toStdString(), cfg.clientId.toStdString()) {
         client.set_callback(*this);
@@ -97,8 +102,7 @@ public:
 
     // mqtt::callback overrides — invoked from paho's dispatcher thread.
     void connected(std::string const&) override {
-        auto const prev = state.exchange(ConnectionState::Connected,
-                                          std::memory_order_acq_rel);
+        state.store(ConnectionState::Connected, std::memory_order_release);
         // Automatic reconnect does not restore subscriptions for a clean
         // session, so subscribe again after every successful connection.
         try {
@@ -109,22 +113,15 @@ public:
             client.subscribe(wildcard.toStdString(), cfg.qos);
         } catch (...) {
         }
-        if (busPtr && prev != ConnectionState::Connected) {
-            busPtr->publish(bus::TransportEvent{
-                cfg.id, bus::TransportEventKind::Connected, {}});
-        }
+        statusTracker.update(ConnectionState::Connected);
     }
 
     void connection_lost(std::string const& cause) override {
         auto const message = QString::fromStdString(cause);
         setLastError(message);
-        auto const prev = state.exchange(ConnectionState::Disconnected,
-                                          std::memory_order_acq_rel);
+        state.store(ConnectionState::Disconnected, std::memory_order_release);
         clearCache();
-        if (busPtr && prev == ConnectionState::Connected) {
-            busPtr->publish(bus::TransportEvent{
-                cfg.id, bus::TransportEventKind::Disconnected, message});
-        }
+        statusTracker.update(ConnectionState::Disconnected, message);
     }
 
     void message_arrived(mqtt::const_message_ptr msg) override {
@@ -227,7 +224,7 @@ public:
     }
 
     Config                                            cfg;
-    bus::EventBus*                                    busPtr = nullptr;
+    detail::TransportStatusTracker                    statusTracker;
     std::unique_ptr<sched::RequestScheduler>           scheduler;
     mqtt::async_client                                 client;
     std::atomic<ConnectionState>                       state{ConnectionState::Disconnected};
@@ -251,6 +248,7 @@ MqttPahoTransport::~MqttPahoTransport() = default;
 QString               MqttPahoTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         MqttPahoTransport::kind()  const { return TransportKind::MqttPahoClient; }
 ConnectionState       MqttPahoTransport::state() const { return m_impl->state.load(); }
+TransportStatus       MqttPahoTransport::status() const { return m_impl->statusTracker.snapshot(); }
 
 sched::RequestScheduler& MqttPahoTransport::scheduler() { return *m_impl->scheduler; }
 
@@ -259,6 +257,9 @@ MqttPahoTransport::connect() {
     try {
         m_impl->setLastError({});
         m_impl->clearCache();
+        m_impl->state.store(ConnectionState::Connecting,
+                            std::memory_order_release);
+        m_impl->statusTracker.update(ConnectionState::Connecting);
         mqtt::connect_options opts;
         opts.set_clean_session(m_impl->cfg.cleanSession);
         opts.set_keep_alive_interval(60);
@@ -276,14 +277,13 @@ MqttPahoTransport::connect() {
             opts.set_automatic_reconnect(retrySeconds, retrySeconds);
         }
 
-        m_impl->state.store(ConnectionState::Connecting,
-                             std::memory_order_release);
         auto tok = m_impl->client.connect(opts);
         if (!tok->wait_for(m_impl->cfg.connectTimeoutMs)) {
             auto const message = QStringLiteral("paho MQTT connect timeout");
             m_impl->setLastError(message);
             m_impl->state.store(ConnectionState::Error,
                                 std::memory_order_release);
+            m_impl->statusTracker.update(ConnectionState::Error, message);
             return std::unexpected(message);
         }
         // Subscribe to wildcard so `read()` finds cached payloads.
@@ -299,6 +299,7 @@ MqttPahoTransport::connect() {
             m_impl->setLastError(message);
             m_impl->state.store(ConnectionState::Error,
                                 std::memory_order_release);
+            m_impl->statusTracker.update(ConnectionState::Error, message);
             try {
                 auto token = m_impl->client.disconnect(m_impl->cfg.requestTimeoutMs);
                 (void)token->wait_for(m_impl->cfg.requestTimeoutMs);
@@ -306,18 +307,23 @@ MqttPahoTransport::connect() {
             }
             return std::unexpected(message);
         }
+        m_impl->state.store(ConnectionState::Connected,
+                            std::memory_order_release);
+        m_impl->statusTracker.update(ConnectionState::Connected);
         return {};
     } catch (mqtt::exception const& e) {
         auto const message = QString::fromUtf8(e.what());
         m_impl->setLastError(message);
         m_impl->state.store(ConnectionState::Error,
                              std::memory_order_release);
+        m_impl->statusTracker.update(ConnectionState::Error, message);
         return std::unexpected(message);
     } catch (std::exception const& e) {
         auto const message = QString::fromUtf8(e.what());
         m_impl->setLastError(message);
         m_impl->state.store(ConnectionState::Error,
                             std::memory_order_release);
+        m_impl->statusTracker.update(ConnectionState::Error, message);
         return std::unexpected(message);
     }
 }
@@ -332,6 +338,7 @@ void MqttPahoTransport::disconnect() {
     m_impl->clearCache();
     m_impl->state.store(ConnectionState::Disconnected,
                          std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Disconnected);
 }
 
 ReadResult MqttPahoTransport::read(ReadRequest const& req) {
@@ -383,10 +390,13 @@ void MqttPahoTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
 class MqttPahoTransport::Impl {
 public:
     Impl(Config c, bus::EventBus* b)
-        : cfg(std::move(c)), busPtr(b)
+        : cfg(std::move(c))
+        , statusTracker(cfg.id, TransportKind::MqttPahoClient, b, {},
+                        EndpointInfo{QUrl(cfg.brokerUri).host(),
+                                     quint16(QUrl(cfg.brokerUri).port(1883))})
         , scheduler(sched::makeScheduler(cfg.scheduler)) {}
     Config                                  cfg;
-    bus::EventBus*                          busPtr;
+    detail::TransportStatusTracker          statusTracker;
     std::unique_ptr<sched::RequestScheduler> scheduler;
     std::atomic<ConnectionState>            state{ConnectionState::Disconnected};
 };
@@ -398,13 +408,20 @@ MqttPahoTransport::~MqttPahoTransport() = default;
 QString               MqttPahoTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         MqttPahoTransport::kind()  const { return TransportKind::MqttPahoClient; }
 ConnectionState       MqttPahoTransport::state() const { return m_impl->state.load(); }
+TransportStatus       MqttPahoTransport::status() const { return m_impl->statusTracker.snapshot(); }
 sched::RequestScheduler& MqttPahoTransport::scheduler() { return *m_impl->scheduler; }
 
 std::expected<void, QString> MqttPahoTransport::connect() {
-    return std::unexpected(QStringLiteral(
-        "MqttPahoTransport disabled (CORE_BUILD_MQTT_PAHO=OFF)"));
+    auto const message = QStringLiteral(
+        "MqttPahoTransport disabled (CORE_BUILD_MQTT_PAHO=OFF)");
+    m_impl->state.store(ConnectionState::Error, std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Error, message);
+    return std::unexpected(message);
 }
-void        MqttPahoTransport::disconnect()                          {}
+void MqttPahoTransport::disconnect() {
+    m_impl->state.store(ConnectionState::Disconnected, std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Disconnected);
+}
 ReadResult  MqttPahoTransport::read      (ReadRequest const&)       {
     ReadResult r; r.errorMessage = QStringLiteral("paho MQTT disabled at build time");
     return r;

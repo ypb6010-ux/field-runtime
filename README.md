@@ -75,6 +75,9 @@ source = { port = "plc1", table = "HR", addr = 0, bit = 0 }
 Applications can bind to datapoints directly, subscribe to `DpChanged` events,
 or expose them to QML through the provided bridge.
 
+See [`CHANGELOG.md`](CHANGELOG.md) for the current transport-event, bridge
+policy, and runtime-reload migration notes.
+
 ## License
 
 FieldRuntime is released under the **Mozilla Public License 2.0
@@ -245,19 +248,25 @@ template <class T> void         publish(T const& event);
 | 事件 | 字段 | 谁发 | 谁订 |
 |---|---|---|---|
 | `DpChanged` | `id, value, timestamp` | datapoint 更新时 | QML 桥、插件、持久化 |
-| `TransportEvent` | `transportId, kind, payload` | transport 连接/断开/熔断 | 状态显示、日志 |
+| `TransportStateChanged` | `before, after` | transport 连接状态或错误变化 | 状态显示、日志 |
+| `PeerSessionChanged` | `kind, session, reason, changedAt` | Modbus TCP Server 客户端接入/断开 | 操作箱在线日志 |
+| `SchedulerCircuitChanged` | `transportId, before, after, changedAt` | 调度器熔断状态变化 | 健康监控 |
+| `PollRangeCompleted` | `moduleId, transportId, table, range, values` | 成功完成整段轮询后 | 原始寄存器镜像 |
 | `ServerWriteEvent` | `transportId, table, startAddress, values` | Modbus Server 收到操作箱写 | 路由 / 控制适配器 |
 | `SchedulerStatsEvent` | `transportId, stats` | 每 ~1s 的统计泵 | 仪表盘(队列深度/p50/p99/熔断) |
+| `ConfigReloadStarted/Succeeded/Failed` | `path[, reason]` | 显式热重载 | UI、运维日志 |
+| `DatapointModelRebuilt` | `generation` | 重载成功、QML 模型替换后 | QML/C++ 重新获取 datapoint 引用 |
 | `CoreReady` / `CoreStopping` | — | 生命周期 | 需要在 core 就绪/停机时动作的订阅者 |
 
-`TransportEventKind`:`Connected/Disconnected/CircuitOpened/CircuitClosed/CircuitHalfOpen/ReadCompleted/WriteCompleted`。
+连接状态和调度器熔断状态是两套事件，不能混作同一个“在线”指标。事件处理器应保持短小；
+初始化、诊断和测试可使用 `ICore::transportStatus(es)` / `peerSessions()` 值快照。
 
 ---
 
 ## 6. 核心概念
 
 ### Transport(`transport/Transport.h`)
-一条协议连接。统一接口:`connect/disconnect/state`、同步 `read/writeBatch`、**异步 `readAsync/writeAsync`**(非阻塞)、`scheduler()`。实现:Modbus TCP Client/Server、Modbus RTU、OPC UA Client、MQTT(Qt/paho)；S7 尚未实现且配置会被拒绝。每条 transport 自带一个 `Scheduler`。
+一条协议连接。统一接口:`connect/disconnect/state/status/peerSessions`、同步 `read/writeBatch`、**异步 `readAsync/writeAsync`**(非阻塞)、`scheduler()`。`status()` 和 `peerSessions()` 返回线程安全值对象，不暴露底层 QObject。实现:Modbus TCP Client/Server、Modbus RTU、OPC UA Client、MQTT(Qt/paho)；S7 尚未实现且配置会被拒绝。每条 transport 自带一个 `Scheduler`。
 
 ### Scheduler(`sched/RequestScheduler.h`)
 请求网关。`submitAsync(tag, work)` 事件驱动:work 发起非阻塞 I/O,完成回调里泵下一个。
@@ -409,15 +418,18 @@ write_start = 0           # 转发区:server 写 [write_start, write_start+write
 write_count = 50
 mirror_start = 50         # 镜像区:PLC 读 [mirror_start, mirror_start+mirror_count) → server 寄存器
 mirror_count = 300
-mirror_period_ms = 100    # 镜像刷新周期(默认 100)
+mirror_policy = "AfterPoll" # 必填:AfterPoll 或 Periodic
+# mirror_period_ms = 100     # 仅 mirror_policy="Periodic" 时必填
 ```
 
 - **转发**(写区):操作箱写 server 触发 `ServerWriteEvent` → 命中写区的子段 `stageRegister`
   到 PLC 侧一个**自动创建的 SinkWindow**(`bridge.fwd.<server>`,High 优先级,带重试和单在途刷写)
   → 由 TickDriver 刷到 PLC。地址按 `plc = server - offset` 映射。
-- **镜像**(读区):每 `mirror_period_ms` 把 PLC 读区的 datapoint 值整段 `writeBatch` 回 server
-  transport **自己的寄存器表**,操作箱即可读到 PLC 状态。镜像区必须有来自 `plc` 的 HR datapoint
-  覆盖(否则镜像恒为 0,加载时校验会报错)。
+- **AfterPoll 镜像**(推荐):覆盖镜像区的 HR `poll_range` 每次成功后，直接把同一轮原始 U16
+  快照写回 server 自己的寄存器表。倍率、偏移、bit/mask 和重复地址不会破坏原始值；轮询失败
+  保留最后一次有效快照，慢写会合并为最新一轮而不堆积。
+- **Periodic 镜像**:按 `mirror_period_ms` 写入最近一次成功轮询的原始快照；不会同时触发
+  AfterPoll。镜像区只要求被一个 PLC HR `poll_range` 完整覆盖，不要求创建占位 datapoint。
 - 写区/读区**不重叠**:写区保留操作箱写入(不被镜像覆盖),读区回显 PLC。
 
 **运行时转发开关(业务可干预):** 转发链路(route + bridge 写区)默认开启,可按 server 透传 id
@@ -437,8 +449,27 @@ bool on = core->serverForwardEnabled("main");
 > 校验:`ConfigLoader` 会拒绝未知/拼错字段及错误字段类型，并检查"引用是否命中已声明项""id 唯一"
 > "sink.addr 是否落在所引用的 sink_window 范围内""bridge.server/plc transport 是否存在"
 > "source 是否被 poll_range/Server route 驱动""各独立写模块地址不重叠""bridge 写区与镜像区不重叠"
-> "bridge 镜像区是否有 PLC datapoint"等；出错会在加载时把
+> "bridge 镜像区是否被单个 PLC HR poll_range 完整覆盖"等；出错会在加载时把
 > section/field/行号一并报出。
+
+### 运行时状态快照与配置热重载
+
+应用应在 `start()` 前订阅状态事件，启动后读取一次快照完成初始化；不要在 QML 中轮询
+transport，也不要长期保存 `Transport*` 或 datapoint 指针跨越重载：
+
+```cpp
+auto stateSub = core->bus().subscribe<core::bus::TransportStateChanged>(onState);
+auto peerSub  = core->bus().subscribe<core::bus::PeerSessionChanged>(onPeer);
+auto initial  = core->transportStatuses();
+
+auto result = core->reloadConfig("config.toml");
+```
+
+`reloadConfig()` 会先在隔离实例中完整解析、校验并构建候选图；预检失败时当前连接和 datapoint
+保持不变。切换阶段会停止旧调度/连接并安全排空异步回调；实际构建失败则按上一份已验证 schema
+回滚。成功后发布 `DatapointModelRebuilt` 和 `ConfigReloadSucceeded`，QML/C++ 消费者必须按新的
+`generation` 重新获取 datapoint 引用。新图的操作箱→PLC 指令转发默认关闭，业务确认远程许可后
+显式调用 `setServerForwardEnabled(serverId, true)`。文件监听不属于 Core，由应用决定何时调用。
 
 ---
 

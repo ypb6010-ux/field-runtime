@@ -31,6 +31,7 @@
 #include "core/sched/SerialScheduler.h"
 
 #include "QtThreadInvoke.h"
+#include "TransportStatusTracker.h"
 
 namespace core::transport {
 
@@ -65,7 +66,9 @@ class OpcUaClientTransport::Impl {
 public:
     Impl(Config c, bus::EventBus* b)
         : cfg(std::move(c))
-        , busPtr(b)
+        , statusTracker(cfg.id, TransportKind::OpcUaClient, b, {},
+                        EndpointInfo{QUrl(cfg.endpointUrl).host(),
+                                     quint16(QUrl(cfg.endpointUrl).port(4840))})
         , scheduler(sched::makeScheduler(cfg.scheduler))
         , thread(new QThread) {
 
@@ -76,8 +79,11 @@ public:
         QOpcUaProvider provider;
         client = provider.createClient(cfg.backend);
         if (!client) {
-            setLastError(QStringLiteral("provider failed to create '%1' backend")
-                             .arg(cfg.backend));
+            auto const message = QStringLiteral("provider failed to create '%1' backend")
+                                     .arg(cfg.backend);
+            setLastError(message);
+            state.store(ConnectionState::Error, std::memory_order_release);
+            statusTracker.update(ConnectionState::Error, message);
             thread->start();   // keep the worker thread alive for symmetry
             return;
         }
@@ -85,29 +91,22 @@ public:
         QObject::connect(client, &QOpcUaClient::stateChanged,
                          client, [this](QOpcUaClient::ClientState s) {
             auto const cur  = stateFromQt(s);
-            auto const prev = state.exchange(cur, std::memory_order_acq_rel);
-            if (!busPtr) return;
-            if (cur == ConnectionState::Connected
-                && prev != ConnectionState::Connected) {
-                busPtr->publish(bus::TransportEvent{
-                    cfg.id, bus::TransportEventKind::Connected, {}});
-            } else if (cur == ConnectionState::Disconnected
-                       && prev == ConnectionState::Connected) {
-                busPtr->publish(bus::TransportEvent{
-                    cfg.id, bus::TransportEventKind::Disconnected, {}});
-            }
+            if (cur == ConnectionState::Connected) setLastError({});
+            auto const error = getLastError();
+            auto const effective = cur == ConnectionState::Disconnected
+                                && !error.isEmpty()
+                ? ConnectionState::Error : cur;
+            state.store(effective, std::memory_order_release);
+            statusTracker.update(effective,
+                effective == ConnectionState::Error ? error : QString{});
         });
         QObject::connect(client, &QOpcUaClient::errorChanged,
                          client, [this](QOpcUaClient::ClientError e) {
             if (e == QOpcUaClient::NoError) return;
             auto const message = QStringLiteral("OPC UA error %1").arg(int(e));
             setLastError(message);
-            auto const prev = state.exchange(ConnectionState::Error,
-                                              std::memory_order_acq_rel);
-            if (busPtr && prev == ConnectionState::Connected) {
-                busPtr->publish(bus::TransportEvent{
-                    cfg.id, bus::TransportEventKind::Disconnected, message});
-            }
+            state.store(ConnectionState::Error, std::memory_order_release);
+            statusTracker.update(ConnectionState::Error, message);
         });
         {
             auto* cl = client;
@@ -167,7 +166,7 @@ public:
     }
 
     Config                                            cfg;
-    bus::EventBus*                                    busPtr = nullptr;
+    detail::TransportStatusTracker                    statusTracker;
     std::unique_ptr<sched::RequestScheduler>           scheduler;
     QThread*                                           thread = nullptr;
     QOpcUaClient*                                      client = nullptr;
@@ -187,6 +186,7 @@ OpcUaClientTransport::~OpcUaClientTransport() = default;
 QString               OpcUaClientTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         OpcUaClientTransport::kind()  const { return TransportKind::OpcUaClient; }
 ConnectionState       OpcUaClientTransport::state() const { return m_impl->state.load(); }
+TransportStatus       OpcUaClientTransport::status() const { return m_impl->statusTracker.snapshot(); }
 
 sched::RequestScheduler& OpcUaClientTransport::scheduler() { return *m_impl->scheduler; }
 
@@ -207,6 +207,9 @@ OpcUaClientTransport::connect() {
         return {};
     }
     m_impl->setLastError({});
+    m_impl->state.store(ConnectionState::Connecting,
+                        std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Connecting);
     detail::invokeBlocking(m_impl->client, [this] {
         m_impl->connectEndpoint();
     });
@@ -230,17 +233,23 @@ OpcUaClientTransport::connect() {
         m_impl->client->disconnectFromEndpoint();
     });
     armReconnectIfConfigured();
-    return std::unexpected(error.isEmpty()
-        ? QStringLiteral("OPC UA connect timeout") : error);
+    auto const message = error.isEmpty()
+        ? QStringLiteral("OPC UA connect timeout") : error;
+    m_impl->state.store(ConnectionState::Error, std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Error, message);
+    return std::unexpected(message);
 }
 
 void OpcUaClientTransport::disconnect() {
     if (!m_impl->client) return;
     m_impl->autoReconnect.store(false, std::memory_order_release);
+    m_impl->setLastError({});
     detail::invokeBlocking(m_impl->client, [this] {
         if (m_impl->reconnectTimer) m_impl->reconnectTimer->stop();
         m_impl->client->disconnectFromEndpoint();
     });
+    m_impl->state.store(ConnectionState::Disconnected, std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Disconnected);
 }
 
 void OpcUaClientTransport::armReconnectIfConfigured() {
@@ -544,10 +553,13 @@ void OpcUaClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
 class OpcUaClientTransport::Impl {
 public:
     Impl(Config c, bus::EventBus* b)
-        : cfg(std::move(c)), busPtr(b)
+        : cfg(std::move(c))
+        , statusTracker(cfg.id, TransportKind::OpcUaClient, b, {},
+                        EndpointInfo{QUrl(cfg.endpointUrl).host(),
+                                     quint16(QUrl(cfg.endpointUrl).port(4840))})
         , scheduler(sched::makeScheduler(cfg.scheduler)) {}
     Config                                  cfg;
-    bus::EventBus*                          busPtr;
+    detail::TransportStatusTracker          statusTracker;
     std::unique_ptr<sched::RequestScheduler> scheduler;
     std::atomic<ConnectionState>            state{ConnectionState::Disconnected};
 };
@@ -559,13 +571,20 @@ OpcUaClientTransport::~OpcUaClientTransport() = default;
 QString               OpcUaClientTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         OpcUaClientTransport::kind()  const { return TransportKind::OpcUaClient; }
 ConnectionState       OpcUaClientTransport::state() const { return m_impl->state.load(); }
+TransportStatus       OpcUaClientTransport::status() const { return m_impl->statusTracker.snapshot(); }
 sched::RequestScheduler& OpcUaClientTransport::scheduler() { return *m_impl->scheduler; }
 
 std::expected<void, QString> OpcUaClientTransport::connect() {
-    return std::unexpected(QStringLiteral(
-        "OpcUaClientTransport disabled (CORE_BUILD_OPCUA=OFF)"));
+    auto const message = QStringLiteral(
+        "OpcUaClientTransport disabled (CORE_BUILD_OPCUA=OFF)");
+    m_impl->state.store(ConnectionState::Error, std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Error, message);
+    return std::unexpected(message);
 }
-void        OpcUaClientTransport::disconnect()                        {}
+void OpcUaClientTransport::disconnect() {
+    m_impl->state.store(ConnectionState::Disconnected, std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Disconnected);
+}
 ReadResult  OpcUaClientTransport::read      (ReadRequest const&)       {
     ReadResult r; r.errorMessage = QStringLiteral("OPC UA disabled at build time");
     return r;

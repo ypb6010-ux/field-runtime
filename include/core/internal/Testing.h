@@ -24,9 +24,5 @@ CORE_EXPORT void tickSinkWindowsOnce(ICore& core);
 // QTimer-driven pump.
 CORE_EXPORT void publishSchedulerStatsOnce(ICore& core);
 
-// Drive one round of [[bridge]] PLC→server mirroring so tests can assert the
-// server's register table without waiting on the QTimer-driven mirror pump.
-CORE_EXPORT void mirrorBridgesOnce(ICore& core);
-
 } // namespace internal
 } // namespace core

@@ -33,9 +33,10 @@ TEST_CASE("Client transport auto-reconnects after the server returns",
 
     bus::EventBus bus;
     std::atomic<int> connectedEvents{0};
-    auto sub = bus.subscribe<bus::TransportEvent>(
-        [&](bus::TransportEvent const& e) {
-            if (e.kind == bus::TransportEventKind::Connected) {
+    auto sub = bus.subscribe<bus::TransportStateChanged>(
+        [&](bus::TransportStateChanged const& e) {
+            if (e.after.state == transport::ConnectionState::Connected
+                && e.before.state != transport::ConnectionState::Connected) {
                 connectedEvents.fetch_add(1);
             }
         });
@@ -79,10 +80,16 @@ TEST_CASE("Client transport reconnects after the server drops out",
 
     bus::EventBus bus;
     std::atomic<int> connects{0}, disconnects{0};
-    auto sub = bus.subscribe<bus::TransportEvent>(
-        [&](bus::TransportEvent const& e) {
-            if (e.kind == bus::TransportEventKind::Connected)    connects.fetch_add(1);
-            if (e.kind == bus::TransportEventKind::Disconnected) disconnects.fetch_add(1);
+    auto sub = bus.subscribe<bus::TransportStateChanged>(
+        [&](bus::TransportStateChanged const& e) {
+            if (e.after.state == transport::ConnectionState::Connected
+                && e.before.state != transport::ConnectionState::Connected) {
+                connects.fetch_add(1);
+            }
+            if (e.before.state == transport::ConnectionState::Connected
+                && e.after.state != transport::ConnectionState::Connected) {
+                disconnects.fetch_add(1);
+            }
         });
 
     auto srv = std::make_unique<core::test::ModbusTestServer>(port);

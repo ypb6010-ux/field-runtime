@@ -290,7 +290,30 @@ to     = "start_button"
 policy = "ContinuousMirror"  # the only currently implemented policy
 ```
 
-### 4.4 Startup validation
+### 4.4 `[[bridge]]` raw register mirroring
+
+```toml
+[[bridge]]
+server = "operator_box"
+plc = "plc"
+offset = 0
+write_start = 0
+write_count = 50
+mirror_start = 50
+mirror_count = 30
+mirror_policy = "AfterPoll" # AfterPoll or Periodic; required for a mirror
+# mirror_period_ms = 100     # required only for Periodic
+```
+
+`AfterPoll` mirrors the untouched U16 image immediately after the one covering
+PLC HR poll succeeds. `Periodic` writes the most recent successful raw image at
+its own cadence. The policies are mutually exclusive; failed polls retain the
+last good server image, and slow writes are coalesced instead of queued without
+bound. Scaling, masks, bit datapoints, and duplicate source addresses never
+reconstruct or overwrite the raw mirror. A mirror needs one HR `poll_range`
+that fully covers it, but it does not need placeholder datapoints.
+
+### 4.5 Startup validation
 
 Loading goes through fail-fast validation. Unknown, misspelled, or wrongly typed
 fields are rejected instead of silently falling back to defaults; see spec §4.3. The most
@@ -304,6 +327,8 @@ common rules:
 - `EnumU16` must declare `codec`
 - Modbus-client sink windows obey the applicable single-request write cap (123 for HR)
 - sink windows, heartbeats, commands, and bridge write ranges may not overlap on the same transport/table
+- every bridge mirror must select one explicit policy and be fully covered by
+  one PLC HR poll range
 - a datapoint sink must name a sink window or be fully covered by one on the same transport/table
 - a client datapoint source must be fully covered by a poll range on the same transport/table
 - `datapoint.sink.addr` must fall inside its referenced window
@@ -346,6 +371,31 @@ with queue depth, inflight count, p50/p99 latency, and circuit state.
 ---
 
 ## 6. Multi-Protocol Transports
+
+### Runtime status and explicit reload
+
+Subscribe to `TransportStateChanged` and `PeerSessionChanged` before
+`start()`, then seed the UI or diagnostics from `transportStatuses()` and
+`peerSessions(id)`. These APIs return thread-safe values with monotonic
+transport revisions; they never expose a socket or another thread-affine
+QObject. Scheduler circuit transitions use the separate
+`SchedulerCircuitChanged` event.
+
+```cpp
+auto stateSub = core->bus().subscribe<core::bus::TransportStateChanged>(onState);
+auto peerSub = core->bus().subscribe<core::bus::PeerSessionChanged>(onPeer);
+auto initial = core->transportStatuses();
+auto changed = core->reloadConfig("config.toml");
+```
+
+`reloadConfig()` preflights a complete candidate graph in isolation. A parse,
+validation, or candidate-build failure leaves the live graph untouched. The
+switch drains old asynchronous work and rolls back to the prior validated
+schema if the live build fails. Success publishes `DatapointModelRebuilt`
+followed by `ConfigReloadSucceeded`; consumers must reacquire datapoint
+references. Operator-box command forwarding starts disabled in the new graph
+until the application explicitly reconfirms remote-control permission. File
+watching remains an application policy, not a Core fallback mechanism.
 
 ### Fully implemented
 

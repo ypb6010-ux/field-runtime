@@ -15,6 +15,7 @@
 #include "core/transport/TransportTypes.h"
 
 namespace core::codec    { class Codec; }
+namespace core::bus      { class EventBus; }
 namespace core::dp       { class Datapoint; }
 namespace core::transport { class Transport; }
 
@@ -33,7 +34,8 @@ public:
               transport::Transport&       transport,
               transport::ReadRequest      request,
               int                         periodMs,
-              sched::Priority             priority = sched::Priority::Normal);
+              sched::Priority             priority = sched::Priority::Normal,
+              bus::EventBus*               bus = nullptr);
     ~PollRange() override;
 
     CORE_DISABLE_COPY_MOVE(PollRange)
@@ -89,6 +91,7 @@ private:
     // Incremented on every lifecycle transition. An async reply from a prior
     // run is discarded after stop/pause/restart instead of reviving stale data.
     std::atomic<quint64>        m_runGeneration{0};
+    bus::EventBus*              m_bus = nullptr;
 };
 
 } // namespace core::module

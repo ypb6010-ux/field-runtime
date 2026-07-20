@@ -23,6 +23,7 @@
 
 #include "ModbusReplyAsync.h"
 #include "QtThreadInvoke.h"
+#include "TransportStatusTracker.h"
 
 namespace core::transport {
 
@@ -69,7 +70,8 @@ class ModbusTcpClientTransport::Impl {
 public:
     Impl(Config c, bus::EventBus* b)
         : cfg(std::move(c))
-        , busPtr(b)
+        , statusTracker(cfg.id, TransportKind::ModbusTcpClient, b,
+                        {}, EndpointInfo{cfg.host, cfg.port})
         , scheduler(sched::makeScheduler(cfg.scheduler))
         , thread(new QThread)
         , client(new QModbusTcpClient) {
@@ -97,20 +99,15 @@ public:
         // current view without locking.
         QObject::connect(client, &QModbusDevice::stateChanged,
                          client, [this](QModbusDevice::State s) {
-            auto const prev = state.exchange(stateFromQt(s),
-                                             std::memory_order_acq_rel);
             auto const cur = stateFromQt(s);
-            if (busPtr) {
-                if (cur == ConnectionState::Connected
-                    && prev != ConnectionState::Connected) {
-                    busPtr->publish(bus::TransportEvent{
-                        cfg.id, bus::TransportEventKind::Connected, {}});
-                } else if (cur == ConnectionState::Disconnected
-                           && prev == ConnectionState::Connected) {
-                    busPtr->publish(bus::TransportEvent{
-                        cfg.id, bus::TransportEventKind::Disconnected, {}});
-                }
-            }
+            if (cur == ConnectionState::Connected) setLastError({});
+            auto const error = getLastError();
+            auto const effective = cur == ConnectionState::Disconnected
+                                && !error.isEmpty()
+                ? ConnectionState::Error : cur;
+            state.store(effective, std::memory_order_release);
+            statusTracker.update(effective,
+                effective == ConnectionState::Error ? error : QString{});
         });
         QObject::connect(client, &QModbusDevice::errorOccurred,
                          client, [this](QModbusDevice::Error e) {
@@ -118,12 +115,8 @@ public:
                 QString msg = client->errorString();
                 if (msg.isEmpty()) msg = errorStringFor(e);
                 setLastError(msg);
-                auto const prev = state.exchange(ConnectionState::Error,
-                                                  std::memory_order_acq_rel);
-                if (busPtr && prev == ConnectionState::Connected) {
-                    busPtr->publish(bus::TransportEvent{
-                        cfg.id, bus::TransportEventKind::Disconnected, msg});
-                }
+                state.store(ConnectionState::Error, std::memory_order_release);
+                statusTracker.update(ConnectionState::Error, msg);
             }
         });
     }
@@ -170,7 +163,7 @@ public:
     }
 
     Config                                            cfg;
-    bus::EventBus*                                    busPtr = nullptr;
+    detail::TransportStatusTracker                    statusTracker;
     std::unique_ptr<sched::RequestScheduler>           scheduler;
     QThread*                                           thread = nullptr;
     QModbusTcpClient*                                  client = nullptr;
@@ -189,6 +182,7 @@ ModbusTcpClientTransport::~ModbusTcpClientTransport() = default;
 QString               ModbusTcpClientTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         ModbusTcpClientTransport::kind()  const { return TransportKind::ModbusTcpClient; }
 ConnectionState       ModbusTcpClientTransport::state() const { return m_impl->state.load(std::memory_order_acquire); }
+TransportStatus       ModbusTcpClientTransport::status() const { return m_impl->statusTracker.snapshot(); }
 
 sched::RequestScheduler& ModbusTcpClientTransport::scheduler() { return *m_impl->scheduler; }
 
@@ -204,6 +198,9 @@ ModbusTcpClientTransport::connect() {
     }
 
     m_impl->setLastError({});
+    m_impl->state.store(ConnectionState::Connecting,
+                        std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Connecting);
     bool kicked = false;
     detail::invokeBlocking(m_impl->client, [this, &kicked] {
         m_impl->client->setConnectionParameter(
@@ -219,9 +216,12 @@ ModbusTcpClientTransport::connect() {
     if (!kicked) {
         armReconnectIfConfigured();
         auto const error = m_impl->getLastError();
-        return std::unexpected(error.isEmpty()
+        auto const message = error.isEmpty()
             ? QStringLiteral("connectDevice() returned false")
-            : error);
+            : error;
+        m_impl->state.store(ConnectionState::Error, std::memory_order_release);
+        m_impl->statusTracker.update(ConnectionState::Error, message);
+        return std::unexpected(message);
     }
 
     // Poll for terminal state up to connectTimeoutMs. We deliberately avoid
@@ -243,8 +243,11 @@ ModbusTcpClientTransport::connect() {
     }
     armReconnectIfConfigured();
     auto const error = m_impl->getLastError();
-    return std::unexpected(error.isEmpty()
-        ? QStringLiteral("connect timeout") : error);
+    auto const message = error.isEmpty()
+        ? QStringLiteral("connect timeout") : error;
+    m_impl->state.store(ConnectionState::Error, std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Error, message);
+    return std::unexpected(message);
 }
 
 void ModbusTcpClientTransport::armReconnectIfConfigured() {
@@ -286,6 +289,7 @@ void ModbusTcpClientTransport::armReconnectIfConfigured() {
 
 void ModbusTcpClientTransport::disconnect() {
     m_impl->autoReconnect.store(false, std::memory_order_release);
+    m_impl->setLastError({});
     detail::invokeBlocking(m_impl->client, [this] {
         if (m_impl->reconnectTimer) m_impl->reconnectTimer->stop();
         m_impl->client->disconnectDevice();
@@ -297,6 +301,8 @@ void ModbusTcpClientTransport::disconnect() {
         if (state() == ConnectionState::Disconnected) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    m_impl->state.store(ConnectionState::Disconnected, std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Disconnected);
 }
 
 ReadResult ModbusTcpClientTransport::read(ReadRequest const& req) {

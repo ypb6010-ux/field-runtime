@@ -55,6 +55,7 @@ public:
     QString               id()    const override;
     TransportKind         kind()  const override;
     ConnectionState       state() const override;
+    TransportStatus       status() const override;
 
     std::expected<void, QString> connect()    override;
     void                          disconnect() override;

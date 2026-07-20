@@ -751,13 +751,15 @@ BridgeConfig parseBridge(toml::table const& t,
     auto const section = QStringLiteral("bridge[%1]").arg(index);
     rejectUnknownKeys(t, section,
                       {"server", "plc", "offset", "write_start", "write_count",
-                       "mirror_start", "mirror_count", "mirror_period_ms"}, errs);
+                       "mirror_start", "mirror_count", "mirror_policy",
+                       "mirror_period_ms"}, errs);
     rejectWrongTypes(t, section,
         {{"server", TomlFieldType::String}, {"plc", TomlFieldType::String},
          {"offset", TomlFieldType::Integer}, {"write_start", TomlFieldType::Integer},
          {"write_count", TomlFieldType::Integer},
          {"mirror_start", TomlFieldType::Integer},
          {"mirror_count", TomlFieldType::Integer},
+         {"mirror_policy", TomlFieldType::String},
          {"mirror_period_ms", TomlFieldType::Integer}}, errs);
     BridgeConfig c;
     requireStr(t, "server", section, c.server, errs);
@@ -767,7 +769,19 @@ BridgeConfig parseBridge(toml::table const& t,
     c.writeCount     = getInt(t, "write_count", 0);
     c.mirrorStart    = getInt(t, "mirror_start", 0);
     c.mirrorCount    = getInt(t, "mirror_count", 0);
-    c.mirrorPeriodMs = getInt(t, "mirror_period_ms", 100);
+    QString const mirrorPolicy = getStr(t, "mirror_policy", {});
+    if (c.mirrorCount > 0 && mirrorPolicy.isEmpty()) {
+        errs.push_back({section, "mirror_policy",
+            QStringLiteral("is required when mirror_count is positive"), -1});
+    } else if (mirrorPolicy == QStringLiteral("AfterPoll")) {
+        c.mirrorPolicy = BridgeMirrorPolicy::AfterPoll;
+    } else if (mirrorPolicy == QStringLiteral("Periodic")) {
+        c.mirrorPolicy = BridgeMirrorPolicy::Periodic;
+    } else if (!mirrorPolicy.isEmpty()) {
+        errs.push_back({section, "mirror_policy",
+            QStringLiteral("must be exactly 'AfterPoll' or 'Periodic'"), -1});
+    }
+    c.mirrorPeriodMs = getInt(t, "mirror_period_ms", 0);
     return c;
 }
 
@@ -1452,7 +1466,14 @@ void validateValues(ConfigSchema const& s, ValidationErrors& errs) {
     for (int i = 0; i < s.bridges.size(); ++i) {
         auto const& b = s.bridges[i];
         auto const sec = QStringLiteral("bridge[%1]").arg(i);
-        requirePositive(b.mirrorPeriodMs, sec, "mirror_period_ms");
+        if (b.mirrorCount > 0) {
+            if (b.mirrorPolicy == BridgeMirrorPolicy::Periodic) {
+                requirePositive(b.mirrorPeriodMs, sec, "mirror_period_ms");
+            } else if (b.mirrorPeriodMs != 0) {
+                errs.push_back({sec, "mirror_period_ms",
+                    QStringLiteral("is only valid when mirror_policy is 'Periodic'"), -1});
+            }
+        }
         if (b.writeCount > 0) {
             validateRange(sec, "write", b.writeStart, b.writeCount, 123, errs);
             qint64 const plcStart = qint64(b.writeStart) - qint64(b.offset);
@@ -1968,29 +1989,25 @@ void validateRefs(ConfigSchema const& s, ValidationErrors& errs) {
                 }
             }
         }
-        // 镜像区必须至少有一个来自 plc 的 HR datapoint,否则镜像恒为 0(配错的常见原因)。
+        // Raw mirror snapshots come from one successful PollRange result. A
+        // single range must cover the entire mirror window so every register
+        // belongs to the same PLC read cycle; datapoint presence is irrelevant.
         if (b.mirrorCount > 0 && transports.count(b.plc)) {
-            bool anyDp = false;
-            for (auto const& d : s.datapoints) {
-                if (!d.hasSource || d.source.port != b.plc) continue;
-                if (d.source.table != QStringLiteral("HR")
-                 && d.source.table != QStringLiteral("HoldingRegisters")) continue;
-                int const a  = d.source.address;
-                int const rc = dp::registerCountFor(d.type);
-                if (!rangesOverlap(a, rc, b.mirrorStart, b.mirrorCount)) continue;
-                if (a >= b.mirrorStart
-                    && qint64(a) + rc <= qint64(b.mirrorStart) + b.mirrorCount) {
-                    anyDp = true;
-                } else {
-                    errs.push_back({sec, "mirror",
-                        QStringLiteral("mirror range partially clips datapoint '%1'")
-                            .arg(d.id), -1});
+            bool coveredByOnePoll = false;
+            for (auto const& poll : s.pollRanges) {
+                if (poll.transport != b.plc
+                    || canonicalTable(poll.table) != QStringLiteral("HR")) continue;
+                if (poll.startAddress <= b.mirrorStart
+                    && qint64(poll.startAddress) + poll.count
+                        >= qint64(b.mirrorStart) + b.mirrorCount) {
+                    coveredByOnePoll = true;
+                    break;
                 }
             }
-            if (!anyDp) {
+            if (!coveredByOnePoll) {
                 errs.push_back({sec, "mirror",
-                    QStringLiteral("mirror range [%1,%2) has no datapoint sourced from plc "
-                                   "'%3' (HR); mirror would be all zeros")
+                    QStringLiteral("mirror range [%1,%2) must be fully covered by one HR "
+                                   "poll_range on plc '%3'")
                         .arg(b.mirrorStart).arg(b.mirrorStart + b.mirrorCount).arg(b.plc), -1});
             }
         }

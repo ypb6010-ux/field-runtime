@@ -9,6 +9,7 @@
 
 #include "core/core_global.h"
 #include "core/config/ValidationError.h"
+#include "core/transport/TransportTypes.h"
 
 class QQmlContext;
 
@@ -34,11 +35,17 @@ public:
 
     virtual ~ICore() = default;
 
-    // One-shot configuration: call exactly once before start(). A second load
+    // Initial configuration: call exactly once before start(). A second load
     // or a load while running is rejected instead of partially mixing two
-    // object graphs. Create a new ICore instance to load another configuration.
+    // object graphs; use reloadConfig() for an explicit replacement.
     virtual std::expected<void, config::ValidationErrors>
             loadConfig(QString const& tomlPath) = 0;
+
+    // Explicit transactional reload. Parsing/validation failures leave the
+    // active graph untouched; runtime construction failures roll back to the
+    // previous validated schema. File watching belongs in the application.
+    virtual std::expected<void, config::ValidationErrors>
+            reloadConfig(QString const& tomlPath) = 0;
 
     virtual bus::EventBus&            bus()        = 0;
     virtual dp::DatapointRegistry&    datapoints() = 0;
@@ -47,8 +54,13 @@ public:
     virtual plugin::PluginRegistry&   plugins()    = 0;
     virtual log::Logger&              logger()     = 0;
 
+    // Live-object access for orchestration. Returned pointers are invalidated
+    // by a successful reload; UI/diagnostics should use the value snapshots.
     virtual transport::Transport*     transport(QString const& id) const = 0;
     virtual QStringList               transportIds() const = 0;
+    virtual transport::TransportStatus transportStatus(QString const& id) const = 0;
+    virtual QList<transport::TransportStatus> transportStatuses() const = 0;
+    virtual QList<transport::PeerSession> peerSessions(QString const& id) const = 0;
 
     virtual void start() = 0;
     virtual void stop()  = 0;

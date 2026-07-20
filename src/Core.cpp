@@ -10,6 +10,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -147,45 +148,7 @@ public:
                                       static_cast<QObject*>(nullptr));
         }
 #endif
-        // Async-safe teardown order:
-        //   1. drop event-bus subscriptions (no more routing into modules);
-        //   2. stop the module tick driver so no NEW driveTick() is issued
-        //      (modules stay alive);
-        //   3. destroy the transports — each stops its scheduler's async pump
-        //      (stopAsync) then joins its worker thread, SAFELY ABANDONING any
-        //      in-flight completion (a pending reply may be cancelled, not
-        //      delivered). Whatever completion does still run invokes module
-        //      callbacks (apply result / clear in-flight), so the modules MUST
-        //      still be alive here — hence transports before modules. The
-        //      modules' raw Transport* go dangling but are never dereferenced
-        //      after the tick driver stopped;
-        //   4. now destroy the modules;
-        //   5. datapoints / codecs / bus, then the logger last.
-        stopMirrorPump();                      // no bridge mirror fires during teardown
-        m_bridgeMirrors.clear();               // drop datapoint refs before the registry dies
-        m_bridgeMirrorInFlight.clear();
-        m_bridgeFwdSinks.clear();              // raw ptrs owned by m_modules
-        m_bridges.clear();
-        m_transportEventSub.reset();
-        m_serverWriteSub.reset();
-        joinConnectThreads();                  // no connect() in flight on a dying transport
-        if (m_modules) m_modules->stopAll();   // stop ticks; keep modules alive
-        m_transports.clear();                  // join worker threads → drain in-flight
-        m_pollRangePtrs.clear();
-        m_sinkWindowPtrs.clear();
-        m_modules.reset();                     // safe: no completion can fire now
-        // PortRegistry handlers capture plugin InPort references. Drop the bus
-        // subscription and those handlers before destroying/unloading plugin
-        // objects; Subscription destruction now drains concurrent dispatch.
-        m_ports.reset();
-        m_plugins.reset();
-#ifdef CORE_HAS_QML
-        m_dpBridge.reset();
-#endif
-        m_serverRouteBindings.clear();
-        m_datapointById.clear();
-        m_dps.reset();
-        m_codecs.reset();
+        destroyRuntimeGraph();
         m_bus.reset();
         // Logger last — subsystems above may log during teardown.
 #ifdef CORE_HAS_QML
@@ -206,7 +169,7 @@ public:
         if (m_configLoaded) {
             return std::unexpected(config::ValidationErrors{
                 {QStringLiteral("core"), QStringLiteral("loadConfig"),
-                 QStringLiteral("configuration is already loaded; create a new Core instance to replace it"),
+                 QStringLiteral("configuration is already loaded; use reloadConfig() to replace it"),
                  -1}});
         }
         if (m_configLoadPoisoned) {
@@ -226,55 +189,15 @@ public:
             return std::unexpected(schema.error());
         }
 
-        // Resolve config-relative paths (e.g. lua codec scripts) against the
-        // config file's directory.
-        m_configDir = QFileInfo(path).absolutePath();
-        auto codecErrors = registerCustomCodecs(*schema);
-        if (!codecErrors.isEmpty()) {
-            for (auto const& err : codecErrors) {
-                m_logger->logf(log::LogLevel::Error,
-                               QStringLiteral("config"), path, err.message);
-            }
-            return std::unexpected(std::move(codecErrors));
-        }
-        auto pluginErrors = loadPluginLibraries(*schema);
-        if (!pluginErrors.isEmpty()) {
-            m_plugins->unloadAll();
-            for (auto const& err : pluginErrors) {
-                m_logger->logf(log::LogLevel::Error,
-                               QStringLiteral("config"), path, err.message);
-            }
-            return std::unexpected(std::move(pluginErrors));
-        }
-        if (!schema->meta.logLevel.isEmpty()) {
-            m_logger->setThreshold(log::levelFromString(schema->meta.logLevel));
-        }
-        try {
-            wireFromSchema(*schema);
-        } catch (std::exception const& e) {
-            m_ports.reset();
-            m_plugins->unloadAll();
+        auto built = buildRuntimeFromSchema(*schema, path);
+        if (!built.has_value()) {
             m_configLoadPoisoned = true;
-            QString const message = QStringLiteral("runtime graph initialization failed: %1")
-                                        .arg(QString::fromUtf8(e.what()));
-            m_logger->logf(log::LogLevel::Error,
-                           QStringLiteral("config"), path, message);
-            return std::unexpected(config::ValidationErrors{
-                {QStringLiteral("core"), QStringLiteral("initialization"),
-                 message, -1}});
-        } catch (...) {
-            m_ports.reset();
-            m_plugins->unloadAll();
-            m_configLoadPoisoned = true;
-            QString const message = QStringLiteral(
-                "runtime graph initialization failed with an unknown exception");
-            m_logger->logf(log::LogLevel::Error,
-                           QStringLiteral("config"), path, message);
-            return std::unexpected(config::ValidationErrors{
-                {QStringLiteral("core"), QStringLiteral("initialization"),
-                 message, -1}});
+            return built;
         }
         m_configLoaded = true;
+        m_activeSchema = *schema;
+        m_activeConfigPath = QFileInfo(path).absoluteFilePath();
+        refreshSnapshotCache();
         m_logger->logf(log::LogLevel::Info, QStringLiteral("config"), path,
                        QStringLiteral("loaded"),
                        {{QStringLiteral("transports"),
@@ -282,6 +205,120 @@ public:
                         {QStringLiteral("datapoints"),
                          int(schema->datapoints.size())}});
         return {};
+    }
+
+    std::expected<void, config::ValidationErrors>
+    reloadConfig(QString const& path) override {
+        if (m_reloadInProgress.exchange(true, std::memory_order_acq_rel)) {
+            return std::unexpected(config::ValidationErrors{
+                {QStringLiteral("core"), QStringLiteral("reloadConfig"),
+                 QStringLiteral("another configuration reload is already in progress"), -1}});
+        }
+        struct ReloadFlagReset {
+            std::atomic_bool& flag;
+            ~ReloadFlagReset() {
+                flag.store(false, std::memory_order_release);
+            }
+        } reloadFlagReset{m_reloadInProgress};
+        if (!m_configLoaded || !m_activeSchema.has_value()) {
+            return std::unexpected(config::ValidationErrors{
+                {QStringLiteral("core"), QStringLiteral("reloadConfig"),
+                 QStringLiteral("no active configuration to reload"), -1}});
+        }
+
+        QString const absolutePath = QFileInfo(path).absoluteFilePath();
+        m_bus->publish(bus::ConfigReloadStarted{absolutePath});
+        auto summarize = [](config::ValidationErrors const& errors) {
+            QStringList messages;
+            for (auto const& error : errors) messages.append(error.message);
+            return messages.join(QStringLiteral("; "));
+        };
+
+        // Build the complete candidate graph in isolation first. Its worker
+        // objects, plugins and codecs are destroyed before the active graph is
+        // touched, so every preflight failure leaves live connections intact.
+        std::optional<config::ConfigSchema> candidateSchema;
+        {
+            auto candidate = std::make_unique<CoreImpl>(nullptr, false);
+            auto prepared = candidate->loadConfig(absolutePath);
+            if (!prepared.has_value()) {
+                auto const reason = summarize(prepared.error());
+                m_bus->publish(bus::ConfigReloadFailed{absolutePath, reason});
+                return std::unexpected(prepared.error());
+            }
+            candidateSchema = candidate->m_activeSchema;
+        }
+
+        auto const previousSchema = *m_activeSchema;
+        QString const previousPath = m_activeConfigPath;
+        auto const previousLogFilter = m_logger->filter();
+        QHash<QString, bool> previousForward;
+        {
+            std::lock_guard lock(m_forwardMtx);
+            previousForward = m_forwardEnabled;
+        }
+        bool const wasRunning = m_started.load(std::memory_order_acquire);
+        for (auto const& transportConfig : previousSchema.transports) {
+            if (transportConfig.kind == transport::TransportKind::ModbusTcpServer) {
+                setServerForwardEnabled(transportConfig.id, false);
+            }
+        }
+        if (wasRunning) stop();
+
+        destroyRuntimeGraph();
+        initializeRuntimeGraph();
+        auto built = buildRuntimeFromSchema(*candidateSchema, absolutePath);
+        if (built.has_value()) {
+            m_configLoaded = true;
+            m_activeSchema = *candidateSchema;
+            m_activeConfigPath = absolutePath;
+            installDatapointQmlBridge();
+
+            // A new topology starts with command forwarding closed. The
+            // application must explicitly re-confirm remote PLC permission.
+            for (auto const& transportConfig : candidateSchema->transports) {
+                if (transportConfig.kind == transport::TransportKind::ModbusTcpServer) {
+                    setServerForwardEnabled(transportConfig.id, false);
+                }
+            }
+            ++m_datapointGeneration;
+            refreshSnapshotCache();
+            if (wasRunning) start();
+            m_bus->publish(bus::DatapointModelRebuilt{m_datapointGeneration});
+            m_bus->publish(bus::ConfigReloadSucceeded{absolutePath});
+            return {};
+        }
+
+        auto reloadErrors = built.error();
+        destroyRuntimeGraph();
+        initializeRuntimeGraph();
+        m_logger->setFilter(previousLogFilter);
+        auto rollback = buildRuntimeFromSchema(previousSchema, previousPath);
+        if (rollback.has_value()) {
+            m_configLoaded = true;
+            m_activeSchema = previousSchema;
+            m_activeConfigPath = previousPath;
+            {
+                std::lock_guard lock(m_forwardMtx);
+                m_forwardEnabled = previousForward;
+            }
+            installDatapointQmlBridge();
+            refreshSnapshotCache();
+            if (wasRunning) start();
+        } else {
+            m_configLoadPoisoned = true;
+            for (auto error : rollback.error()) {
+                error.section = QStringLiteral("rollback.") + error.section;
+                reloadErrors.append(std::move(error));
+            }
+            m_logger->logf(log::LogLevel::Critical,
+                           QStringLiteral("config"), previousPath,
+                           QStringLiteral("configuration rollback failed: %1")
+                               .arg(summarize(rollback.error())));
+        }
+        auto const reason = summarize(reloadErrors);
+        m_bus->publish(bus::ConfigReloadFailed{absolutePath, reason});
+        return std::unexpected(reloadErrors);
     }
 
     bus::EventBus&            bus()        override { return *m_bus; }
@@ -301,6 +338,36 @@ public:
         ids.reserve(int(m_transports.size()));
         for (auto const& [id, t] : m_transports) ids << id;
         return ids;
+    }
+
+    transport::TransportStatus transportStatus(QString const& id) const override {
+        {
+            std::lock_guard lock(m_snapshotMutex);
+            auto const it = m_transportStatusCache.constFind(id);
+            if (it != m_transportStatusCache.constEnd()) return it.value();
+        }
+        transport::TransportStatus missing;
+        missing.transportId = id;
+        missing.state = transport::ConnectionState::Error;
+        missing.errorMessage = QStringLiteral("transport not found");
+        missing.changedAt = QDateTime::currentDateTimeUtc();
+        return missing;
+    }
+
+    QList<transport::TransportStatus> transportStatuses() const override {
+        std::lock_guard lock(m_snapshotMutex);
+        QList<transport::TransportStatus> out;
+        out.reserve(m_transportStatusCache.size());
+        for (auto it = m_transportStatusCache.cbegin();
+             it != m_transportStatusCache.cend(); ++it) {
+            out.append(it.value());
+        }
+        return out;
+    }
+
+    QList<transport::PeerSession> peerSessions(QString const& id) const override {
+        std::lock_guard lock(m_snapshotMutex);
+        return m_peerSessionCache.value(id);
     }
 
     void setServerForwardEnabled(QString const& serverTransportId, bool enabled) override {
@@ -393,19 +460,9 @@ public:
             auto const previous = m_lastCircuitStates.value(
                 id, sched::CircuitState::Closed);
             if (stats.circuitState != previous) {
-                bus::TransportEventKind kind {};
-                switch (stats.circuitState) {
-                    case sched::CircuitState::Open:
-                        kind = bus::TransportEventKind::CircuitOpened;
-                        break;
-                    case sched::CircuitState::HalfOpen:
-                        kind = bus::TransportEventKind::CircuitHalfOpen;
-                        break;
-                    case sched::CircuitState::Closed:
-                        kind = bus::TransportEventKind::CircuitClosed;
-                        break;
-                }
-                m_bus->publish(bus::TransportEvent{id, kind, {}});
+                m_bus->publish(bus::SchedulerCircuitChanged{
+                    id, previous, stats.circuitState,
+                    QDateTime::currentDateTimeUtc()});
             }
             m_lastCircuitStates[id] = stats.circuitState;
         }
@@ -512,9 +569,8 @@ private:
     void installQmlBridges() {
 #ifdef CORE_HAS_QML
         if (!m_qml) return;
-        m_dpBridge = std::make_unique<qml::DatapointQmlBridge>(*m_dps);
+        installDatapointQmlBridge();
         m_logBridge = std::make_unique<qml::LogBridge>(*m_logger);
-        m_qml->setContextProperty(QStringLiteral("dp"), m_dpBridge.get());
         m_qml->setContextProperty(QStringLiteral("log"), m_logBridge.get());
 #endif
     }
@@ -525,13 +581,43 @@ private:
         // so PLCs come back with a fresh full picture rather than waiting on
         // sporadic stages.
         m_transportEventSub = std::make_unique<bus::Subscription>(
-            m_bus->subscribe<bus::TransportEvent>(
-                [this](bus::TransportEvent const& e) {
-                    logTransportEvent(e);
-                    if (e.kind != bus::TransportEventKind::Connected) return;
-                    for (auto* sw : m_sinkWindowPtrs) {
-                        if (sw->transportId() == e.transportId) sw->forceFlush();
+            m_bus->subscribe<bus::TransportStateChanged>(
+                [this](bus::TransportStateChanged const& e) {
+                    {
+                        std::lock_guard lock(m_snapshotMutex);
+                        m_transportStatusCache[e.after.transportId] = e.after;
                     }
+                    logTransportEvent(e);
+                    if (e.after.state != transport::ConnectionState::Connected
+                        || e.before.state == transport::ConnectionState::Connected) return;
+                    for (auto* sw : m_sinkWindowPtrs) {
+                        if (sw->transportId() == e.after.transportId) sw->forceFlush();
+                    }
+                }));
+        m_peerSessionSub = std::make_unique<bus::Subscription>(
+            m_bus->subscribe<bus::PeerSessionChanged>(
+                [this](bus::PeerSessionChanged const& e) {
+                    std::lock_guard lock(m_snapshotMutex);
+                    auto& sessions = m_peerSessionCache[e.session.transportId];
+                    if (e.kind == bus::PeerSessionChangeKind::Connected) {
+                        bool exists = false;
+                        for (auto const& session : sessions) {
+                            if (session.sessionId == e.session.sessionId) {
+                                exists = true;
+                                break;
+                            }
+                        }
+                        if (!exists) sessions.append(e.session);
+                    } else {
+                        sessions.removeIf([&e](transport::PeerSession const& session) {
+                            return session.sessionId == e.session.sessionId;
+                        });
+                    }
+                }));
+        m_pollRangeCompletedSub = std::make_unique<bus::Subscription>(
+            m_bus->subscribe<bus::PollRangeCompleted>(
+                [this](bus::PollRangeCompleted const& e) {
+                    onPollRangeCompleted(e);
                 }));
         // On operator-box write into a server transport, fan out into a
         // SinkWindow on the PLC-side transport via the configured routes.
@@ -552,25 +638,28 @@ private:
                 }));
     }
 
-    void logTransportEvent(bus::TransportEvent const& e) {
+    void logTransportEvent(bus::TransportStateChanged const& e) {
         // An explicit Core::stop() disconnect is expected lifecycle noise, not
         // a connectivity warning. Unexpected runtime drops still arrive while
         // m_started is true and remain visible.
-        if (!m_started && e.kind == bus::TransportEventKind::Disconnected) return;
+        if (!m_started
+            && e.after.state == transport::ConnectionState::Disconnected) return;
         char const* what = nullptr;
         auto level = log::LogLevel::Info;
-        switch (e.kind) {
-            case bus::TransportEventKind::Connected:       what = "connected"; break;
-            case bus::TransportEventKind::Disconnected:    what = "disconnected";
+        switch (e.after.state) {
+            case transport::ConnectionState::Connected:    what = "connected"; break;
+            case transport::ConnectionState::Connecting:   what = "connecting"; break;
+            case transport::ConnectionState::Disconnected: what = "disconnected";
                                                            level = log::LogLevel::Warn; break;
-            case bus::TransportEventKind::CircuitOpened:   what = "circuit opened";
+            case transport::ConnectionState::Error:        what = "connection error";
                                                            level = log::LogLevel::Error; break;
-            case bus::TransportEventKind::CircuitClosed:   what = "circuit closed"; break;
-            case bus::TransportEventKind::CircuitHalfOpen: what = "circuit half-open"; break;
-            default: return;   // Read/WriteCompleted are too noisy for the log
         }
-        m_logger->logf(level, QStringLiteral("transport"), e.transportId,
-                       QString::fromLatin1(what));
+        QString message = QString::fromLatin1(what);
+        if (!e.after.errorMessage.isEmpty()) {
+            message += QStringLiteral(": ") + e.after.errorMessage;
+        }
+        m_logger->logf(level, QStringLiteral("transport"),
+                       e.after.transportId, message);
     }
 
     void routeServerWrite(bus::ServerWriteEvent const& e) {
@@ -652,29 +741,14 @@ private:
     // ——— 整段桥接(替代旧 ModbusServer 中继) ———
     void buildBridges(config::ConfigSchema const& schema) {
         m_bridges = schema.bridges;
-        m_bridgeMirrors.assign(size_t(m_bridges.size()), {});
-        m_bridgeMirrorSnapshots.assign(size_t(m_bridges.size()), {});
-        m_bridgeMirrorLastAt.assign(size_t(m_bridges.size()), {});
-        m_bridgeMirrorInFlight.clear();
-        m_bridgeMirrorInFlight.reserve(size_t(m_bridges.size()));
+        m_bridgeMirrorStates.clear();
+        m_bridgeMirrorStates.reserve(size_t(m_bridges.size()));
         for (int i = 0; i < m_bridges.size(); ++i) {
-            m_bridgeMirrorInFlight.push_back(
-                std::make_shared<std::atomic_bool>(false));
+            m_bridgeMirrorStates.push_back(std::make_shared<BridgeMirrorState>());
         }
         m_bridgeFwdSinks.assign(size_t(m_bridges.size()), nullptr);
         for (int i = 0; i < m_bridges.size(); ++i) {
             auto const& b = m_bridges[i];
-            auto& list = m_bridgeMirrors[size_t(i)];
-            m_bridgeMirrorSnapshots[size_t(i)].fill(0, b.mirrorCount);
-            for (auto const& dp : m_dps->all()) {
-                auto const src = dp->source();
-                if (!src.has_value()) continue;
-                if (src->transport != b.plc) continue;
-                if (src->table != QModbusDataUnit::HoldingRegisters) continue;
-                int const a = src->address;
-                if (a < b.mirrorStart || a >= b.mirrorStart + b.mirrorCount) continue;
-                list.push_back(BridgeMirrorBinding{a, dp, *src});
-            }
             // 转发走 PLC 侧的 SinkWindow(同 route 路径):线程安全地 stageRegister,
             // 由 TickDriver 在生命周期线程带重试/coalesce 地刷到 PLC —— 避免单次
             // submitAsync 在调度器繁忙时被丢弃。
@@ -737,79 +811,229 @@ private:
         }
     }
 
-public:
-    // 周期把 PLC 读区数据整段镜像回 server 自己的寄存器表(操作箱即可读到)。
-    // 也是测试入口(internal::mirrorBridgesOnce)。
-    void mirrorBridgesOnce() {
-        mirrorBridges(false);
+private:
+    void onPollRangeCompleted(bus::PollRangeCompleted const& e) {
+        if (e.table != QModbusDataUnit::HoldingRegisters) return;
+        for (int i = 0; i < m_bridges.size(); ++i) {
+            auto const& b = m_bridges[i];
+            if (b.mirrorCount <= 0 || b.plc != e.transportId) continue;
+            int const offset = b.mirrorStart - e.startAddress;
+            if (offset < 0 || offset + b.mirrorCount > e.values.size()) continue;
+            auto const state = m_bridgeMirrorStates[size_t(i)];
+            {
+                std::lock_guard lock(state->mutex);
+                state->values = e.values.mid(offset, b.mirrorCount);
+                ++state->version;
+            }
+            if (b.mirrorPolicy == config::BridgeMirrorPolicy::AfterPoll) {
+                scheduleBridgeMirror(i);
+            }
+        }
     }
 
-private:
-    void mirrorBridges(bool respectCadence) {
+    std::expected<void, config::ValidationErrors>
+    buildRuntimeFromSchema(config::ConfigSchema const& schema,
+                           QString const& path) {
+        m_configDir = QFileInfo(path).absolutePath();
+        auto codecErrors = registerCustomCodecs(schema);
+        if (!codecErrors.isEmpty()) {
+            for (auto const& err : codecErrors) {
+                m_logger->logf(log::LogLevel::Error,
+                               QStringLiteral("config"), path, err.message);
+            }
+            return std::unexpected(std::move(codecErrors));
+        }
+        auto pluginErrors = loadPluginLibraries(schema);
+        if (!pluginErrors.isEmpty()) {
+            m_plugins->unloadAll();
+            for (auto const& err : pluginErrors) {
+                m_logger->logf(log::LogLevel::Error,
+                               QStringLiteral("config"), path, err.message);
+            }
+            return std::unexpected(std::move(pluginErrors));
+        }
+        if (!schema.meta.logLevel.isEmpty()) {
+            m_logger->setThreshold(log::levelFromString(schema.meta.logLevel));
+        }
+        try {
+            wireFromSchema(schema);
+        } catch (std::exception const& e) {
+            m_ports.reset();
+            m_plugins->unloadAll();
+            QString const message = QStringLiteral("runtime graph initialization failed: %1")
+                                        .arg(QString::fromUtf8(e.what()));
+            m_logger->logf(log::LogLevel::Error,
+                           QStringLiteral("config"), path, message);
+            return std::unexpected(config::ValidationErrors{
+                {QStringLiteral("core"), QStringLiteral("initialization"),
+                 message, -1}});
+        } catch (...) {
+            m_ports.reset();
+            m_plugins->unloadAll();
+            QString const message = QStringLiteral(
+                "runtime graph initialization failed with an unknown exception");
+            m_logger->logf(log::LogLevel::Error,
+                           QStringLiteral("config"), path, message);
+            return std::unexpected(config::ValidationErrors{
+                {QStringLiteral("core"), QStringLiteral("initialization"),
+                 message, -1}});
+        }
+        return {};
+    }
+
+    void destroyRuntimeGraph() {
+        if (m_started.load(std::memory_order_acquire)) stop();
+        stopStatsPump();
+        stopMirrorPump();
+        m_transportEventSub.reset();
+        m_peerSessionSub.reset();
+        m_pollRangeCompletedSub.reset();
+        m_serverWriteSub.reset();
+        joinConnectThreads();
+        if (m_modules) m_modules->stopAll();
+
+        // Transport destruction drains scheduler callbacks. Keep modules and
+        // bridge state alive until this finishes because completions may still
+        // update their in-flight guards.
+        m_transports.clear();
+        m_pollRangePtrs.clear();
+        m_sinkWindowPtrs.clear();
+        m_bridgeFwdSinks.clear();
+        m_modules.reset();
+
+        m_ports.reset();
+        m_plugins.reset();
+#ifdef CORE_HAS_QML
+        if (m_qml) {
+            m_qml->setContextProperty(QStringLiteral("dp"),
+                                      static_cast<QObject*>(nullptr));
+        }
+        m_dpBridge.reset();
+#endif
+        m_serverRouteBindings.clear();
+        m_datapointById.clear();
+        m_bridgeMirrorStates.clear();
+        m_bridges.clear();
+        m_dps.reset();
+        m_codecs.reset();
+        m_lastCircuitStates.clear();
+        {
+            std::lock_guard lock(m_snapshotMutex);
+            m_transportStatusCache.clear();
+            m_peerSessionCache.clear();
+        }
+        {
+            std::lock_guard lock(m_forwardMtx);
+            m_forwardEnabled.clear();
+        }
+        m_configLoaded = false;
+        m_configLoadPoisoned = false;
+    }
+
+    void initializeRuntimeGraph() {
+        m_codecs = std::make_unique<codec::CodecRegistry>();
+        m_codecs->loadBuiltins();
+        m_dps = std::make_unique<dp::DatapointRegistry>();
+        m_modules = std::make_unique<module::ModuleRegistry>();
+        m_plugins = std::make_unique<plugin::PluginRegistry>();
+    }
+
+    void installDatapointQmlBridge() {
+#ifdef CORE_HAS_QML
+        if (!m_qml || !m_dps) return;
+        m_dpBridge = std::make_unique<qml::DatapointQmlBridge>(*m_dps);
+        m_qml->setContextProperty(QStringLiteral("dp"), m_dpBridge.get());
+#endif
+    }
+
+    void refreshSnapshotCache() {
+        QHash<QString, transport::TransportStatus> statuses;
+        QHash<QString, QList<transport::PeerSession>> peers;
+        for (auto const& [id, t] : m_transports) {
+            statuses.insert(id, t->status());
+            peers.insert(id, t->peerSessions());
+        }
+        std::lock_guard lock(m_snapshotMutex);
+        m_transportStatusCache = std::move(statuses);
+        m_peerSessionCache = std::move(peers);
+    }
+
+    void scheduleBridgeMirror(int i) {
+        if (i < 0 || i >= m_bridges.size()) return;
+        auto const& b = m_bridges[i];
+        if (b.mirrorCount <= 0) return;
+        auto* server = transport(b.server);
+        if (!server) return;
+        auto const state = m_bridgeMirrorStates[size_t(i)];
+        QList<quint16> values;
+        quint64 version = 0;
+        {
+            std::lock_guard lock(state->mutex);
+            if (state->inFlight || state->values.size() != b.mirrorCount) return;
+            state->inFlight = true;
+            values = state->values;
+            version = state->version;
+        }
+
+        transport::WriteBatch batch;
+        batch.table        = QModbusDataUnit::HoldingRegisters;
+        batch.startAddress = b.mirrorStart + b.offset;
+        batch.values       = std::move(values);
+        sched::RequestTag tag;
+        tag.moduleId = QStringLiteral("bridge.mirror.%1.%2")
+            .arg(b.server).arg(i);
+        tag.priority = sched::Priority::Low;
+        auto const submitted = server->scheduler().submitAsync(
+            tag, [this, i, server, batch, state, version](sched::AsyncDone done) {
+                try {
+                    server->writeAsync(batch,
+                        [this, i, state, version,
+                         done = std::move(done)](transport::WriteResult w) mutable {
+                            bool repeat = false;
+                            {
+                                std::lock_guard lock(state->mutex);
+                                state->inFlight = false;
+                                repeat = state->version > version;
+                            }
+                            done(w.ok);
+                            if (repeat && m_started.load(std::memory_order_acquire)
+                                && i < m_bridges.size()
+                                && m_bridges[i].mirrorPolicy
+                                    == config::BridgeMirrorPolicy::AfterPoll) {
+                                scheduleBridgeMirror(i);
+                            }
+                        });
+                } catch (...) {
+                    std::lock_guard lock(state->mutex);
+                    state->inFlight = false;
+                    throw;
+                }
+            });
+        if (submitted.kind == sched::ResultKind::Ok) {
+            std::lock_guard lock(state->mutex);
+            state->lastSubmittedAt = std::chrono::steady_clock::now();
+        } else {
+            std::lock_guard lock(state->mutex);
+            state->inFlight = false;
+        }
+    }
+
+    void mirrorBridgesPeriodically() {
         auto const now = std::chrono::steady_clock::now();
         for (int i = 0; i < m_bridges.size(); ++i) {
             auto const& b = m_bridges[i];
             if (b.mirrorCount <= 0) continue;
-            auto& lastAt = m_bridgeMirrorLastAt[size_t(i)];
-            if (respectCadence && lastAt.time_since_epoch().count() > 0
-                && now - lastAt < std::chrono::milliseconds(b.mirrorPeriodMs)) {
-                continue;
-            }
-            auto* server = transport(b.server);
-            if (!server) continue;
-            auto& values = m_bridgeMirrorSnapshots[size_t(i)];
-            for (auto const& binding : m_bridgeMirrors[size_t(i)]) {
-                if (binding.datapoint->state() != dp::DpState::Ok
-                    || !binding.source.codec) {
-                    continue; // retain the last good raw mirror value
-                }
-                QList<quint16> encoded;
-                try {
-                    encoded = binding.source.codec->encode(
-                        binding.datapoint->value(), binding.source);
-                } catch (...) {
+            if (b.mirrorPolicy != config::BridgeMirrorPolicy::Periodic) continue;
+            auto const state = m_bridgeMirrorStates[size_t(i)];
+            {
+                std::lock_guard lock(state->mutex);
+                if (state->lastSubmittedAt.time_since_epoch().count() > 0
+                    && now - state->lastSubmittedAt
+                        < std::chrono::milliseconds(b.mirrorPeriodMs)) {
                     continue;
                 }
-                int const first = binding.address - b.mirrorStart;
-                for (int word = 0; word < encoded.size(); ++word) {
-                    int const idx = first + word;
-                    if (idx >= 0 && idx < values.size()) {
-                        values[idx] = encoded.at(word);
-                    }
-                }
             }
-            transport::WriteBatch batch;
-            batch.table        = QModbusDataUnit::HoldingRegisters;
-            batch.startAddress = b.mirrorStart + b.offset;
-            batch.values       = values;
-            sched::RequestTag tag;
-            tag.moduleId = QStringLiteral("bridge.mirror.%1.%2")
-                .arg(b.server).arg(i);
-            tag.priority = sched::Priority::Low;
-            auto const inFlight = m_bridgeMirrorInFlight[size_t(i)];
-            bool expected = false;
-            if (!inFlight->compare_exchange_strong(
-                    expected, true, std::memory_order_acq_rel)) {
-                continue;
-            }
-            auto const submitted = server->scheduler().submitAsync(
-                tag, [server, batch, inFlight](sched::AsyncDone done) {
-                try {
-                    server->writeAsync(batch,
-                        [done = std::move(done), inFlight](transport::WriteResult w) mutable {
-                            inFlight->store(false, std::memory_order_release);
-                            done(w.ok);
-                        });
-                } catch (...) {
-                    inFlight->store(false, std::memory_order_release);
-                    throw;
-                }
-            });
-            if (submitted.kind == sched::ResultKind::Ok) {
-                lastAt = now;
-            } else {
-                inFlight->store(false, std::memory_order_release);
-            }
+            scheduleBridgeMirror(i);
         }
     }
 
@@ -818,14 +1042,18 @@ private:
         int period = std::numeric_limits<int>::max();
         bool any = false;
         for (auto const& b : m_bridges) {
-            if (b.mirrorCount > 0) { any = true; period = std::min(period, std::max(20, b.mirrorPeriodMs)); }
+            if (b.mirrorCount > 0
+                && b.mirrorPolicy == config::BridgeMirrorPolicy::Periodic) {
+                any = true;
+                period = std::min(period, std::max(20, b.mirrorPeriodMs));
+            }
         }
         if (!any) return;
         m_mirrorTimer = new QTimer(m_bus.get());
         m_mirrorTimer->setInterval(period);
         m_mirrorTimer->setSingleShot(false);
         QObject::connect(m_mirrorTimer, &QTimer::timeout, m_bus.get(),
-            [this]() { mirrorBridges(true); });
+            [this]() { mirrorBridgesPeriodically(); });
         m_mirrorTimer->start();
     }
 
@@ -1212,7 +1440,7 @@ private:
             req.count        = pc.count;
 
             auto poll = std::make_unique<module::PollRange>(
-                pc.moduleId, *t, req, pc.periodMs, pc.priority);
+                pc.moduleId, *t, req, pc.periodMs, pc.priority, m_bus.get());
             wireBindings(*poll, schema, byId, pc.transport, req);
 
             auto* raw = poll.get();
@@ -1254,10 +1482,12 @@ private:
         dp::PortRef                   sink;
     };
 
-    struct BridgeMirrorBinding {
-        int                           address;
-        std::shared_ptr<dp::Datapoint> datapoint;
-        dp::PortRef                   source;
+    struct BridgeMirrorState {
+        std::mutex                                  mutex;
+        QList<quint16>                              values;
+        quint64                                     version = 0;
+        bool                                        inFlight = false;
+        std::chrono::steady_clock::time_point       lastSubmittedAt;
     };
 
 #ifdef CORE_HAS_QML
@@ -1266,6 +1496,8 @@ private:
     QQmlContext*                                                m_qml;
 #endif
     QString                                                     m_configDir;
+    QString                                                     m_activeConfigPath;
+    std::optional<config::ConfigSchema>                         m_activeSchema;
     std::unique_ptr<log::Logger>                                m_logger;
 #ifdef CORE_HAS_QML
     std::unique_ptr<qml::DatapointQmlBridge>                    m_dpBridge;
@@ -1282,21 +1514,25 @@ private:
     std::atomic_bool                                            m_started{false};
     bool                                                        m_configLoaded = false;
     bool                                                        m_configLoadPoisoned = false;
+    std::atomic_bool                                            m_reloadInProgress{false};
+    quint64                                                     m_datapointGeneration = 0;
     std::vector<module::PollRange*>                             m_pollRangePtrs;
     std::vector<module::SinkWindow*>                            m_sinkWindowPtrs;
     std::map<QString, std::shared_ptr<dp::Datapoint>>           m_datapointById;
     QHash<QString, QList<ServerRouteBinding>>                   m_serverRouteBindings;
     QHash<QString, sched::CircuitState>                         m_lastCircuitStates;
     QList<config::BridgeConfig>                                 m_bridges;
-    std::vector<std::vector<BridgeMirrorBinding>>               m_bridgeMirrors;
-    std::vector<QList<quint16>>                                 m_bridgeMirrorSnapshots;
-    std::vector<std::chrono::steady_clock::time_point>          m_bridgeMirrorLastAt;
-    std::vector<std::shared_ptr<std::atomic_bool>>               m_bridgeMirrorInFlight;
+    std::vector<std::shared_ptr<BridgeMirrorState>>             m_bridgeMirrorStates;
     std::vector<module::SinkWindow*>                            m_bridgeFwdSinks;
     mutable std::mutex                                          m_forwardMtx;
     QHash<QString, bool>                                        m_forwardEnabled;   // server id → 转发使能(默认 true)
+    mutable std::mutex                                          m_snapshotMutex;
+    QHash<QString, transport::TransportStatus>                  m_transportStatusCache;
+    QHash<QString, QList<transport::PeerSession>>               m_peerSessionCache;
     QTimer*                                                     m_mirrorTimer = nullptr;
     std::unique_ptr<bus::Subscription>                          m_transportEventSub;
+    std::unique_ptr<bus::Subscription>                          m_peerSessionSub;
+    std::unique_ptr<bus::Subscription>                          m_pollRangeCompletedSub;
     std::unique_ptr<bus::Subscription>                          m_serverWriteSub;
     QTimer*                                                     m_statsTimer = nullptr;
     int                                                         m_statsIntervalMs = 1000;
@@ -1315,9 +1551,6 @@ void tickSinkWindowsOnce(ICore& core) {
 }
 void publishSchedulerStatsOnce(ICore& core) {
     static_cast<CoreImpl&>(core).publishSchedulerStatsOnce();
-}
-void mirrorBridgesOnce(ICore& core) {
-    static_cast<CoreImpl&>(core).mirrorBridgesOnce();
 }
 } // namespace internal
 

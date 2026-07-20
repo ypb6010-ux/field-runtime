@@ -287,7 +287,27 @@ to     = "start_button"
 policy = "ContinuousMirror"  # 当前唯一已实现的策略
 ```
 
-### 4.4 启动期校验
+### 4.4 `[[bridge]]` 原始寄存器镜像
+
+```toml
+[[bridge]]
+server = "operator_box"
+plc = "plc"
+offset = 0
+write_start = 0
+write_count = 50
+mirror_start = 50
+mirror_count = 30
+mirror_policy = "AfterPoll" # 镜像必填:AfterPoll 或 Periodic
+# mirror_period_ms = 100     # 仅 Periodic 必填
+```
+
+`AfterPoll` 在完整覆盖镜像区的 PLC HR 轮询成功后，立即镜像同一轮原始 U16 快照；
+`Periodic` 按独立周期写入最近一次成功快照。两种策略互斥，轮询失败时保留服务端最后一次
+有效值，慢写只合并到最新一轮，不会无限堆积。倍率、掩码、bit 点位和重复源地址均不会参与
+原始镜像的反向重建。镜像区必须被一个 HR `poll_range` 完整覆盖，但不要求创建占位 datapoint。
+
+### 4.5 启动期校验
 
 加载阶段强制 fail-fast 校验；未知、拼错或类型错误的字段会直接报错，不会静默套用默认值。详见
 spec §4.3。常用规则：
@@ -299,6 +319,7 @@ spec §4.3。常用规则：
 - EnumU16 类型必须声明 `codec`
 - Modbus 客户端的 `sink_window` 遵循对应功能码单次写上限（HR 为 123）
 - 同一 transport/table 上的 sink window、heartbeat、command、bridge 写区不得重叠
+- 每个 bridge 镜像必须明确选择一种策略，并被一个 PLC HR poll range 完整覆盖
 - datapoint sink 必须显式引用 sink window，或被同 transport/table 的窗口完整覆盖
 - 客户端 datapoint source 必须被同 transport/table 的 poll range 完整覆盖
 - `datapoint.sink.addr` 必须落入引用窗口 `[start, start+size)`
@@ -340,6 +361,26 @@ p50 / p99 / 熔断状态实时快照。
 ---
 
 ## 6. 多协议 Transport
+
+### 运行状态与显式热重载
+
+应用应在 `start()` 前订阅 `TransportStateChanged` 与 `PeerSessionChanged`，启动后通过
+`transportStatuses()` 和 `peerSessions(id)` 初始化 UI 或诊断状态。这些接口只返回线程安全
+值对象，transport 的 `revision` 单调递增，不会泄露 socket 或其他线程亲和 QObject。
+调度器熔断变化使用独立的 `SchedulerCircuitChanged` 事件。
+
+```cpp
+auto stateSub = core->bus().subscribe<core::bus::TransportStateChanged>(onState);
+auto peerSub = core->bus().subscribe<core::bus::PeerSessionChanged>(onPeer);
+auto initial = core->transportStatuses();
+auto changed = core->reloadConfig("config.toml");
+```
+
+`reloadConfig()` 会在隔离实例中完整预检候选图。解析、校验或候选构建失败时，当前运行图
+保持不变；切换时排空旧异步任务，实际构建失败则回滚上一份已验证 schema。成功后依次发布
+`DatapointModelRebuilt` 与 `ConfigReloadSucceeded`，消费者必须重新获取 datapoint 引用。
+新图中的操作箱指令转发默认关闭，应用确认远程控制许可后再显式开启。文件监听属于应用策略，
+Core 不提供备用地址或自动端口回退。
 
 ### 已完整实现
 

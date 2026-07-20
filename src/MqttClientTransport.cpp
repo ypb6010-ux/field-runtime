@@ -28,6 +28,7 @@
 #include "core/sched/SerialScheduler.h"
 
 #include "QtThreadInvoke.h"
+#include "TransportStatusTracker.h"
 
 namespace core::transport {
 
@@ -64,7 +65,9 @@ class MqttClientTransport::Impl {
 public:
     Impl(Config c, bus::EventBus* b)
         : cfg(std::move(c))
-        , busPtr(b)
+        , statusTracker(cfg.id, TransportKind::MqttClient, b, {},
+                        EndpointInfo{QUrl(cfg.brokerUri).host(),
+                                     quint16(QUrl(cfg.brokerUri).port(1883))})
         , scheduler(sched::makeScheduler(cfg.scheduler))
         , thread(new QThread)
         , client(new QMqttClient) {
@@ -91,23 +94,21 @@ public:
         QObject::connect(client, &QMqttClient::stateChanged,
                          client, [this](QMqttClient::ClientState s) {
             auto const cur  = stateFromQt(s);
-            auto const prev = state.exchange(cur, std::memory_order_acq_rel);
+            if (cur == ConnectionState::Connected) setLastError({});
+            auto const error = getLastError();
+            auto const effective = cur == ConnectionState::Disconnected
+                                && !error.isEmpty()
+                ? ConnectionState::Error : cur;
+            state.store(effective, std::memory_order_release);
             if (cur == ConnectionState::Disconnected) clearCache();
             if (cur == ConnectionState::Connected && !subscribeWildcard()) {
                 state.store(ConnectionState::Error, std::memory_order_release);
+                statusTracker.update(ConnectionState::Error, getLastError());
                 client->disconnectFromHost();
                 return;
             }
-            if (!busPtr) return;
-            if (cur == ConnectionState::Connected
-                && prev != ConnectionState::Connected) {
-                busPtr->publish(bus::TransportEvent{
-                    cfg.id, bus::TransportEventKind::Connected, {}});
-            } else if (cur == ConnectionState::Disconnected
-                       && prev == ConnectionState::Connected) {
-                busPtr->publish(bus::TransportEvent{
-                    cfg.id, bus::TransportEventKind::Disconnected, {}});
-            }
+            statusTracker.update(effective,
+                effective == ConnectionState::Error ? error : QString{});
         });
         QObject::connect(client, &QMqttClient::errorChanged,
                          client, [this](QMqttClient::ClientError e) {
@@ -115,12 +116,8 @@ public:
             clearCache();
             auto const message = QStringLiteral("MQTT error %1").arg(int(e));
             setLastError(message);
-            auto const prev = state.exchange(ConnectionState::Error,
-                                              std::memory_order_acq_rel);
-            if (busPtr && prev == ConnectionState::Connected) {
-                busPtr->publish(bus::TransportEvent{
-                    cfg.id, bus::TransportEventKind::Disconnected, message});
-            }
+            state.store(ConnectionState::Error, std::memory_order_release);
+            statusTracker.update(ConnectionState::Error, message);
         });
         QObject::connect(client, &QMqttClient::messageReceived, client,
             [this](QByteArray const& payload, QMqttTopicName const& topic) {
@@ -184,7 +181,7 @@ public:
     }
 
     Config                                            cfg;
-    bus::EventBus*                                    busPtr = nullptr;
+    detail::TransportStatusTracker                    statusTracker;
     std::unique_ptr<sched::RequestScheduler>           scheduler;
     QThread*                                           thread = nullptr;
     QMqttClient*                                       client = nullptr;
@@ -208,6 +205,7 @@ MqttClientTransport::~MqttClientTransport() = default;
 QString               MqttClientTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         MqttClientTransport::kind()  const { return TransportKind::MqttClient; }
 ConnectionState       MqttClientTransport::state() const { return m_impl->state.load(); }
+TransportStatus       MqttClientTransport::status() const { return m_impl->statusTracker.snapshot(); }
 
 sched::RequestScheduler& MqttClientTransport::scheduler() { return *m_impl->scheduler; }
 
@@ -222,6 +220,9 @@ MqttClientTransport::connect() {
         return {};
     }
     m_impl->setLastError({});
+    m_impl->state.store(ConnectionState::Connecting,
+                        std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Connecting);
     m_impl->clearCache();
     detail::invokeBlocking(m_impl->client, [this] {
         m_impl->client->connectToHost();
@@ -247,16 +248,22 @@ MqttClientTransport::connect() {
         m_impl->client->disconnectFromHost();
     });
     armReconnectIfConfigured();
-    return std::unexpected(error.isEmpty()
-        ? QStringLiteral("MQTT connect timeout") : error);
+    auto const message = error.isEmpty()
+        ? QStringLiteral("MQTT connect timeout") : error;
+    m_impl->state.store(ConnectionState::Error, std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Error, message);
+    return std::unexpected(message);
 }
 
 void MqttClientTransport::disconnect() {
     m_impl->autoReconnect.store(false, std::memory_order_release);
+    m_impl->setLastError({});
     detail::invokeBlocking(m_impl->client, [this] {
         if (m_impl->reconnectTimer) m_impl->reconnectTimer->stop();
         m_impl->client->disconnectFromHost();
     });
+    m_impl->state.store(ConnectionState::Disconnected, std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Disconnected);
 }
 
 void MqttClientTransport::armReconnectIfConfigured() {
@@ -392,10 +399,13 @@ void MqttClientTransport::writeAsync(WriteBatch const& batch, WriteDone done) {
 class MqttClientTransport::Impl {
 public:
     Impl(Config c, bus::EventBus* b)
-        : cfg(std::move(c)), busPtr(b)
+        : cfg(std::move(c))
+        , statusTracker(cfg.id, TransportKind::MqttClient, b, {},
+                        EndpointInfo{QUrl(cfg.brokerUri).host(),
+                                     quint16(QUrl(cfg.brokerUri).port(1883))})
         , scheduler(sched::makeScheduler(cfg.scheduler)) {}
     Config                                  cfg;
-    bus::EventBus*                          busPtr;
+    detail::TransportStatusTracker          statusTracker;
     std::unique_ptr<sched::RequestScheduler> scheduler;
     std::atomic<ConnectionState>            state{ConnectionState::Disconnected};
 };
@@ -407,13 +417,20 @@ MqttClientTransport::~MqttClientTransport() = default;
 QString               MqttClientTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         MqttClientTransport::kind()  const { return TransportKind::MqttClient; }
 ConnectionState       MqttClientTransport::state() const { return m_impl->state.load(); }
+TransportStatus       MqttClientTransport::status() const { return m_impl->statusTracker.snapshot(); }
 sched::RequestScheduler& MqttClientTransport::scheduler() { return *m_impl->scheduler; }
 
 std::expected<void, QString> MqttClientTransport::connect() {
-    return std::unexpected(QStringLiteral(
-        "MqttClientTransport disabled (CORE_BUILD_MQTT_QT=OFF)"));
+    auto const message = QStringLiteral(
+        "MqttClientTransport disabled (CORE_BUILD_MQTT_QT=OFF)");
+    m_impl->state.store(ConnectionState::Error, std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Error, message);
+    return std::unexpected(message);
 }
-void        MqttClientTransport::disconnect()                          {}
+void MqttClientTransport::disconnect() {
+    m_impl->state.store(ConnectionState::Disconnected, std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Disconnected);
+}
 ReadResult  MqttClientTransport::read      (ReadRequest const&)       {
     ReadResult r; r.errorMessage = QStringLiteral("Qt MQTT disabled at build time");
     return r;

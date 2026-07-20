@@ -5,8 +5,12 @@
 #include <QCoreApplication>
 #include <QTemporaryFile>
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <memory>
 #include <thread>
+#include <utility>
 
 #include "core/ICore.h"
 #include "core/bus/BusEvents.h"
@@ -95,10 +99,10 @@ range     = [50, 4]
 period_ms = 50
 
 [[datapoint]]
-id = "raw.default.HR.50"
+id = "default.di.bit4"
 kind = "Status"
-type = "U16"
-source = { port = "default", table = "HR", addr = 50 }
+type = "Bool"
+source = { port = "default", table = "HR", addr = 50, bit = 4 }
 [[datapoint]]
 id = "raw.default.HR.51"
 kind = "Status"
@@ -113,7 +117,7 @@ write_start = 0
 write_count = 4
 mirror_start = 50
 mirror_count = 4
-mirror_period_ms = 50
+mirror_policy = "AfterPoll"
 )toml").arg(plcPort).arg(serverPort);
 }
 
@@ -151,7 +155,7 @@ mirror_count = 0
     REQUIRE(flagged);
 }
 
-TEST_CASE("ConfigLoader flags a mirror range with no PLC datapoint",
+TEST_CASE("ConfigLoader flags a mirror range with no covering PLC poll",
           "[config][bridge]") {
     QTemporaryFile temp;
     auto path = writeToml(QStringLiteral(R"toml(
@@ -171,12 +175,16 @@ id   = "srv"
 kind = "modbus_tcp_server"
 listen_port = 51998
 slave_id = 1
+[[transport.listen_ranges]]
+table = "HR"
+range = [50, 4]
 
 [[bridge]]
 server = "srv"
 plc    = "plc"
 mirror_start = 50
 mirror_count = 4
+mirror_policy = "AfterPoll"
 )toml"), temp);
 
     ConfigLoader loader;
@@ -216,6 +224,13 @@ kind = "Status"
 type = "U16"
 source = { port = "plc", table = "HR", addr = 0 }
 
+[[poll_range]]
+module_id = "poll.plc"
+transport = "plc"
+table = "HR"
+range = [0, 4]
+period_ms = 50
+
 [[bridge]]
 server = "srv"
 plc = "plc"
@@ -223,6 +238,7 @@ write_start = 0
 write_count = 4
 mirror_start = 0
 mirror_count = 4
+mirror_policy = "AfterPoll"
 )toml"), temp);
 
     ConfigLoader loader;
@@ -233,6 +249,168 @@ mirror_count = 4
         if (e.section == "bridge[0]" && e.field == "range") flagged = true;
     }
     REQUIRE(flagged);
+}
+
+TEST_CASE("Bridge mirror policy is explicit and validated",
+          "[config][bridge][policy]") {
+    auto load = [](QString const& bridgeFields) {
+        auto temp = std::make_unique<QTemporaryFile>();
+        auto path = writeToml(QString(R"toml(
+[[transport]]
+id = "plc"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+port = 51999
+
+[[transport]]
+id = "srv"
+kind = "modbus_tcp_server"
+listen_port = 51998
+[[transport.listen_ranges]]
+table = "HR"
+range = [50, 4]
+
+[[poll_range]]
+module_id = "poll.plc"
+transport = "plc"
+table = "HR"
+range = [50, 4]
+period_ms = 50
+
+[[bridge]]
+server = "srv"
+plc = "plc"
+mirror_start = 50
+mirror_count = 4
+%1
+)toml").arg(bridgeFields), *temp);
+        ConfigLoader loader;
+        return std::pair{std::move(temp), loader.loadFromToml(path)};
+    };
+
+    auto [missingFile, missing] = load(QString{});
+    REQUIRE_FALSE(missing.has_value());
+    REQUIRE(std::any_of(missing.error().cbegin(), missing.error().cend(),
+        [](ValidationError const& error) {
+            return error.field == QStringLiteral("mirror_policy");
+        }));
+
+    auto [periodFile, period] = load(QStringLiteral(
+        "mirror_policy = \"Periodic\"\nmirror_period_ms = 100"));
+    REQUIRE(period.has_value());
+    REQUIRE(period->datapoints.isEmpty());
+    REQUIRE(period->bridges.first().mirrorPolicy == BridgeMirrorPolicy::Periodic);
+
+    auto [missingPeriodFile, missingPeriod] = load(
+        QStringLiteral("mirror_policy = \"Periodic\""));
+    REQUIRE_FALSE(missingPeriod.has_value());
+    REQUIRE(std::any_of(missingPeriod.error().cbegin(),
+                        missingPeriod.error().cend(),
+        [](ValidationError const& error) {
+            return error.field == QStringLiteral("mirror_period_ms");
+        }));
+
+    auto [badPeriodFile, badPeriod] = load(QStringLiteral(
+        "mirror_policy = \"AfterPoll\"\nmirror_period_ms = 100"));
+    REQUIRE_FALSE(badPeriod.has_value());
+    REQUIRE(std::any_of(badPeriod.error().cbegin(), badPeriod.error().cend(),
+        [](ValidationError const& error) {
+            return error.field == QStringLiteral("mirror_period_ms");
+        }));
+}
+
+TEST_CASE("Periodic bridge mirrors only the latest successful raw poll snapshot",
+          "[core][bridge][periodic][raw]") {
+    auto const plcPort = nextBridgePort();
+    auto const serverPort = nextBridgePort();
+    auto plc = std::make_unique<core::test::ModbusTestServer>(plcPort);
+    REQUIRE(plc->listening());
+    plc->setData(QModbusDataUnit::HoldingRegisters, 50, 0x1234);
+
+    QTemporaryFile temp;
+    auto path = writeToml(QString(R"toml(
+[[transport]]
+id = "plc"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+port = %1
+connect_timeout_ms = 500
+
+[[transport]]
+id = "server"
+kind = "modbus_tcp_server"
+listen_address = "127.0.0.1"
+listen_port = %2
+[[transport.listen_ranges]]
+table = "HR"
+range = [50, 1]
+
+[[poll_range]]
+module_id = "poll.raw"
+transport = "plc"
+table = "HR"
+range = [50, 1]
+period_ms = 20
+
+[[bridge]]
+server = "server"
+plc = "plc"
+mirror_start = 50
+mirror_count = 1
+mirror_policy = "Periodic"
+mirror_period_ms = 400
+)toml").arg(plcPort).arg(serverPort), temp);
+
+    auto core = ICore::create(nullptr);
+    REQUIRE(core->loadConfig(path).has_value());
+    std::atomic<int> completedPolls{0};
+    auto pollSub = core->bus().subscribe<bus::PollRangeCompleted>(
+        [&](bus::PollRangeCompleted const& event) {
+            if (event.moduleId == QStringLiteral("poll.raw")) {
+                completedPolls.fetch_add(1);
+            }
+        });
+    auto* plcTransport = core->transport(QStringLiteral("plc"));
+    auto* server = core->transport(QStringLiteral("server"));
+    REQUIRE(plcTransport != nullptr);
+    REQUIRE(server != nullptr);
+    REQUIRE(plcTransport->connect().has_value());
+    REQUIRE(server->connect().has_value());
+    core->start();
+    internal::pollAllOnce(*core);
+    REQUIRE(completedPolls.load() > 0);
+
+    // Periodic does not also run the AfterPoll path: immediately after a
+    // successful manual poll, the server still holds its initial image.
+    auto beforePeriod = server->read(
+        {QModbusDataUnit::HoldingRegisters, 50, 1});
+    REQUIRE(beforePeriod.ok);
+    REQUIRE(beforePeriod.values == QList<quint16>{0});
+
+    bool mirrored = false;
+    auto const mirrorDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!mirrored && std::chrono::steady_clock::now() < mirrorDeadline) {
+        QCoreApplication::processEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        auto result = server->read(
+            {QModbusDataUnit::HoldingRegisters, 50, 1});
+        mirrored = result.ok && result.values == QList<quint16>{0x1234};
+    }
+    REQUIRE(mirrored);
+
+    // A failed poll never replaces the last valid raw image with zeroes.
+    plc.reset();
+    auto const settleDeadline = std::chrono::steady_clock::now()
+                              + std::chrono::milliseconds(550);
+    while (std::chrono::steady_clock::now() < settleDeadline) {
+        QCoreApplication::processEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    auto retained = server->read(
+        {QModbusDataUnit::HoldingRegisters, 50, 1});
+    REQUIRE(retained.ok);
+    REQUIRE(retained.values == QList<quint16>{0x1234});
+    core->stop();
 }
 
 TEST_CASE("Bridge mirrors PLC reads into the server table and forwards operator writes",
@@ -255,7 +433,6 @@ TEST_CASE("Bridge mirrors PLC reads into the server table and forwards operator 
     REQUIRE(waitConnected(*core, QStringLiteral("default")));
 
     // —— 镜像:PLC HR50/51 → server "main" 自己的表 ——
-    REQUIRE(waitDp(*core, QStringLiteral("raw.default.HR.50"), 0x1234));
     REQUIRE(waitDp(*core, QStringLiteral("raw.default.HR.51"), 0x5678));
 
     auto* server = core->transport(QStringLiteral("main"));
@@ -263,7 +440,6 @@ TEST_CASE("Bridge mirrors PLC reads into the server table and forwards operator 
     bool mirrored = false;
     auto const deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
     while (std::chrono::steady_clock::now() < deadline) {
-        internal::mirrorBridgesOnce(*core);
         QCoreApplication::processEvents();
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         transport::ReadRequest req{QModbusDataUnit::HoldingRegisters, 50, 2};
@@ -303,6 +479,13 @@ TEST_CASE("Bridge mirrors PLC reads into the server table and forwards operator 
     opCfg.requestTimeoutMs = 1000;
     transport::ModbusTcpClientTransport opbox(opCfg);
     REQUIRE(opbox.connect().has_value());
+    auto const peerDeadline = std::chrono::steady_clock::now()
+                            + std::chrono::seconds(1);
+    while (core->peerSessions(QStringLiteral("main")).size() != 1
+           && std::chrono::steady_clock::now() < peerDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(core->peerSessions(QStringLiteral("main")).size() == 1);
 
     std::atomic<int> swCount{0};
     auto swSub = core->bus().subscribe<bus::ServerWriteEvent>(
@@ -325,5 +508,12 @@ TEST_CASE("Bridge mirrors PLC reads into the server table and forwards operator 
     REQUIRE(forwarded);
 
     opbox.disconnect();
+    auto const peerGoneDeadline = std::chrono::steady_clock::now()
+                                + std::chrono::seconds(1);
+    while (!core->peerSessions(QStringLiteral("main")).isEmpty()
+           && std::chrono::steady_clock::now() < peerGoneDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(core->peerSessions(QStringLiteral("main")).isEmpty());
     core->stop();
 }

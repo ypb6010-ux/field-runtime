@@ -5,6 +5,8 @@
 | 简体中文 | [zh/](zh/README.md) |
 | English  | [en/](en/README.md) |
 
+Version and migration notes are maintained in [`../CHANGELOG.md`](../CHANGELOG.md).
+
 ## Contents (both languages)
 
 1. **Overview** — what Core is, what it isn't, where it fits
@@ -12,6 +14,7 @@
 3. **Architecture** — Transport / Scheduler / Module / Datapoint / EventBus
 4. **TOML Schema Reference** — every section, every field, every validation rule
 5. **Schedulers** — Serial / Credit / Priority — when to pick which
-6. **Multi-Protocol Transports** — Modbus TCP/RTU, OPC UA, MQTT (S7 pending)
+6. **Multi-Protocol Transports** — connection/peer snapshots, explicit reload,
+   Modbus TCP/RTU, OPC UA, MQTT (S7 pending)
 7. **Examples Index** — three runnable demos in `core/examples/`
 8. **Migration Guide** — porting from the retired legacy `src/Core/` to the new Core

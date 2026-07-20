@@ -10,6 +10,7 @@
 
 #include "core/core_global.h"
 #include "core/sched/SchedulerTypes.h"
+#include "core/transport/TransportTypes.h"
 
 namespace core::bus {
 
@@ -34,20 +35,60 @@ struct DpStateChanged {
     QDateTime  timestamp;
 };
 
-enum class TransportEventKind {
-    Connected,
-    Disconnected,
-    CircuitOpened,
-    CircuitClosed,
-    CircuitHalfOpen,
-    ReadCompleted,
-    WriteCompleted,
+struct TransportStateChanged {
+    transport::TransportStatus before;
+    transport::TransportStatus after;
 };
 
-struct TransportEvent {
-    QString             transportId;
-    TransportEventKind  kind;
-    QVariant            payload;
+enum class PeerSessionChangeKind {
+    Connected,
+    Disconnected,
+};
+
+struct PeerSessionChanged {
+    PeerSessionChangeKind      kind = PeerSessionChangeKind::Connected;
+    transport::PeerSession     session;
+    QString                    reason;
+    QDateTime                  changedAt;
+};
+
+struct SchedulerCircuitChanged {
+    QString               transportId;
+    sched::CircuitState   before = sched::CircuitState::Closed;
+    sched::CircuitState   after  = sched::CircuitState::Closed;
+    QDateTime             changedAt;
+};
+
+// A successful PollRange publishes the untouched register image only after
+// datapoint application is complete. Bridge consumers can mirror this image
+// without re-encoding scaled/bitfield presentation values.
+struct PollRangeCompleted {
+    QString                            moduleId;
+    QString                            transportId;
+    QModbusDataUnit::RegisterType      table;
+    int                                startAddress = 0;
+    int                                count = 0;
+    QList<quint16>                     values;
+    QDateTime                          completedAt;
+};
+
+struct ConfigReloadStarted {
+    QString path;
+};
+
+struct ConfigReloadSucceeded {
+    QString path;
+};
+
+struct ConfigReloadFailed {
+    QString path;
+    QString reason;
+};
+
+// Consumers holding raw/QML datapoint references must reacquire them after a
+// successful reload. The generation is monotonically increasing per Core.
+struct DatapointModelRebuilt {
+    quint64 generation = 0;
 };
 
 struct CoreReady {};

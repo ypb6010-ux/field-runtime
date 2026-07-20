@@ -22,30 +22,23 @@ slave_id       = 1
 table = "HR"
 range = [0, 64]
 
-# Batched outbound window: PLC HR[100..103].
-[[sink_window]]
-module_id = "sw.plc"
+# Poll the PLC status image that the operator box reads back.
+[[poll_range]]
+module_id = "poll.plc.status"
 transport = "plc"
 table     = "HR"
-range     = [100, 4]
-priority  = "High"
-initial   = [0, 0, 0, 0]
-[sink_window.flush]
-debounce_ms  = 20
-keepalive_ms = 5000
+range     = [50, 4]
+period_ms = 100
 
-# Logical signal: source is the operator-box write target, sink is the
-# SinkWindow position on the PLC side.
-[[datapoint]]
-id   = "cmd_in"
-kind = "Bidirectional"
-type = "U16"
-source = { port="box", table="HR", addr=0 }
-sink   = { port="plc", table="HR", addr=100, window="sw.plc" }
-
-# Route operator-box writes into the SinkWindow.
-[[route]]
-name   = "box-to-plc"
-from   = "cmd_in"
-to     = "cmd_in"
-policy = "ContinuousMirror"
+# Segment bridge: operator commands HR[0..3] go to the same PLC addresses;
+# each successful PLC HR[50..53] poll mirrors its untouched U16 image back to
+# the server. No placeholder datapoints are required for this raw mirror.
+[[bridge]]
+server = "box"
+plc = "plc"
+offset = 0
+write_start = 0
+write_count = 4
+mirror_start = 50
+mirror_count = 4
+mirror_policy = "AfterPoll"

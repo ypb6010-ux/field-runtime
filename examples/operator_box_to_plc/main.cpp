@@ -1,14 +1,13 @@
 // SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
-// operator_box_to_plc — Mirror a Modbus TCP server (operator box) into a
-// PLC client through a SinkWindow.
+// operator_box_to_plc — Segment bridge between a Modbus TCP server
+// (operator box) and a PLC client.
 //
 // One Core instance hosts:
 //   - `box` transport     : listens on 127.0.0.1:5020 (operator-box facing)
 //   - `plc` transport     : connects to 127.0.0.1:51500 (PLC facing)
-//   - `sw.plc` SinkWindow : batches writes to PLC HR[100..104]
-//   - route cmd_in → cmd_in: copies operator-box HR[0] writes into the
-//                              SinkWindow at HR[100]
+//   - bridge command area : forwards operator-box HR[0..3] to PLC HR[0..3]
+//   - bridge status area  : mirrors raw PLC HR[50..53] after every good poll
 //
 // Useful as a HMI-side bridge: operator boxes keep writing into their
 // usual local register table; Core handles the real PLC connection
@@ -54,10 +53,30 @@ int main(int argc, char* argv[]) {
                 << "  circuit=" << int(s.stats.circuitState) << "\n";
             out.flush();
         });
+    auto subState = core->bus().subscribe<core::bus::TransportStateChanged>(
+        [&out](core::bus::TransportStateChanged const& event) {
+            out << "[transport] " << event.after.transportId
+                << " state=" << int(event.after.state)
+                << " revision=" << event.after.revision;
+            if (!event.after.errorMessage.isEmpty()) {
+                out << " error=" << event.after.errorMessage;
+            }
+            out << "\n";
+            out.flush();
+        });
+    auto subPeer = core->bus().subscribe<core::bus::PeerSessionChanged>(
+        [&out](core::bus::PeerSessionChanged const& event) {
+            out << "[peer] " << event.session.transportId << " "
+                << (event.kind == core::bus::PeerSessionChangeKind::Connected
+                    ? "connected " : "disconnected ")
+                << event.session.remoteEndpoint.address << ":"
+                << event.session.remoteEndpoint.port << "\n";
+            out.flush();
+        });
 
     core->start();
-    out << "Bridge running. Connect a Modbus client to 127.0.0.1:5020 and "
-           "write to HR[0]; the PLC at 127.0.0.1:51500 will see it on HR[100]."
+    out << "Bridge running. Write box HR[0..3] to command the PLC and read "
+           "box HR[50..53] for the latest successful raw PLC poll."
         << "\n";
     return app.exec();
 }
