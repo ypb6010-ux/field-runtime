@@ -4,6 +4,8 @@
 
 #include <QSignalSpy>
 #include <memory>
+#include <stdexcept>
+#include <utility>
 
 #include "core/dp/Datapoint.h"
 #include "core/dp/DatapointRegistry.h"
@@ -51,15 +53,36 @@ TEST_CASE("Datapoint.setValue transitions to Ok and emits valueChanged",
 TEST_CASE("Datapoint.setValue does not re-emit when value is unchanged",
           "[dp]") {
     Datapoint d(specFor("foo"));
-    d.setValue(7);
+    QDateTime const t0(QDate(2026, 7, 17), QTime(10, 0, 0));
+    d.setValue(7, t0);
 
     QSignalSpy valueSpy(&d, &Datapoint::valueChanged);
+    QSignalSpy timestampSpy(&d, &Datapoint::timestampChanged);
 
-    d.setValue(7);   // identical value
+    d.setValue(7, t0.addMSecs(100));   // identical value, fresh sample
     REQUIRE(valueSpy.count() == 0);
+    REQUIRE(timestampSpy.count() == 1);
+    REQUIRE(d.timestamp() == t0.addMSecs(100));
 
-    d.setValue(8);
+    d.setValue(8, t0.addMSecs(200));
     REQUIRE(valueSpy.count() == 1);
+    REQUIRE(timestampSpy.count() == 2);
+}
+
+TEST_CASE("Datapoint.setValue re-notifies state when validity recovers",
+          "[dp]") {
+    Datapoint d(specFor("foo"));
+    d.setValue(7);
+    d.setState(DpState::Stale);
+
+    QSignalSpy valueSpy(&d, &Datapoint::valueChanged);
+    QSignalSpy stateSpy(&d, &Datapoint::stateChanged);
+
+    d.setValue(7);
+
+    REQUIRE(d.valid());
+    REQUIRE(valueSpy.count() == 0);
+    REQUIRE(stateSpy.count() == 1);
 }
 
 TEST_CASE("Datapoint.setState changes state and emits both signals",
@@ -75,7 +98,7 @@ TEST_CASE("Datapoint.setState changes state and emits both signals",
     REQUIRE(d.stateText() == "Stale");
     REQUIRE_FALSE(d.valid());
     REQUIRE(stateSpy.count() == 1);
-    REQUIRE(valueSpy.count() == 1);   // valid Q_PROPERTY also rebinds
+    REQUIRE(valueSpy.count() == 0);
 }
 
 TEST_CASE("Datapoint.write invokes the registered writer", "[dp][write]") {
@@ -114,16 +137,23 @@ TEST_CASE("DatapointRegistry stores and retrieves datapoints",
     REQUIRE(reg.all().size() == 2);
 }
 
-TEST_CASE("DatapointRegistry replaces dp when re-registered with same id",
+TEST_CASE("DatapointRegistry rejects duplicate ids to preserve QML pointer lifetime",
           "[dp][registry]") {
     DatapointRegistry reg;
     auto first  = std::make_shared<Datapoint>(specFor("dup"));
     auto second = std::make_shared<Datapoint>(specFor("dup"));
-    reg.registerDp(first);
-    reg.registerDp(second);
+    REQUIRE(reg.registerDp(first));
+    REQUIRE_FALSE(reg.registerDp(second));
 
-    REQUIRE(reg.find("dup").get() == second.get());
+    REQUIRE(reg.find("dup").get() == first.get());
     REQUIRE(reg.all().size() == 1);
+}
+
+TEST_CASE("Datapoint id is immutable after assignment", "[dp][spec][lifetime]") {
+    Datapoint point(specFor("stable"));
+    auto changed = specFor("changed");
+    REQUIRE_THROWS_AS(point.setSpec(std::move(changed)), std::invalid_argument);
+    REQUIRE(point.id() == "stable");
 }
 
 TEST_CASE("DatapointSpec exposes static config through getters", "[dp][spec]") {

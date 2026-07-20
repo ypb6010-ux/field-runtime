@@ -103,6 +103,16 @@ TEST_CASE("ModuleRegistry rejects registerModule once ticking is live",
     REQUIRE(reg.find("c") != nullptr);
 }
 
+TEST_CASE("ModuleRegistry rejects duplicate ids without replacing the owner",
+          "[module-registry][lifecycle][duplicate]") {
+    ModuleRegistry reg;
+    auto* original = new CountingModule(QStringLiteral("same"), 0);
+    REQUIRE(reg.registerModule(std::unique_ptr<FunctionalModule>(original)));
+    REQUIRE_FALSE(reg.registerModule(
+        std::make_unique<CountingModule>(QStringLiteral("same"), 0)));
+    REQUIRE(reg.find("same") == original);
+}
+
 TEST_CASE("ModuleRegistry skips modules whose tickPeriodMs is 0",
           "[module-registry][autotick]") {
     ModuleRegistry reg;

@@ -4,7 +4,6 @@
 
 #include <functional>
 #include <memory>
-#include <optional>
 #include <typeindex>
 #include <utility>
 
@@ -12,21 +11,20 @@
 
 #include "core/core_global.h"
 #include "core/bus/Subscription.h"
-#include "core/coro/Lazy.h"
 
 namespace core::bus {
 
 struct BusStats {
     quint64 totalPublished    = 0;
     quint64 totalDelivered    = 0;
+    quint64 totalHandlerFailures = 0;
     int     activeSubscribers = 0;
 };
 
 // EventBus is owned by Core; lifetime ends with Core. Publish is thread-safe
-// and may be called from any thread; in the Phase 1 implementation handlers
-// run synchronously on the publisher's thread (the worker-thread dispatch
-// design from spec §2.1 is a later optimization — the public API does not
-// change).
+// and may be called from any thread. Handlers run synchronously on the
+// publisher's thread; one throwing handler is isolated and does not prevent
+// later subscribers from receiving the event.
 class CORE_EXPORT EventBus : public QObject {
     Q_OBJECT
 public:
@@ -49,15 +47,6 @@ public:
         publishErased(std::type_index(typeid(T)),
                       static_cast<void const*>(&event));
     }
-
-    // TODO(phase-2): coroutine wait with timeout, used by AckWatch. The
-    // signature is reserved here so consumers can compile-time discover the
-    // intent; calling it before the implementation lands triggers a linker
-    // error rather than silent misbehaviour.
-    template <class T>
-    coro::Lazy<std::optional<T>> waitFor(
-        std::function<bool(T const&)> predicate,
-        int timeoutMs);
 
     BusStats stats() const;
 

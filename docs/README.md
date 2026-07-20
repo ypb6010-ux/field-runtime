@@ -12,6 +12,6 @@
 3. **Architecture** — Transport / Scheduler / Module / Datapoint / EventBus
 4. **TOML Schema Reference** — every section, every field, every validation rule
 5. **Schedulers** — Serial / Credit / Priority — when to pick which
-6. **Multi-Protocol Transports** — Modbus TCP/RTU, OPC UA, MQTT, S7
+6. **Multi-Protocol Transports** — Modbus TCP/RTU, OPC UA, MQTT (S7 pending)
 7. **Examples Index** — three runnable demos in `core/examples/`
 8. **Migration Guide** — porting from the retired legacy `src/Core/` to the new Core

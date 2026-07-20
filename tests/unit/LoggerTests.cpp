@@ -5,6 +5,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <vector>
 
 #include "core/log/DedupFilter.h"
@@ -42,6 +43,27 @@ private:
     std::vector<OperationRecord> m_ops;
 };
 
+class ThrowingSink : public ILogSink {
+public:
+    void write(LogRecord const&) override { throw std::runtime_error("write failed"); }
+    void write(OperationRecord const&) override { throw std::runtime_error("write failed"); }
+    void flush() override { throw std::runtime_error("flush failed"); }
+};
+
+class ReentrantSink : public ILogSink {
+public:
+    explicit ReentrantSink(Logger& logger) : m_logger(logger) {}
+    void write(LogRecord const&) override {
+        ++calls;
+        m_logger.logf(LogLevel::Error, "sink", "reentrant", "must be rejected");
+        m_logger.flush();
+    }
+    void write(OperationRecord const&) override {}
+    std::atomic<int> calls{0};
+private:
+    Logger& m_logger;
+};
+
 } // namespace
 
 TEST_CASE("Logger delivers system records to sinks", "[logger]") {
@@ -58,6 +80,34 @@ TEST_CASE("Logger delivers system records to sinks", "[logger]") {
     REQUIRE(recs[0].category == "transport");
     REQUIRE(recs[0].message == "connected");
     REQUIRE(recs[1].level == LogLevel::Error);
+}
+
+TEST_CASE("Logger isolates a throwing sink and continues dispatch",
+          "[logger][stability]") {
+    Logger logger;
+    auto bad = std::make_shared<ThrowingSink>();
+    auto good = std::make_shared<RecordingSink>();
+    logger.addSink(bad);
+    logger.addSink(good);
+
+    logger.logf(LogLevel::Error, "test", "throwing-sink", "still delivered");
+    logger.flush();
+
+    REQUIRE(good->system().size() == 1);
+    REQUIRE(logger.sinkFailureCount() == 1);
+}
+
+TEST_CASE("Logger rejects reentrant sink emissions without deadlocking",
+          "[logger][stability][reentrant]") {
+    Logger logger;
+    auto sink = std::make_shared<ReentrantSink>(logger);
+    logger.addSink(sink);
+
+    logger.logf(LogLevel::Info, "test", "reentrant-sink", "outer");
+    logger.flush();
+
+    REQUIRE(sink->calls.load() == 1);
+    REQUIRE(logger.droppedCount() == 1);
 }
 
 TEST_CASE("Logger filters system records below threshold", "[logger]") {
@@ -198,6 +248,19 @@ TEST_CASE("DedupFilter suppresses repeats within window", "[dedup]") {
 
     d.reset("k");
     REQUIRE(d.accept("k", t0.addMSecs(1200)));       // reset: emits fresh
+}
+
+TEST_CASE("DedupFilter bounds unique-key memory by evicting the oldest entry",
+          "[dedup][bounded]") {
+    DedupFilter d(10'000, 2);
+    QDateTime const t0(QDate(2026, 6, 10), QTime(0, 0, 0));
+    REQUIRE(d.accept("oldest", t0));
+    REQUIRE(d.accept("newer", t0.addMSecs(1)));
+    REQUIRE(d.accept("newest", t0.addMSecs(2)));
+
+    // `oldest` was evicted to preserve the cap, so it emits fresh even though
+    // its original dedup window would still be active.
+    REQUIRE(d.accept("oldest", t0.addMSecs(3)));
 }
 
 TEST_CASE("formatLine renders a system record", "[logger]") {

@@ -23,6 +23,7 @@ struct Config {
     QString  dbname   = QStringLiteral("jmj_core");
     int      batchSize = 100;
     int      flushMs   = 500;
+    int      maxQueuedRows = 100000;              // bounded producer memory
     core::log::LogLevel systemLogMinLevel = core::log::LogLevel::Info;
     bool     autoCreateDatabase = true;            // QPSQL: CREATE DATABASE if missing
 };

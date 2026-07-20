@@ -9,6 +9,7 @@
 #include "core/dp/ScalarType.h"
 
 using namespace core::config;
+
 using core::dp::ScalarType;
 
 namespace {
@@ -23,6 +24,62 @@ QString writeTomlFile(QString const& contents, QTemporaryFile& f) {
 }
 
 } // namespace
+
+TEST_CASE("ConfigLoader rejects misspelled fields instead of using defaults",
+          "[config][usability]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(QStringLiteral(R"toml(
+[meta]
+project = "typo"
+
+[[transport]]
+id = "plc"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+port = 502
+reconnect_intervl_ms = 1000
+)toml"), temp);
+
+    ConfigLoader loader;
+    auto schema = loader.loadFromToml(path);
+    REQUIRE_FALSE(schema.has_value());
+    bool found = false;
+    for (auto const& e : schema.error()) {
+        if (e.section == "transport[0]"
+            && e.field == "reconnect_intervl_ms"
+            && e.message.contains("unknown")) {
+            found = true;
+        }
+    }
+    REQUIRE(found);
+}
+
+TEST_CASE("ConfigLoader rejects wrong field types instead of using defaults",
+          "[config][usability][types]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(QStringLiteral(R"toml(
+[[transport]]
+id = "plc"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+port = "502"
+clean_session = 1
+)toml"), temp);
+
+    ConfigLoader loader;
+    auto schema = loader.loadFromToml(path);
+    REQUIRE_FALSE(schema.has_value());
+    bool badPort = false;
+    bool badBool = false;
+    for (auto const& e : schema.error()) {
+        badPort |= e.section == "transport[0]" && e.field == "port"
+                && e.message.contains("integer");
+        badBool |= e.section == "transport[0]" && e.field == "clean_session"
+                && e.message.contains("boolean");
+    }
+    REQUIRE(badPort);
+    REQUIRE(badBool);
+}
 
 TEST_CASE("ConfigLoader parses a minimal transport + datapoint config",
           "[config][parse]") {
@@ -257,8 +314,6 @@ initial   = [0, 0, 0, 0]
 [sink_window.flush]
 debounce_ms  = 30
 keepalive_ms = 5000
-coalesce     = true
-max_retries  = 1
 
 [[heartbeat]]
 module_id = "hb.tcp1"
@@ -286,9 +341,10 @@ value   = 1
 
 [[datapoint]]
 id   = "feedback"
-kind = "Status"
+kind = "Bidirectional"
 type = "U16"
-source = { port="tcp1", table="HR", addr=0 }
+source = { port="box1", table="HR", addr=0 }
+sink   = { port="tcp1", table="HR", addr=100, window="sink.tcp1.hr" }
 
 [[route]]
 name   = "fwd"
@@ -447,7 +503,69 @@ range     = [0, 200]
     bool found = false;
     for (auto const& e : result.error()) {
         if (e.section.startsWith("sink_window") && e.field == "range"
-         && e.message.contains("FC16")) { found = true; break; }
+         && e.message.contains("Modbus write maximum")) { found = true; break; }
+    }
+    REQUIRE(found);
+}
+
+TEST_CASE("ConfigLoader applies Modbus request caps only to Modbus clients",
+          "[config][validate][protocol-limit]") {
+    ConfigSchema schema;
+    TransportConfig mqtt;
+    mqtt.id = "mqtt";
+    mqtt.kind = core::transport::TransportKind::MqttPahoClient;
+    mqtt.brokerUri = "tcp://127.0.0.1:1883";
+    mqtt.topicTemplate = "register/%1";
+    schema.transports.append(mqtt);
+
+    SinkWindowConfig sink;
+    sink.moduleId = "large.non.modbus.window";
+    sink.transport = "mqtt";
+    sink.table = "HR";
+    sink.startAddress = 0;
+    sink.size = 200;
+    schema.sinkWindows.append(sink);
+
+    ConfigLoader loader;
+    auto result = loader.validate(schema);
+    if (!result.has_value()) {
+        for (auto const& e : result.error()) {
+            REQUIRE_FALSE(e.section == "sink_window[0]"
+                       && e.field == "range"
+                       && e.message.contains("Modbus"));
+        }
+    }
+}
+
+TEST_CASE("ConfigLoader rejects overlapping independent sink windows",
+          "[config][validate][write-conflict]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[[sink_window]]
+module_id = "sink.a"
+transport = "tcp1"
+table     = "HR"
+range     = [100, 10]
+
+[[sink_window]]
+module_id = "sink.b"
+transport = "tcp1"
+table     = "HoldingRegisters"
+range     = [105, 4]
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+    bool found = false;
+    for (auto const& e : result.error()) {
+        found |= e.section == "sink_window[1]" && e.field == "range"
+              && e.message.contains("overlaps sink_window[0]");
     }
     REQUIRE(found);
 }
@@ -483,6 +601,33 @@ sink = { port="tcp1", table="HR", addr=200, window="sink.small" }
          && e.message.contains("outside sink_window")) {
             found = true; break;
         }
+    }
+    REQUIRE(found);
+}
+
+TEST_CASE("ConfigLoader rejects a datapoint source that has no runtime driver",
+          "[config][validate][source-coverage]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[[datapoint]]
+id   = "never_polled"
+kind = "Status"
+type = "U16"
+source = { port="tcp1", table="HR", addr=50 }
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+    bool found = false;
+    for (auto const& e : result.error()) {
+        found |= e.section == "datapoint[0].source" && e.field == "range"
+              && e.message.contains("poll_range");
     }
     REQUIRE(found);
 }
@@ -651,4 +796,167 @@ map  = { 0 = "Stopped", 1 = "Starting", 2 = "Running" }
     REQUIRE(c.map.size() == 3);
     REQUIRE(c.map.value("0").toString() == "Stopped");
     REQUIRE(c.map.value("2").toString() == "Running");
+}
+
+TEST_CASE("ConfigLoader rejects invalid codec definitions",
+          "[config][codec][validate]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[codec]]
+id   = "empty_enum"
+kind = "enum_u16"
+
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[[datapoint]]
+id   = "x"
+kind = "Status"
+type = "U16"
+source = { port="tcp1", table="HR", addr=0, codec="builtin.does_not_exist" }
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+
+    bool emptyMap = false;
+    bool fakeBuiltin = false;
+    for (auto const& e : result.error()) {
+        emptyMap    |= e.section == "codec[0]" && e.field == "map";
+        fakeBuiltin |= e.section == "datapoint[0].source"
+                    && e.field == "codec";
+    }
+    REQUIRE(emptyMap);
+    REQUIRE(fakeBuiltin);
+}
+
+TEST_CASE("ConfigLoader rejects invalid numeric ranges before runtime wiring",
+          "[config][validate][range]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+port = 70000
+
+[transport.scheduler]
+max_queue_depth = 0
+
+[[poll_range]]
+module_id = "poll.bad"
+transport = "tcp1"
+table     = "HR"
+range     = [65535, 2]
+period_ms = 100
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+
+    bool badPort = false;
+    bool badQueueDepth = false;
+    bool badRange = false;
+    for (auto const& e : result.error()) {
+        badPort       |= e.section == "transport[0]" && e.field == "port";
+        badQueueDepth |= e.field == "max_queue_depth";
+        badRange      |= e.section == "poll_range[0]" && e.field == "range"
+                      && e.message.contains("exceeds");
+    }
+    REQUIRE(badPort);
+    REQUIRE(badQueueDepth);
+    REQUIRE(badRange);
+}
+
+TEST_CASE("ConfigLoader rejects names that previously fell back silently",
+          "[config][validate][enum]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[transport.scheduler]
+kind = "parallel-ish"
+
+[[poll_range]]
+module_id = "poll.bad"
+transport = "tcp1"
+table     = "holding_typo"
+range     = [0, 1]
+period_ms = 100
+priority  = "Urgent"
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+
+    bool badScheduler = false;
+    bool badTable = false;
+    bool badPriority = false;
+    for (auto const& e : result.error()) {
+        badScheduler |= e.section == "transport[0].scheduler"
+                     && e.field == "kind";
+        badTable     |= e.section == "poll_range[0]" && e.field == "table";
+        badPriority  |= e.section == "poll_range[0]" && e.field == "priority";
+    }
+    REQUIRE(badScheduler);
+    REQUIRE(badTable);
+    REQUIRE(badPriority);
+}
+
+TEST_CASE("ConfigLoader rejects values that would wrap to quint16",
+          "[config][validate][narrowing]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[[heartbeat]]
+module_id = "hb.bad"
+transport = "tcp1"
+table     = "HR"
+address   = 10
+value     = 65536
+period_ms = 1000
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+
+    bool badValue = false;
+    for (auto const& e : result.error()) {
+        badValue |= e.section == "heartbeat[0]" && e.field == "value";
+    }
+    REQUIRE(badValue);
+}
+
+TEST_CASE("ConfigLoader rejects the unimplemented S7 transport",
+          "[config][s7]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id   = "s7"
+kind = "s7_client"
+host = "127.0.0.1"
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+    bool unsupported = false;
+    for (auto const& e : result.error()) {
+        unsupported |= e.section == "transport[0]" && e.field == "kind"
+                    && e.message.contains("not implemented");
+    }
+    REQUIRE(unsupported);
 }

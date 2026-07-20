@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "core/codec/CodecRegistry.h"
 
+#include <mutex>
 #include <utility>
 
 #include "core/codec/BuiltinCodecs.h"
@@ -13,10 +14,13 @@ CodecRegistry::~CodecRegistry() = default;
 
 void CodecRegistry::registerCodec(std::shared_ptr<Codec> codec) {
     if (!codec) return;
-    m_codecs.insert_or_assign(codec->id(), std::move(codec));
+    QString const id = codec->id();
+    std::unique_lock lk(m_mutex);
+    m_codecs.insert_or_assign(id, std::move(codec));
 }
 
 std::shared_ptr<Codec> CodecRegistry::find(QString const& id) const {
+    std::shared_lock lk(m_mutex);
     auto it = m_codecs.find(id);
     if (it == m_codecs.end()) return nullptr;
     return it->second;

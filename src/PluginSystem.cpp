@@ -8,7 +8,9 @@
 #include "core/plugin/PortRegistry.h"
 #include "core/plugin/Plugin.h"
 
+#include <exception>
 #include <map>
+#include <mutex>
 #include <vector>
 
 #include <QLibrary>
@@ -28,14 +30,32 @@ public:
     Impl(dp::DatapointRegistry& d, bus::EventBus& b) : dps(d), bus(b) {
         // One DpChanged subscription fans out to every bound InPort by id.
         sub = bus.subscribe<bus::DpChanged>([this](bus::DpChanged const& e) {
-            auto range = handlers.equal_range(e.id);
-            for (auto it = range.first; it != range.second; ++it) it->second(e.value);
+            std::vector<std::function<void(QVariant const&)>> callbacks;
+            {
+                std::lock_guard lk(handlersMutex);
+                auto range = handlers.equal_range(e.id);
+                for (auto it = range.first; it != range.second; ++it) {
+                    callbacks.push_back(it->second);
+                }
+            }
+            std::exception_ptr firstFailure;
+            for (auto const& callback : callbacks) {
+                try {
+                    callback(e.value);
+                } catch (...) {
+                    if (!firstFailure) firstFailure = std::current_exception();
+                }
+            }
+            // Preserve EventBus failure accounting without letting one plugin
+            // prevent later InPorts bound to the same datapoint from running.
+            if (firstFailure) std::rethrow_exception(firstFailure);
         });
     }
 
     dp::DatapointRegistry& dps;
     bus::EventBus&         bus;
     std::multimap<QString, std::function<void(QVariant const&)>> handlers;
+    std::mutex             handlersMutex;
     bus::Subscription      sub;
 };
 
@@ -46,6 +66,7 @@ PortRegistry::~PortRegistry() { delete m_impl; }
 
 void PortRegistry::bindInErased(QString const& dpId,
                                 std::function<void(QVariant const&)> deliver) {
+    std::lock_guard lk(m_impl->handlersMutex);
     m_impl->handlers.emplace(dpId, std::move(deliver));
 }
 
@@ -61,6 +82,7 @@ public:
         Plugin*   plugin = nullptr;
     };
     std::vector<Loaded> loaded;
+    QString             lastError;
 };
 
 PluginRegistry::PluginRegistry()  : m_impl(std::make_unique<Impl>()) {}
@@ -68,15 +90,42 @@ PluginRegistry::~PluginRegistry() { unloadAll(); }
 
 bool PluginRegistry::load(QString const& dllPath) {
     using CreateFn = Plugin* (*)();
+    m_impl->lastError.clear();
     auto* lib = new QLibrary(dllPath);
-    if (!lib->load()) { delete lib; return false; }
+    if (!lib->load()) {
+        m_impl->lastError = lib->errorString();
+        delete lib;
+        return false;
+    }
     auto create = reinterpret_cast<CreateFn>(lib->resolve("corePluginCreate"));
-    if (!create) { lib->unload(); delete lib; return false; }
-    Plugin* p = create();
-    if (!p) { lib->unload(); delete lib; return false; }
+    if (!create) {
+        m_impl->lastError = QStringLiteral("missing corePluginCreate export: %1")
+                                .arg(lib->errorString());
+        lib->unload();
+        delete lib;
+        return false;
+    }
+    Plugin* p = nullptr;
+    try {
+        p = create();
+    } catch (std::exception const& e) {
+        m_impl->lastError = QStringLiteral("corePluginCreate threw: %1")
+                                .arg(QString::fromUtf8(e.what()));
+    } catch (...) {
+        m_impl->lastError = QStringLiteral("corePluginCreate threw an unknown exception");
+    }
+    if (!p) {
+        if (m_impl->lastError.isEmpty())
+            m_impl->lastError = QStringLiteral("corePluginCreate returned null");
+        lib->unload();
+        delete lib;
+        return false;
+    }
     m_impl->loaded.push_back({lib, p});
     return true;
 }
+
+QString PluginRegistry::lastError() const { return m_impl->lastError; }
 
 void PluginRegistry::unloadAll() {
     // Destroy plugin instances (and their port emitters) before unloading the

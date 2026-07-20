@@ -49,6 +49,7 @@ sched::SubmitResult Command::execute() {
 }
 
 void Command::executeAsync() {
+    auto* const transport = m_transport;
     for (auto const& e : m_cfg.writes) {
         transport::WriteBatch batch;
         batch.table        = e.table;
@@ -64,9 +65,9 @@ void Command::executeAsync() {
         // order. The completion callback intentionally captures only `done`
         // (not `this`) so a write finishing after the Command is destroyed
         // cannot touch freed module state.
-        m_transport->scheduler().submitAsync(tag,
-            [this, batch](sched::AsyncDone done) {
-                m_transport->writeAsync(batch,
+        transport->scheduler().submitAsync(tag,
+            [transport, batch](sched::AsyncDone done) {
+                transport->writeAsync(batch,
                     [done = std::move(done)](transport::WriteResult w) mutable {
                         done(w.ok);
                     });

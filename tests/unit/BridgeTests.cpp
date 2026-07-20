@@ -83,7 +83,6 @@ id    = "main"
 kind  = "modbus_tcp_server"
 listen_port = %2
 slave_id = 1
-max_clients = 1
 [[transport.listen_ranges]]
 table = "HR"
 range = [0, 64]
@@ -190,6 +189,52 @@ mirror_count = 4
     REQUIRE(flagged);
 }
 
+TEST_CASE("ConfigLoader rejects overlapping bridge command and mirror windows",
+          "[config][bridge][stability]") {
+    QTemporaryFile temp;
+    auto path = writeToml(QStringLiteral(R"toml(
+[meta]
+project = "b"
+
+[[transport]]
+id = "plc"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+port = 51999
+
+[[transport]]
+id = "srv"
+kind = "modbus_tcp_server"
+listen_port = 51998
+[[transport.listen_ranges]]
+table = "HR"
+range = [0, 16]
+
+[[datapoint]]
+id = "plc.hr0"
+kind = "Status"
+type = "U16"
+source = { port = "plc", table = "HR", addr = 0 }
+
+[[bridge]]
+server = "srv"
+plc = "plc"
+write_start = 0
+write_count = 4
+mirror_start = 0
+mirror_count = 4
+)toml"), temp);
+
+    ConfigLoader loader;
+    auto schema = loader.loadFromToml(path);
+    REQUIRE_FALSE(schema.has_value());
+    bool flagged = false;
+    for (auto const& e : schema.error()) {
+        if (e.section == "bridge[0]" && e.field == "range") flagged = true;
+    }
+    REQUIRE(flagged);
+}
+
 TEST_CASE("Bridge mirrors PLC reads into the server table and forwards operator writes",
           "[core][bridge][e2e]") {
     auto const plcPort    = nextBridgePort();
@@ -227,6 +272,26 @@ TEST_CASE("Bridge mirrors PLC reads into the server table and forwards operator 
          && res.values[0] == 0x1234 && res.values[1] == 0x5678) { mirrored = true; break; }
     }
     REQUIRE(mirrored);
+
+    // Disabling is a safety edge: even when the local forward snapshot has
+    // never changed from its initial zeros, it must overwrite a non-zero PLC
+    // value that may have come from another master or a prior runtime.
+    plc.setData(QModbusDataUnit::HoldingRegisters, 0, 0x9999);
+    core->setServerForwardEnabled(QStringLiteral("main"), false);
+    bool neutralized = false;
+    auto const ndl = std::chrono::steady_clock::now()
+                   + std::chrono::milliseconds(2000);
+    while (std::chrono::steady_clock::now() < ndl) {
+        internal::tickSinkWindowsOnce(*core);
+        QCoreApplication::processEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (plc.getData(QModbusDataUnit::HoldingRegisters, 0) == 0) {
+            neutralized = true;
+            break;
+        }
+    }
+    REQUIRE(neutralized);
+    core->setServerForwardEnabled(QStringLiteral("main"), true);
 
     // —— 转发:真实操作箱(client)写 main HR0/1 → 真实 ServerWriteEvent → 转发到 PLC ——
     transport::ModbusTcpClientTransport::Config opCfg;

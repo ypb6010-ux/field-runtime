@@ -9,6 +9,7 @@
 #include "core/module/FunctionalModule.h"
 
 namespace core::bus { class EventBus; }
+namespace core::dp { class DatapointRegistry; }
 
 namespace core::module {
 
@@ -17,8 +18,9 @@ namespace core::module {
 // the UntilAck command pattern: stage a write, then waitOnce() for the
 // expected feedback state, then stage the clear-out.
 //
-// Phase 2 ships the synchronous primitive on std::condition_variable; a
-// coroutine variant lands when EventBus::waitFor is implemented.
+// The synchronous primitive uses std::condition_variable. stop()/pause() wake
+// active waiters with Cancelled so lifecycle transitions cannot leave a caller
+// blocked until its full timeout.
 class CORE_EXPORT AckWatch : public FunctionalModule {
 public:
     enum class AckResult {
@@ -35,6 +37,8 @@ public:
     };
 
     AckWatch(Config cfg, bus::EventBus& bus);
+    AckWatch(Config cfg, bus::EventBus& bus,
+             dp::DatapointRegistry* datapoints);
     ~AckWatch() override;
 
     CORE_DISABLE_COPY_MOVE(AckWatch)

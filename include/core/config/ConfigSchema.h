@@ -34,7 +34,6 @@ struct TransportConfig {
     // ─── modbus_tcp_server ──────────────────────────────────────────
     QString                    listenAddress;
     int                        listenPort = 502;
-    int                        maxClients = 1;
     QList<transport::WatchRange> listenRanges;
     // ─── modbus_rtu ─────────────────────────────────────────────────
     QString                    portName;            // e.g. "COM3", "/dev/ttyUSB0"
@@ -87,8 +86,6 @@ struct PollRangeConfig {
 struct SinkWindowFlushConfig {
     int  debounceMs       = 20;
     int  keepaliveMs      = 0;
-    bool coalesceWrites   = true;
-    int  maxRetries       = 2;
 };
 
 struct SinkWindowConfig {
@@ -110,7 +107,7 @@ struct HeartbeatConfig {
     QList<quint16> values;
     int     periodMs      = 0;
     sched::Priority priority = sched::Priority::Low;
-    QString incrementer;   // "none" / "u16_inc" / "timestamp"
+    QString incrementer;   // currently only "none" is supported
 };
 
 struct AckWatchConfig {
@@ -131,7 +128,6 @@ struct CommandConfig {
     QString transport;
     sched::Priority priority = sched::Priority::High;
     bool    interruptable    = false;
-    QString trigger;
     QList<CommandWriteEntry> writes;
 };
 
@@ -146,9 +142,8 @@ struct PortRefConfig {
     double   scale    = 1.0;
     double   offset   = 0.0;
     QString  codec;
-    QString  dedupe;                    // "none" / "selflock"
 
-    // Sink-only window reference (mutually exclusive with `port`)
+    // Sink-only SinkWindow module reference; `port` names its transport.
     QString  window;
 };
 
@@ -166,7 +161,7 @@ struct DatapointConfig {
     PortRefConfig    sink;
     bool             hasSource = false;
     bool             hasSink   = false;
-    QString          policy;   // "ContinuousMirror" / "EdgeOnce" / ...
+    QString          policy;   // optional "ContinuousMirror"
     DatapointAckRef  ack;
     bool             hasAck    = false;
     QString          ui;
@@ -183,7 +178,6 @@ struct RouteConfig {
 struct PluginConfig {
     QString name;
     QString dllPath;
-    QString config;
 };
 
 // 整段桥接(替代旧 ModbusServer 中继):把操作箱连的 server transport 与 PLC client

@@ -48,8 +48,8 @@ class CORE_EXPORT Datapoint : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString    id        READ id        CONSTANT)
     Q_PROPERTY(QVariant   value     READ value     NOTIFY valueChanged)
-    Q_PROPERTY(bool       valid     READ valid     NOTIFY valueChanged)
-    Q_PROPERTY(QDateTime  ts        READ timestamp NOTIFY valueChanged)
+    Q_PROPERTY(bool       valid     READ valid     NOTIFY stateChanged)
+    Q_PROPERTY(QDateTime  ts        READ timestamp NOTIFY timestampChanged)
     Q_PROPERTY(QString    state     READ stateText NOTIFY stateChanged)
 public:
     using Writer = std::function<void(QVariant const&)>;
@@ -60,6 +60,8 @@ public:
 
     CORE_DISABLE_COPY_MOVE(Datapoint)
 
+    // The id becomes immutable after first assignment so a registered/QML-
+    // exposed datapoint cannot move out from under its registry key.
     void setSpec(DatapointSpec spec);
 
     QString    id()        const;
@@ -71,15 +73,14 @@ public:
 
     Kind                          kind() const;
     ScalarType                    type() const;
-    std::optional<PortRef> const& source() const;
-    std::optional<PortRef> const& sink()   const;
+    std::optional<PortRef> source() const;
+    std::optional<PortRef> sink()   const;
     QString                       uiBinding()  const;
     QString                       persistTag() const;
 
-    // Push a decoded value from a codec / router. valueChanged is emitted
-    // only if (a) state transitions to Ok or (b) the value differs from the
-    // current one. Thread-safe — emissions cross thread boundaries via Qt's
-    // signal/slot machinery.
+    // Push a decoded value from a codec / router. valueChanged is emitted only
+    // when the value differs; stateChanged independently reports validity
+    // recovery. Thread-safe — emissions cross threads through Qt signals.
     void setValue(QVariant v, QDateTime ts = QDateTime::currentDateTime());
     void setState(DpState s);
 
@@ -94,6 +95,7 @@ public:
 signals:
     void valueChanged();
     void stateChanged();
+    void timestampChanged();
 
 private:
     class Impl;

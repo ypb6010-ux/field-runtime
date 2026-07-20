@@ -163,6 +163,82 @@ source = { port="nope", table="HR", addr=0 }
     REQUIRE_FALSE(loaded.error().isEmpty());
 }
 
+TEST_CASE("ICore rejects a second configuration load instead of mixing graphs",
+          "[core][config][lifecycle]") {
+    QTemporaryFile cfg;
+    auto path = writeToml(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+)toml", cfg);
+
+    auto core = ICore::create(nullptr);
+    REQUIRE(core->loadConfig(path).has_value());
+
+    auto second = core->loadConfig(path);
+    REQUIRE_FALSE(second.has_value());
+    REQUIRE(second.error().first().section == "core");
+    REQUIRE(second.error().first().message.contains("already loaded"));
+    REQUIRE(core->transportIds() == QStringList{"tcp1"});
+}
+
+TEST_CASE("ICore rejects configuration loading after start",
+          "[core][config][lifecycle]") {
+    QTemporaryFile cfg;
+    auto path = writeToml(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+)toml", cfg);
+
+    auto core = ICore::create(nullptr);
+    core->start();
+    auto loaded = core->loadConfig(path);
+    REQUIRE_FALSE(loaded.has_value());
+    REQUIRE(loaded.error().first().message.contains("while Core is running"));
+    core->stop();
+}
+
+TEST_CASE("ICore reports an explicit codec load failure without fallback",
+          "[core][config][codec]") {
+    QTemporaryFile cfg;
+    auto path = writeToml(R"toml(
+[[codec]]
+id     = "site_codec"
+kind   = "lua"
+script = "definitely-missing-codec.lua"
+)toml", cfg);
+
+    auto core = ICore::create(nullptr);
+    auto loaded = core->loadConfig(path);
+    REQUIRE_FALSE(loaded.has_value());
+    REQUIRE(loaded.error().first().section == "codec[0]");
+    REQUIRE(core->codecs().find("site_codec") == nullptr);
+}
+
+TEST_CASE("ICore treats a declared plugin load failure as a config error",
+          "[core][config][plugin]") {
+    QTemporaryFile cfg;
+    auto path = writeToml(R"toml(
+[[transport]]
+id   = "would_be_partial"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[[plugin]]
+name = "missing"
+dll  = "definitely-missing-plugin.dll"
+)toml", cfg);
+
+    auto core = ICore::create(nullptr);
+    auto loaded = core->loadConfig(path);
+    REQUIRE_FALSE(loaded.has_value());
+    REQUIRE(loaded.error().first().section == "plugin[0]");
+    REQUIRE(core->transportIds().isEmpty());   // no partial object graph
+}
+
 TEST_CASE("ICore registers builtin codecs at construction",
           "[core][codec]") {
     auto core = ICore::create(nullptr);
@@ -213,7 +289,6 @@ priority  = "High"
 [sink_window.flush]
 debounce_ms  = 10
 keepalive_ms = 0
-coalesce     = true
 
 [[datapoint]]
 id   = "cmd_in"

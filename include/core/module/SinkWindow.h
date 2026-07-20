@@ -37,7 +37,6 @@ public:
         sched::Priority               priority     = sched::Priority::High;
         int                           debounceMs        = 20;
         int                           keepAlivePeriodMs = 0;   // 0 = disabled
-        bool                          coalesceWrites    = true;
         QList<quint16>                initial;
     };
 

@@ -33,7 +33,6 @@ initial   = [0, 0, 0, 0]
 [sink_window.flush]
 debounce_ms  = 20
 keepalive_ms = 5000
-coalesce     = true
 
 # Logical signal: source is the operator-box write target, sink is the
 # SinkWindow position on the PLC side.

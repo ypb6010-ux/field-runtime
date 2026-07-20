@@ -4,6 +4,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <unordered_map>
 
@@ -50,6 +51,25 @@ TEST_CASE("U16 round-trips raw register values", "[codec][u16]") {
 
     auto v = c.decode(regs, ref);
     REQUIRE(v.value<quint16>() == 0xABCD);
+}
+
+TEST_CASE("Builtin integer codecs reject invalid and out-of-range writes",
+          "[codec][validation]") {
+    BuiltinScalarCodec u16(ScalarType::U16);
+    auto ref = portFor();
+    REQUIRE(u16.encode(QStringLiteral("not-a-number"), ref).isEmpty());
+    REQUIRE(u16.encode(65536u, ref).isEmpty());
+
+    ref.mask = 0x0Fu;
+    REQUIRE(u16.encode(16u, ref).isEmpty());
+}
+
+TEST_CASE("Builtin floating codecs reject non-finite writes",
+          "[codec][validation]") {
+    BuiltinScalarCodec f32(ScalarType::F32);
+    auto ref = portFor();
+    REQUIRE(f32.encode(std::numeric_limits<double>::infinity(), ref).isEmpty());
+    REQUIRE(f32.encode(QStringLiteral("not-a-number"), ref).isEmpty());
 }
 
 TEST_CASE("S16 sign-extends negative values", "[codec][s16]") {

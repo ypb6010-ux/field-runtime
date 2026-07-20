@@ -24,6 +24,16 @@ struct DpChanged {
     QDateTime  timestamp;
 };
 
+// Quality/state transitions (including recovery to Ok) are separate from
+// DpChanged so value consumers (commands, plugin inputs, acknowledgements) are
+// not retriggered by a quality transition that retains the previous value.
+struct DpStateChanged {
+    QString    id;
+    QVariant   value;
+    int        state = 0; // dp::DpState numeric value
+    QDateTime  timestamp;
+};
+
 enum class TransportEventKind {
     Connected,
     Disconnected,

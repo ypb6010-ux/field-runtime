@@ -20,15 +20,9 @@ constexpr int kPriorityCount = 4;
 
 enum class ResultKind {
     Ok,
-    TimedOut,
     Cancelled,
     CircuitOpen,
     Error,
-};
-
-enum class BackoffKind {
-    Linear,
-    Exponential,
 };
 
 enum class SchedulerKind {
@@ -46,16 +40,11 @@ enum class CircuitState {
 struct RequestTag {
     QString  moduleId;
     Priority priority       = Priority::Normal;
-    int      timeoutMs      = 1000;
-    int      maxRetries     = 0;
-    int      retryBackoffMs = 100;
-    bool     coalesce       = false;
     bool     interruptable  = false;
 };
 
 struct SchedulerConfig {
     SchedulerKind kind                   = SchedulerKind::Serial;
-    int           defaultTimeoutMs       = 1000;
     int           interRequestGapMs      = 0;
     int           maxQueueDepth          = 256;
     int           maxInflight            = 1;
@@ -63,7 +52,6 @@ struct SchedulerConfig {
     bool          fifoWithinLane         = true;
     int           circuitBreakerThreshold = 10;
     int           circuitBreakerOpenMs   = 5000;
-    BackoffKind   backoff                = BackoffKind::Exponential;
 };
 
 struct ModuleStats {
@@ -86,7 +74,6 @@ struct SchedulerStats {
     quint64    totalSubmitted    = 0;
     quint64    totalCompleted    = 0;
     quint64    totalFailed       = 0;
-    quint64    totalTimedOut     = 0;
     quint64    totalCancelled    = 0;
     int        p50LatencyMs      = 0;
     int        p99LatencyMs      = 0;

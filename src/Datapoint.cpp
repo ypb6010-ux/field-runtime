@@ -4,6 +4,7 @@
 
 #include <QMutex>
 #include <QMutexLocker>
+#include <stdexcept>
 #include <utility>
 
 namespace core::dp {
@@ -30,6 +31,9 @@ Datapoint::~Datapoint() { delete m_impl; }
 
 void Datapoint::setSpec(DatapointSpec spec) {
     QMutexLocker lk(&m_impl->mtx);
+    if (!m_impl->spec.id.isEmpty() && spec.id != m_impl->spec.id) {
+        throw std::invalid_argument("Datapoint id is immutable once assigned");
+    }
     m_impl->spec = std::move(spec);
 }
 
@@ -73,12 +77,20 @@ ScalarType Datapoint::type() const { QMutexLocker lk(&m_impl->mtx); return m_imp
 QString    Datapoint::uiBinding()  const { QMutexLocker lk(&m_impl->mtx); return m_impl->spec.uiBinding; }
 QString    Datapoint::persistTag() const { QMutexLocker lk(&m_impl->mtx); return m_impl->spec.persistTag; }
 
-std::optional<PortRef> const& Datapoint::source() const { return m_impl->spec.source; }
-std::optional<PortRef> const& Datapoint::sink()   const { return m_impl->spec.sink; }
+std::optional<PortRef> Datapoint::source() const {
+    QMutexLocker lk(&m_impl->mtx);
+    return m_impl->spec.source;
+}
+
+std::optional<PortRef> Datapoint::sink() const {
+    QMutexLocker lk(&m_impl->mtx);
+    return m_impl->spec.sink;
+}
 
 void Datapoint::setValue(QVariant v, QDateTime ts) {
     bool valueChangedFlag = false;
     bool stateChangedFlag = false;
+    bool timestampChangedFlag = false;
     {
         QMutexLocker lk(&m_impl->mtx);
         if (m_impl->state != DpState::Ok) {
@@ -86,17 +98,20 @@ void Datapoint::setValue(QVariant v, QDateTime ts) {
             stateChangedFlag = true;
         }
         if (m_impl->value != v) {
-            m_impl->value     = std::move(v);
-            m_impl->timestamp = std::move(ts);
-            valueChangedFlag  = true;
-        } else {
-            // Refresh timestamp even when value is unchanged so consumers
-            // that look at staleness see liveness.
-            m_impl->timestamp = std::move(ts);
+            m_impl->value    = std::move(v);
+            valueChangedFlag = true;
+        }
+        // Refresh timestamp even when value is unchanged so consumers that
+        // look at staleness see liveness. It has its own notification to avoid
+        // making value-only QML bindings re-evaluate on every poll.
+        if (m_impl->timestamp != ts) {
+            m_impl->timestamp       = std::move(ts);
+            timestampChangedFlag    = true;
         }
     }
     if (valueChangedFlag) emit valueChanged();
     if (stateChangedFlag) emit stateChanged();
+    if (timestampChangedFlag) emit timestampChanged();
 }
 
 void Datapoint::setState(DpState s) {
@@ -109,10 +124,7 @@ void Datapoint::setState(DpState s) {
         }
     }
     if (changed) {
-        // valueChanged is emitted so `valid` rebinds in QML; the dp value
-        // itself has not changed, but its validity has.
         emit stateChanged();
-        emit valueChanged();
     }
 }
 

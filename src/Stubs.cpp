@@ -1,26 +1,12 @@
 // SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
-// Minimum stubs to make Core link during the scaffold phase. Each subsystem
-// gets a real implementation file as Phase 1 progresses; this file shrinks
-// every iteration. See doc/design/Core-Greenfield-Spec.md §8 for the order.
-//
-// Stubs left here either return defaults or throw; calling into a stubbed
-// subsystem before its real implementation lands is a programmer error and
-// produces a clear runtime message rather than silent misbehaviour.
+// Small foundational helpers that do not yet warrant separate translation
+// units: ScalarType/WordOrder utilities and the Datapoint QML lookup bridge.
 
 #include <QObject>
-#include <stdexcept>
 
 #include "core/dp/ScalarType.h"
 #include "core/dp/WordOrder.h"
-#include "core/plugin/PluginRegistry.h"
-#include "core/plugin/PortRegistry.h"
-
-namespace {
-[[noreturn]] void notImplemented(const char* what) {
-    throw std::runtime_error(std::string("core: not yet implemented: ") + what);
-}
-} // namespace
 
 // ---------------------------------------------------------------------------
 // ScalarType helpers
@@ -131,6 +117,3 @@ dp::Datapoint* DatapointQmlBridge::dp(QString const& id) const {
 
 // PluginRegistry / PortRegistry live in PluginSystem.cpp.
 // ConfigLoader lives in ConfigLoader.cpp, ICore in Core.cpp.
-
-// Suppress unused warning for notImplemented when nothing uses it yet.
-namespace { [[maybe_unused]] auto* dummy = &notImplemented; }

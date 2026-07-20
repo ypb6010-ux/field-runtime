@@ -182,6 +182,44 @@ TEST_CASE("submitAsync ignores a duplicate completion", "[sched][async]") {
     REQUIRE(st.inflight == 0);
 }
 
+TEST_CASE("submitAsync never drops an accepted queued request",
+          "[sched][async][acceptance]") {
+    auto sched = makeScheduler(SchedulerConfig{});
+    std::vector<int> started;
+    AsyncDone blockingDone;
+    AsyncDone firstDone;
+    AsyncDone secondDone;
+
+    RequestTag blocking;
+    blocking.moduleId = "blocking";
+    REQUIRE(sched->submitAsync(blocking, [&](AsyncDone done) {
+        started.push_back(0);
+        blockingDone = std::move(done);
+    }).kind == ResultKind::Ok);
+
+    RequestTag mirror;
+    mirror.moduleId = "mirror";
+    REQUIRE(sched->submitAsync(mirror, [&](AsyncDone done) {
+        started.push_back(1);
+        firstDone = std::move(done);
+    }).kind == ResultKind::Ok);
+    REQUIRE(sched->submitAsync(mirror, [&](AsyncDone done) {
+        started.push_back(2);
+        secondDone = std::move(done);
+    }).kind == ResultKind::Ok);
+
+    auto queued = sched->stats();
+    REQUIRE(queued.queueDepth == 2);
+    REQUIRE(queued.totalSubmitted == 3);
+
+    blockingDone(true);
+    REQUIRE(started == std::vector<int>{0, 1});
+    firstDone(true);
+    REQUIRE(started == std::vector<int>{0, 1, 2});
+    secondDone(true);
+    REQUIRE(sched->stats().inflight == 0);
+}
+
 TEST_CASE("stopAsync halts pumping of queued work (teardown safety)",
           "[sched][async]") {
     Harness h(SchedulerConfig{});

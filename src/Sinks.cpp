@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "core/log/Sinks.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <mutex>
 
@@ -92,7 +93,9 @@ void ConsoleSink::write(OperationRecord const& rec) {
 class RollingFileSink::Impl {
 public:
     Impl(QString path, qint64 maxBytes, int maxFiles)
-        : path(std::move(path)), maxBytes(maxBytes), maxFiles(maxFiles) {
+        : path(std::move(path))
+        , maxBytes(maxBytes)
+        , maxFiles(std::max(1, maxFiles)) {
         QFileInfo info(this->path);
         QDir().mkpath(info.absolutePath());
         open();

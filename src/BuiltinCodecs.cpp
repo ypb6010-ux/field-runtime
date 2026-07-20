@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 #include "core/dp/PortRef.h"
@@ -91,6 +92,7 @@ QVariant BuiltinScalarCodec::decode(QList<quint16> const& raw,
 
     if (m_type == ScalarType::Bool) {
         int bit = ref.bit.value_or(0);
+        if (bit < 0 || bit > 15) return {};
         return bool(((raw.value(0) >> bit) & 1u) != 0);
     }
 
@@ -115,6 +117,8 @@ QVariant BuiltinScalarCodec::decode(QList<quint16> const& raw,
         return v;
     }
 
+    if (ref.shift < 0 || ref.shift >= 64
+        || !std::isfinite(ref.scale) || !std::isfinite(ref.offset)) return {};
     quint64 const concat = unpackInt(raw, rc, ref.wordOrder);
     quint64 const masked = (concat >> ref.shift) & ref.mask;
 
@@ -157,41 +161,103 @@ QList<quint16> BuiltinScalarCodec::encode(QVariant const&    value,
 
     if (m_type == ScalarType::Bool) {
         QList<quint16> out(rc, 0);
+        int const bit = ref.bit.value_or(0);
+        if (bit < 0 || bit > 15) return {};
         if (value.toBool()) {
-            int bit = ref.bit.value_or(0);
             out[0]  = quint16(1u << bit);
         }
         return out;
     }
 
     if (m_type == ScalarType::F32) {
-        double  v    = value.toDouble();
+        bool ok = false;
+        double v = value.toDouble(&ok);
+        if (!ok || !std::isfinite(v) || ref.scale == 0.0) return {};
         if (hasLinearTransform(ref)) v = (v - ref.offset) / ref.scale;
+        if (!std::isfinite(v)) return {};
         float   f    = float(v);
+        if (!std::isfinite(f)) return {};
         quint32 bits = 0;
         std::memcpy(&bits, &f, sizeof(f));
         return packInt(bits, rc, ref.wordOrder);
     }
     if (m_type == ScalarType::F64) {
-        double  v    = value.toDouble();
+        bool ok = false;
+        double v = value.toDouble(&ok);
+        if (!ok || !std::isfinite(v) || ref.scale == 0.0) return {};
         if (hasLinearTransform(ref)) v = (v - ref.offset) / ref.scale;
+        if (!std::isfinite(v)) return {};
         quint64 bits = 0;
         std::memcpy(&bits, &v, sizeof(v));
         return packInt(bits, rc, ref.wordOrder);
     }
 
-    // Stay in 64-bit integer space when no linear transform is configured —
-    // a double round-trip would lose precision above 2^53.
-    qint64 raw = 0;
+    if (ref.shift < 0 || ref.shift >= 64 || ref.scale == 0.0) return {};
+
+    quint64 raw = 0;
+    bool negative = false;
     if (hasLinearTransform(ref)) {
-        double dval = (value.toDouble() - ref.offset) / ref.scale;
-        raw         = qint64(std::llround(dval));
-    } else if (m_type == ScalarType::U64) {
-        raw = qint64(value.toULongLong());
+        bool ok = false;
+        double const input = value.toDouble(&ok);
+        if (!ok || !std::isfinite(input)) return {};
+        double const transformed = (input - ref.offset) / ref.scale;
+        if (!std::isfinite(transformed)) return {};
+        double const rounded = std::round(transformed);
+        bool const isSigned = m_type == ScalarType::S16
+                           || m_type == ScalarType::S32
+                           || m_type == ScalarType::S64;
+        if (isSigned) {
+            double minValue = -std::ldexp(1.0, 63);
+            double maxValue = std::nextafter(std::ldexp(1.0, 63), 0.0);
+            if (m_type == ScalarType::S16) {
+                minValue = std::numeric_limits<qint16>::min();
+                maxValue = std::numeric_limits<qint16>::max();
+            } else if (m_type == ScalarType::S32) {
+                minValue = std::numeric_limits<qint32>::min();
+                maxValue = std::numeric_limits<qint32>::max();
+            }
+            if (rounded < minValue || rounded > maxValue) return {};
+            qint64 const signedRaw = qint64(rounded);
+            negative = signedRaw < 0;
+            raw = quint64(signedRaw);
+        } else {
+            double maxValue = std::nextafter(std::ldexp(1.0, 64), 0.0);
+            if (m_type == ScalarType::U16 || m_type == ScalarType::EnumU16)
+                maxValue = std::numeric_limits<quint16>::max();
+            else if (m_type == ScalarType::U32)
+                maxValue = std::numeric_limits<quint32>::max();
+            if (rounded < 0.0 || rounded > maxValue) return {};
+            raw = quint64(rounded);
+        }
     } else {
-        raw = value.toLongLong();
+        bool ok = false;
+        if (m_type == ScalarType::S16 || m_type == ScalarType::S32
+            || m_type == ScalarType::S64) {
+            qint64 const signedRaw = value.toLongLong(&ok);
+            if (!ok) return {};
+            if (m_type == ScalarType::S16
+                && (signedRaw < std::numeric_limits<qint16>::min()
+                    || signedRaw > std::numeric_limits<qint16>::max())) return {};
+            if (m_type == ScalarType::S32
+                && (signedRaw < std::numeric_limits<qint32>::min()
+                    || signedRaw > std::numeric_limits<qint32>::max())) return {};
+            negative = signedRaw < 0;
+            raw = quint64(signedRaw);
+        } else {
+            raw = value.toULongLong(&ok);
+            if (!ok) return {};
+            if ((m_type == ScalarType::U16 || m_type == ScalarType::EnumU16)
+                && raw > std::numeric_limits<quint16>::max()) return {};
+            if (m_type == ScalarType::U32
+                && raw > std::numeric_limits<quint32>::max()) return {};
+        }
     }
-    quint64 const masked  = quint64(raw) & ref.mask;
+    if (!negative && (raw & ~ref.mask) != 0) return {};
+    int const bitCount = rc * 16;
+    quint64 const outputLimit = bitCount >= 64
+        ? ~quint64(0) : ((quint64(1) << bitCount) - 1);
+    quint64 const masked = (raw & outputLimit) & ref.mask;
+    if (masked > (outputLimit >> ref.shift)) return {};
     quint64 const shifted = masked << ref.shift;
     return packInt(shifted, rc, ref.wordOrder);
 }
@@ -214,7 +280,7 @@ QString EnumU16Codec::id() const { return m_id; }
 
 QVariant EnumU16Codec::decode(QList<quint16> const& raw,
                                dp::PortRef const&     ref) {
-    if (raw.isEmpty()) return {};
+    if (raw.isEmpty() || ref.shift < 0 || ref.shift > 15) return {};
     quint16 const masked = quint16((raw.value(0) >> ref.shift) & quint16(ref.mask));
     auto it = m_forward.find(masked);
     if (it == m_forward.end()) {
@@ -230,10 +296,16 @@ QList<quint16> EnumU16Codec::encode(QVariant const&    value,
     if (auto it = m_reverse.find(name); it != m_reverse.end()) {
         raw = it->second;
     } else {
-        raw = quint16(value.toUInt());
+        bool ok = false;
+        uint const numeric = value.toUInt(&ok);
+        if (!ok || numeric > 65535U) return {};
+        raw = quint16(numeric);
     }
-    quint16 shifted = quint16((raw & quint16(ref.mask)) << ref.shift);
-    return {shifted};
+    if (ref.shift < 0 || ref.shift > 15) return {};
+    if ((quint64(raw) & ~ref.mask) != 0) return {};
+    quint64 const shifted = (quint64(raw) & ref.mask) << ref.shift;
+    if (shifted > 0xFFFFu) return {};
+    return {quint16(shifted)};
 }
 
 } // namespace core::codec

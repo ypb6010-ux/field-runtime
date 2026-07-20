@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
+#include <algorithm>
 #include <mutex>
 
 #include <QDateTime>
@@ -24,11 +25,13 @@ namespace core::log {
 //   <category>:<source>:<eventKey>
 //
 // Thread-safe: guards its own state, since emit and reset may come from
-// different threads.
+// different threads. Unique-key state is bounded (4096 entries by default);
+// the oldest key is evicted when the cap is reached.
 class CORE_EXPORT DedupFilter {
 public:
-    explicit DedupFilter(qint64 windowMs = 60'000)
-        : m_windowMs(windowMs) {
+    explicit DedupFilter(qint64 windowMs = 60'000, int maxEntries = 4096)
+        : m_windowMs(std::max<qint64>(0, windowMs))
+        , m_maxEntries(std::max(1, maxEntries)) {
     }
 
     // True if `key` should be emitted now: first time seen, or the window
@@ -52,6 +55,7 @@ private:
     };
 
     qint64                m_windowMs;
+    int                   m_maxEntries;
     QHash<QString, Entry> m_entries;
     std::mutex            m_mtx;
 };

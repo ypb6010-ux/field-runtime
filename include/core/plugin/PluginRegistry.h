@@ -21,6 +21,7 @@ public:
     CORE_DISABLE_COPY_MOVE(PluginRegistry)
 
     bool             load(QString const& dllPath);
+    QString          lastError() const;
     void             unloadAll();
     void             registerAllPorts(PortRegistry& reg);
     QList<Plugin*>   all() const;

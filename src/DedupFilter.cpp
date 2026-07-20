@@ -2,12 +2,22 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "core/log/DedupFilter.h"
 
+#include <iterator>
+
 namespace core::log {
 
 bool DedupFilter::accept(QString const& key, QDateTime const& now) {
     std::lock_guard lk(m_mtx);
     auto it = m_entries.find(key);
     if (it == m_entries.end()) {
+        if (m_entries.size() >= m_maxEntries) {
+            auto oldest = m_entries.begin();
+            for (auto candidate = std::next(oldest);
+                 candidate != m_entries.end(); ++candidate) {
+                if (candidate->lastEmit < oldest->lastEmit) oldest = candidate;
+            }
+            m_entries.erase(oldest);
+        }
         m_entries.insert(key, Entry{now, 0});
         return true;
     }

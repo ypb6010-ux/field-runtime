@@ -1,6 +1,6 @@
 # Core 使用手册（简体中文）
 
-> 工业 Modbus / OPC UA / MQTT / S7 多协议运行时，带类型化数据点、声明式路由、半双工感知调度。
+> 工业 Modbus / OPC UA / MQTT 多协议运行时，带类型化数据点、声明式路由、半双工感知调度。
 
 ## 目录
 
@@ -21,7 +21,7 @@
 Core 是为矿用/工业 SCADA 上位机设计的运行时库，把"PLC ↔ 操作箱 ↔ 上位机"
 三层通信抽象成几个明确的概念：
 
-- **Transport** — 一条物理连接（Modbus TCP/RTU、OPC UA、MQTT、S7 等）
+- **Transport** — 一条物理连接（Modbus TCP/RTU、OPC UA、MQTT）
 - **Scheduler** — 一条 Transport 内部的请求调度器（Serial / Credit / Priority）
 - **Datapoint** — 一个具名的逻辑信号，自带类型 + 编解码管道
 - **Module** — 周期或事件驱动的运行单元（PollRange、SinkWindow、Heartbeat、
@@ -91,6 +91,9 @@ core->start();
 return app.exec();
 ```
 
+启用 QML 并传入 `QQmlContext*` 时，Core 会自动注入 `dp` 与 `log`；QML 可通过
+`dp.dp("belt.speed").value` 绑定 datapoint。
+
 ---
 
 ## 3. 架构
@@ -115,7 +118,7 @@ return app.exec();
         ▼              ▼             ▼
    ┌──────────────────────────────────────┐
    │             Transport                 │
-   │  (Modbus TCP/RTU, OPC UA, MQTT, S7)   │
+   │       (Modbus TCP/RTU, OPC UA, MQTT)  │
    │            ──────────                  │
    │           RequestScheduler             │
    │     (Serial / Credit / Priority)       │
@@ -159,9 +162,9 @@ PLC ──Modbus──► Transport.read
 ```toml
 [[transport]]
 id   = "plc"                 # 全局唯一
-kind = "modbus_tcp_client"   # 或 modbus_tcp_server / modbus_rtu / opc_ua_client / mqtt_client / s7_client
+kind = "modbus_tcp_client"   # 或 modbus_tcp_server / modbus_rtu / opc_ua_client / mqtt_client
 
-# Modbus TCP client / server / S7
+# Modbus TCP client / server
 host = "192.168.0.10"
 port = 502
 slave_id = 1
@@ -221,7 +224,7 @@ range     = [0, 16]        # [起始地址, 寄存器数]
 period_ms = 200
 priority  = "Normal"       # Low / Normal / High / Critical
 
-# 批量写窗口（Modbus FC16 上限 123 寄存器）
+# 批量写窗口（Modbus HR 客户端写上限 123；非 Modbus transport 不套用该限制）
 [[sink_window]]
 module_id = "sw.plc"
 transport = "plc"
@@ -232,7 +235,6 @@ initial   = [0, 0, 0, 0]
 [sink_window.flush]
 debounce_ms  = 20          # 最后一次 stage 后等多久 flush
 keepalive_ms = 5000        # 即使没变化，超过此间隔也 flush 一次
-coalesce     = true        # 多次相邻 stage 合并
 
 # 心跳
 [[heartbeat]]
@@ -268,7 +270,7 @@ timeout_ms = 2000
 [[datapoint]]
 id   = "temperature"
 kind = "Status"            # Status / Command / Bidirectional
-type = "S16"               # Bool/U16/S16/U32/S32/F32/U64/S64/F64/EnumU16/String
+type = "S16"               # Bool/U16/S16/U32/S32/F32/U64/S64/F64/EnumU16（String 尚未实现）
 source = { port="plc", table="HR", addr=0, scale=0.1, offset=-40.0 }
 
 [[datapoint]]
@@ -282,22 +284,27 @@ sink   = { port="plc", table="HR", addr=100, bit=0, window="sw.plc" }
 name   = "start-button-fwd"
 from   = "start_button"
 to     = "start_button"
-policy = "ContinuousMirror"  # ContinuousMirror / EdgeOnce / Pulsed / UntilAck
+policy = "ContinuousMirror"  # 当前唯一已实现的策略
 ```
 
 ### 4.4 启动期校验
 
-加载阶段强制 fail-fast 校验，详见 spec §4.3。常用规则：
+加载阶段强制 fail-fast 校验；未知、拼错或类型错误的字段会直接报错，不会静默套用默认值。详见
+spec §4.3。常用规则：
 
-- id 跨节全局唯一（transport / module_id / datapoint / codec）
+- transport、datapoint、codec 各自命名空间内 id 唯一；所有模块节共享唯一的 module_id 命名空间
 - 所有 transport/datapoint/codec/sink_window 引用必须命中已声明项
 - 32 位类型必须声明 `wordOrder`
 - Bool 类型必须声明 `bit`
 - EnumU16 类型必须声明 `codec`
-- `sink_window.range[1] ≤ 123`
+- Modbus 客户端的 `sink_window` 遵循对应功能码单次写上限（HR 为 123）
+- 同一 transport/table 上的 sink window、heartbeat、command、bridge 写区不得重叠
+- datapoint sink 必须显式引用 sink window，或被同 transport/table 的窗口完整覆盖
+- 客户端 datapoint source 必须被同 transport/table 的 poll range 完整覆盖
 - `datapoint.sink.addr` 必须落入引用窗口 `[start, start+size)`
 - `mask` 不超过 `type` 位宽
-- `policy=UntilAck` 必须有 `[datapoint.ack]` 块
+- datapoint policy 当前仅支持 `ContinuousMirror`；显式反馈等待请使用独立
+  `[[ack_watch]]`
 
 错误格式带字段名和行号：
 
@@ -365,9 +372,10 @@ p50 / p99 / 熔断状态实时快照。
 - 内部研发原型 / Qt-only 工具 → **Qt6::Mqtt**（包小，集成好）
 - 客户审计 LGPLv3 风险高 → **paho**
 
-两个后端在 `core/CMakeLists.txt` 通过 `CORE_BUILD_MQTT_QT` 和
-`CORE_BUILD_MQTT_PAHO` 两个独立选项控制，默认都开启；找不到时优雅降级
-为 stub（编译通过但 `connect()` 返回库未启用错误）。
+两个后端在 `CMakeLists.txt` 通过 `CORE_BUILD_MQTT_QT` 和
+`CORE_BUILD_MQTT_PAHO` 两个独立选项控制，默认都开启。Qt MQTT 选项开启时
+依赖为必需项；Paho 找不到时会自动关闭。构建中未启用的后端若出现在 TOML，
+配置加载器会直接拒绝，避免以不可用 stub 启动。
 
 ### OPC UA 节点映射
 
@@ -394,8 +402,8 @@ backend          = "open62541"        # Qt OpcUa 后端
 |------|------|------|
 | Siemens S7 | `S7ClientTransport` | [snap7](http://snap7.sourceforge.net/) v1.4.2（LGPL） |
 
-S7 stub 在 `connect()` 时返回 `"snap7 library not yet vendored"`。如现场有
-西门子 S7 设备，请编译 snap7 并告知库安装路径。
+在 snap7 后端真正实现前，配置加载器会拒绝 `s7_client`，避免现场以未实现的
+PLC 连接配置静默启动。
 
 ### 其他可选协议（待评估）
 
@@ -481,7 +489,7 @@ ui.setCategory("alarm", true, LogLevel::Info);
 防止同一事件持续刷屏:首次放行,窗口内重复抑制并计数,窗口后再放行并带出抑制次数。
 
 ```cpp
-DedupFilter d(60'000);                          // 60s 窗口
+DedupFilter d(60'000);                          // 60s 窗口，默认最多 4096 个 key
 QString key = "alarm:plc1:HR70.bit3:on";        // <类别>:<source>:<eventKey>
 if (d.accept(key)) {
     quint64 n = d.takeSuppressed(key);          // 聚合“60s 内重复 N 次”

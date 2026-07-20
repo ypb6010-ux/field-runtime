@@ -27,16 +27,10 @@ using AsyncDone = std::function<void(bool /*ok*/)>;
 using AsyncWork = std::function<void(AsyncDone)>;
 using DelayFn   = std::function<void(int /*ms*/, std::function<void()>)>;
 
-// RequestScheduler — abstract base for the request gatekeeper attached to a
-// Transport. The Phase 1 contract is intentionally simple: callers submit a
-// synchronous `std::function<void()>` and the scheduler decides when to
-// actually invoke it based on the configured strategy (serial / credit /
-// priority). The caller's thread blocks inside `submit` until either the
-// work runs to completion or it is cancelled / circuit-opened / timed out.
-//
-// Phase 2 will introduce a coroutine variant returning `Lazy<R>` so callers
-// in their own coroutines do not block a worker thread; the underlying
-// queue / priority lane / cancellation logic carries over unchanged.
+// Request gatekeeper attached to a Transport. submit() is the synchronous
+// compatibility path; submitAsync() is the runtime path and serialises device
+// work without parking a caller thread. Device I/O timeouts belong to the
+// Transport's request_timeout_ms setting.
 class CORE_EXPORT RequestScheduler {
 public:
     virtual ~RequestScheduler() = default;
@@ -60,6 +54,10 @@ public:
     // teardown cannot pump the next request into a half-destroyed transport.
     virtual void stopAsync() = 0;
 
+    // Cancel queued synchronous submissions for a module. Accepted async work
+    // is deliberately not discarded: submitAsync promises a completion, and
+    // silently dropping it would leave module coalescing guards permanently
+    // in-flight.
     virtual int            cancelModule(QString const& moduleId) = 0;
     virtual SchedulerStats stats() const                         = 0;
 };

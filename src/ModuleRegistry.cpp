@@ -24,9 +24,8 @@ namespace core::module {
 // threads this class used to spin up are gone — the minimal event-driven form.
 //
 // INVARIANT: a module may only be wired to a transport whose readAsync/writeAsync
-// are non-blocking. The S7 stub and the (build-disabled) Paho stub return
-// instantly; if Paho is ever enabled, give it a real async path (or a dedicated
-// worker tick) before driving its modules from here, or it will freeze the GUI.
+// are non-blocking. Qt transports post to their QObject thread and the Paho
+// transport uses a bounded worker queue; disabled backends fail immediately.
 //
 // All methods run on the lifecycle thread (Core::start/stop/pause/resume), so no
 // cross-thread hops are needed; the timers and their anchor share that thread.
@@ -78,8 +77,8 @@ bool ModuleRegistry::registerModule(std::unique_ptr<FunctionalModule> mod) {
     // Modules must be wired before startAll() (config reload = stopAll first).
     if (m_started) return false;
     QString const id = mod->id();
-    m_modules.insert_or_assign(id, std::move(mod));
-    return true;
+    if (id.trimmed().isEmpty() || m_modules.contains(id)) return false;
+    return m_modules.emplace(id, std::move(mod)).second;
 }
 
 FunctionalModule* ModuleRegistry::find(QString const& moduleId) const {
@@ -104,6 +103,7 @@ QList<FunctionalModule*> ModuleRegistry::all() const {
 }
 
 void ModuleRegistry::startAll() {
+    if (m_started) return;
     m_started = true;
     for (auto& [_, m] : m_modules) m->start();
     if (m_autoTick) {

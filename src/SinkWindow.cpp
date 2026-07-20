@@ -134,7 +134,6 @@ sched::SubmitResult SinkWindow::onTick() {
     sched::RequestTag tag;
     tag.moduleId = m_id;
     tag.priority = m_priority;
-    tag.coalesce = m_cfg.coalesceWrites;
 
     transport::WriteResult write{};
     auto submission = m_transport->scheduler().submit(tag, [&] {
@@ -180,7 +179,6 @@ void SinkWindow::driveTick() {
     sched::RequestTag tag;
     tag.moduleId = m_id;
     tag.priority = m_priority;
-    tag.coalesce = m_cfg.coalesceWrites;
 
     auto const submission = m_transport->scheduler().submitAsync(tag,
         [this, batch, gen](sched::AsyncDone done) {

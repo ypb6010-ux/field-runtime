@@ -31,9 +31,13 @@ void PollRange::bind(std::shared_ptr<dp::Datapoint> datapoint,
                      std::shared_ptr<codec::Codec>  codec,
                      int                             registerOffset) {
     if (!datapoint || !codec) return;
+    auto source = datapoint->source();
+    int const registerCount = dp::registerCountFor(datapoint->type());
     m_bindings.push_back(Binding{std::move(datapoint),
                                   std::move(codec),
-                                  registerOffset});
+                                  std::move(source),
+                                  registerOffset,
+                                  registerCount});
 }
 
 int PollRange::periodMs()    const noexcept { return m_periodMs; }
@@ -52,7 +56,7 @@ void PollRange::applyResult(transport::ReadResult const& result) {
     }
     // Successful read: dispatch slices to each bound datapoint.
     for (auto& b : m_bindings) {
-        int const rc = dp::registerCountFor(b.dp->type());
+        int const rc = b.registerCount;
         if (rc <= 0 || b.offset < 0 || b.offset + rc > result.values.size()) {
             b.dp->setState(dp::DpState::Error);
             continue;
@@ -62,11 +66,17 @@ void PollRange::applyResult(transport::ReadResult const& result) {
         // metadata. We expect the datapoint's `source` to carry it; if a
         // datapoint somehow ended up here without a source the binding is
         // mis-wired — mark Error rather than silently producing garbage.
-        if (!b.dp->source().has_value()) {
+        if (!b.source.has_value()) {
             b.dp->setState(dp::DpState::Error);
             continue;
         }
-        QVariant decoded = b.codec->decode(sub, b.dp->source().value());
+        QVariant decoded;
+        try {
+            decoded = b.codec->decode(sub, *b.source);
+        } catch (...) {
+            b.dp->setState(dp::DpState::Error);
+            continue;
+        }
         if (!decoded.isValid()) {
             b.dp->setState(dp::DpState::Error);
             continue;
@@ -121,12 +131,17 @@ void PollRange::driveTick() {
     sched::RequestTag tag;
     tag.moduleId = m_id;
     tag.priority = m_priority;
+    quint64 const runGeneration = m_runGeneration.load(std::memory_order_acquire);
 
     auto const submission = m_transport->scheduler().submitAsync(tag,
-        [this](sched::AsyncDone done) {
+        [this, runGeneration](sched::AsyncDone done) {
             m_transport->readAsync(m_req,
-                [this, done = std::move(done)](transport::ReadResult r) mutable {
-                    applyResult(r);
+                [this, runGeneration, done = std::move(done)](transport::ReadResult r) mutable {
+                    if (!m_paused.load(std::memory_order_acquire)
+                        && m_runGeneration.load(std::memory_order_acquire)
+                            == runGeneration) {
+                        applyResult(r);
+                    }
                     m_inFlight.store(false, std::memory_order_release);
                     done(r.ok);
                 });
@@ -135,16 +150,31 @@ void PollRange::driveTick() {
     if (submission.kind != sched::ResultKind::Ok) {
         // Rejected by the scheduler (circuit open / queue full): mark stale and
         // release the coalesce guard so the next tick can retry.
-        for (auto& b : m_bindings) {
-            b.dp->setState(dp::DpState::Stale);
+        if (!m_paused.load(std::memory_order_acquire)
+            && m_runGeneration.load(std::memory_order_acquire) == runGeneration) {
+            for (auto& b : m_bindings) {
+                b.dp->setState(dp::DpState::Stale);
+            }
         }
         m_inFlight.store(false, std::memory_order_release);
     }
 }
 
-void PollRange::start()  { m_paused = false; }
-void PollRange::stop()   { m_paused = true; }
-void PollRange::pause()  { m_paused = true; }
-void PollRange::resume() { m_paused = false; }
+void PollRange::start()  {
+    m_runGeneration.fetch_add(1, std::memory_order_acq_rel);
+    m_paused.store(false, std::memory_order_release);
+}
+void PollRange::stop()   {
+    m_paused.store(true, std::memory_order_release);
+    m_runGeneration.fetch_add(1, std::memory_order_acq_rel);
+}
+void PollRange::pause()  {
+    m_paused.store(true, std::memory_order_release);
+    m_runGeneration.fetch_add(1, std::memory_order_acq_rel);
+}
+void PollRange::resume() {
+    m_runGeneration.fetch_add(1, std::memory_order_acq_rel);
+    m_paused.store(false, std::memory_order_release);
+}
 
 } // namespace core::module

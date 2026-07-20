@@ -15,10 +15,13 @@ namespace core::log {
 // Built-in async logging facade. Owned by ICore; one per application.
 //
 // Emit side (log / logOperation / convenience helpers) is PUBLIC, thread-safe,
-// non-blocking, and write-only — any thread (transport worker, scheduler,
-// plugin, UI bridge) may call it. Records are pushed onto a bounded queue and
-// fanned out to registered sinks on a single dedicated dispatch thread, so a
-// slow sink never stalls the caller.
+// write-only — any thread (transport worker, scheduler, plugin, UI bridge) may
+// call it. Records are pushed onto a bounded queue and fanned out to registered
+// sinks on a single dedicated dispatch thread. Trace/Debug records are dropped
+// under overload; Info+ and operation records apply backpressure rather than
+// losing operational evidence, so those calls may briefly wait for capacity.
+// A sink must not feed records back into this same Logger; such re-entrant
+// records are rejected to prevent recursive amplification and self-deadlock.
 //
 // Configuration side (threshold / addSink / removeSink) belongs to the owner.
 // That asymmetry — public emit, owned configuration — is what keeps logging
@@ -43,6 +46,7 @@ public:
     LogFilter filter() const;           // copy the gate filter, for inheritance
 
     void addSink(std::shared_ptr<ILogSink> sink);
+    // Returns only after an already-dispatched batch has released the sink.
     void removeSink(ILogSink* sink);
 
     // ── emit (public, write-only, value types only) ────────────────────
@@ -61,9 +65,15 @@ public:
     void stop();
 
     // System records below threshold dropped at the gate are not counted;
-    // this counts records dropped under queue overload (Trace/Debug only —
-    // Warn+ and all operation records are never dropped).
+    // this counts records dropped under queue overload (Trace/Debug), plus
+    // re-entrant records emitted from a sink on the dispatch thread. Outside
+    // that invalid re-entrant case, Info+ and operation records are not lost.
     quint64 droppedCount() const;
+
+    // Number of sink write/flush calls that threw. A failing third-party sink
+    // is isolated so it cannot terminate the dispatch thread or prevent other
+    // sinks from receiving the record.
+    quint64 sinkFailureCount() const;
 
 private:
     class Impl;

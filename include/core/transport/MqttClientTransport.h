@@ -38,7 +38,6 @@ public:
         int      qos          = 1;
         bool     cleanSession = true;
         int      connectTimeoutMs    = 5000;
-        int      requestTimeoutMs    = 2000;
         int      reconnectIntervalMs = 5000;
         sched::SchedulerConfig scheduler = []{
             sched::SchedulerConfig s;
@@ -70,6 +69,8 @@ public:
     void writeAsync(WriteBatch const& batch, WriteDone done) override;
 
 private:
+    void armReconnectIfConfigured();
+
     class Impl;
     std::unique_ptr<Impl> m_impl;
 };

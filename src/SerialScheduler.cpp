@@ -67,6 +67,9 @@ public:
         : cfg(std::move(c))
         , latencyWindow(256) {
         if (cfg.maxInflight < 1) cfg.maxInflight = 1;
+        if (cfg.maxQueueDepth < 1) cfg.maxQueueDepth = 1;
+        if (cfg.interRequestGapMs < 0) cfg.interRequestGapMs = 0;
+        if (cfg.circuitBreakerOpenMs < 0) cfg.circuitBreakerOpenMs = 0;
     }
 
     SchedulerConfig                                                   cfg;
@@ -82,7 +85,6 @@ public:
     quint64 totalCompleted = 0;
     quint64 totalFailed    = 0;
     quint64 totalCancelled = 0;
-    quint64 totalTimedOut  = 0;
     int     lastLatencyMs  = 0;
 
     CircuitState                          circuitState = CircuitState::Closed;
@@ -172,10 +174,10 @@ public:
                 for (int p = kPriorityCount - 1; p >= 0; --p) {
                     if (!lanes[p].empty()) { picked = p; break; }
                 }
-                if (picked == kPriorityCount) return;
+                if (picked == kPriorityCount) break;
             }
             auto& lane = lanes[picked];
-            if (lane.empty()) return;
+            if (lane.empty()) break;
 
             auto it = lane.begin();
             if (!cfg.fifoWithinLane && lane.size() > 1
@@ -195,16 +197,18 @@ public:
         cv.notify_all();
     }
 
-    // When a higher-priority request lands, any lower-priority queued entry
-    // tagged `interruptable=true` is preemptively cancelled so the high-pri
-    // path runs sooner. Returns the number of entries cancelled.
+    // When a higher-priority request lands, lower-priority queued synchronous
+    // entries tagged `interruptable=true` are cancelled. Async entries remain
+    // queued because their acceptance contract requires a later completion;
+    // lane selection already lets the new high-priority work run first.
     int preemptLowerInterruptablesLocked(Priority high) {
         int n = 0;
         for (int p = 0; p < laneIndex(high); ++p) {
             auto& lane = lanes[p];
             for (auto& e : lane) {
                 if (e->state == PendingState::Queued
-                 && e->tag.interruptable) {
+                 && e->tag.interruptable
+                 && !e->asyncWork) {
                     e->state = PendingState::Cancelled;
                     ++n;
                     ++totalCancelled;
@@ -354,6 +358,10 @@ SerialScheduler::~SerialScheduler() {
 
 SubmitResult SerialScheduler::submit(RequestTag tag,
                                       std::function<void()> work) {
+    int const priorityIndex = laneIndex(tag.priority);
+    if (priorityIndex < 0 || priorityIndex >= kPriorityCount) {
+        return {ResultKind::Error, QStringLiteral("invalid priority"), 0};
+    }
     auto entry      = std::make_shared<PendingEntry>();
     entry->tag      = std::move(tag);
     entry->queuedAt = std::chrono::steady_clock::now();
@@ -371,12 +379,18 @@ SubmitResult SerialScheduler::submit(RequestTag tag,
             return {ResultKind::CircuitOpen,
                     QStringLiteral("circuit open"), 0};
         }
+        if (m_impl->circuitState == CircuitState::HalfOpen
+            && (m_impl->inflightCount > 0
+                || m_impl->totalQueueDepthLocked() > 0)) {
+            return {ResultKind::CircuitOpen,
+                    QStringLiteral("half-open probe in progress"), 0};
+        }
         int depth = m_impl->totalQueueDepthLocked() + m_impl->inflightCount;
         if (depth >= m_impl->cfg.maxQueueDepth) {
             return {ResultKind::Error,
                     QStringLiteral("queue full"), 0};
         }
-        m_impl->lanes[laneIndex(entry->tag.priority)].push_back(entry);
+        m_impl->lanes[priorityIndex].push_back(entry);
         ++m_impl->totalSubmitted;
         // High-priority requests preempt lower-priority interruptable peers.
         m_impl->preemptLowerInterruptablesLocked(entry->tag.priority);
@@ -397,9 +411,14 @@ SubmitResult SerialScheduler::submit(RequestTag tag,
     using steady = std::chrono::steady_clock;
     using std::chrono::milliseconds;
     using std::chrono::duration_cast;
+    steady::time_point lastCompleteAt;
+    {
+        std::lock_guard lk(m_impl->mtx);
+        lastCompleteAt = m_impl->lastCompleteAt;
+    }
     if (m_impl->cfg.interRequestGapMs > 0
-     && m_impl->lastCompleteAt.time_since_epoch().count() > 0) {
-        auto elapsed = steady::now() - m_impl->lastCompleteAt;
+     && lastCompleteAt.time_since_epoch().count() > 0) {
+        auto elapsed = steady::now() - lastCompleteAt;
         auto gap     = milliseconds(m_impl->cfg.interRequestGapMs);
         if (elapsed < gap) {
             std::this_thread::sleep_for(gap - elapsed);
@@ -441,8 +460,16 @@ SubmitResult SerialScheduler::submit(RequestTag tag,
 }
 
 SubmitResult SerialScheduler::submitAsync(RequestTag tag, AsyncWork work) {
+    int const priorityIndex = laneIndex(tag.priority);
+    if (priorityIndex < 0 || priorityIndex >= kPriorityCount) {
+        return {ResultKind::Error, QStringLiteral("invalid priority"), 0};
+    }
     {
         std::lock_guard lk(m_impl->mtx);
+        if (m_impl->stopped) {
+            return {ResultKind::Cancelled,
+                    QStringLiteral("scheduler stopped"), 0};
+        }
         if (m_impl->mode == Impl::Mode::Sync) {
             return {ResultKind::Error,
                     QStringLiteral("scheduler is in sync mode"), 0};
@@ -452,6 +479,12 @@ SubmitResult SerialScheduler::submitAsync(RequestTag tag, AsyncWork work) {
         if (m_impl->circuitState == CircuitState::Open) {
             return {ResultKind::CircuitOpen, QStringLiteral("circuit open"), 0};
         }
+        if (m_impl->circuitState == CircuitState::HalfOpen
+            && (m_impl->inflightCount > 0
+                || m_impl->totalQueueDepthLocked() > 0)) {
+            return {ResultKind::CircuitOpen,
+                    QStringLiteral("half-open probe in progress"), 0};
+        }
         int const depth = m_impl->totalQueueDepthLocked() + m_impl->inflightCount;
         if (depth >= m_impl->cfg.maxQueueDepth) {
             return {ResultKind::Error, QStringLiteral("queue full"), 0};
@@ -460,7 +493,7 @@ SubmitResult SerialScheduler::submitAsync(RequestTag tag, AsyncWork work) {
         entry->tag       = std::move(tag);
         entry->queuedAt  = std::chrono::steady_clock::now();
         entry->asyncWork = std::move(work);
-        m_impl->lanes[laneIndex(entry->tag.priority)].push_back(entry);
+        m_impl->lanes[priorityIndex].push_back(entry);
         ++m_impl->totalSubmitted;
         m_impl->preemptLowerInterruptablesLocked(entry->tag.priority);
     }
@@ -487,7 +520,8 @@ int SerialScheduler::cancelModule(QString const& moduleId) {
         for (auto& lane : m_impl->lanes) {
             for (auto& entry : lane) {
                 if (entry->tag.moduleId == moduleId
-                 && entry->state == PendingState::Queued) {
+                 && entry->state == PendingState::Queued
+                 && !entry->asyncWork) {
                     entry->state = PendingState::Cancelled;
                     ++n;
                     ++m_impl->totalCancelled;
@@ -505,6 +539,7 @@ int SerialScheduler::cancelModule(QString const& moduleId) {
 SchedulerStats SerialScheduler::stats() const {
     SchedulerStats s;
     std::lock_guard lk(m_impl->mtx);
+    m_impl->updateCircuitLocked();
     int total = 0;
     for (int p = 0; p < kPriorityCount; ++p) {
         s.laneQueueDepth[p] = static_cast<int>(m_impl->lanes[p].size());
@@ -517,7 +552,6 @@ SchedulerStats SerialScheduler::stats() const {
     s.totalCompleted     = m_impl->totalCompleted;
     s.totalFailed        = m_impl->totalFailed;
     s.totalCancelled     = m_impl->totalCancelled;
-    s.totalTimedOut      = m_impl->totalTimedOut;
     s.p50LatencyMs       = m_impl->latencyWindow.percentile(0.50);
     s.p99LatencyMs       = m_impl->latencyWindow.percentile(0.99);
     s.circuitState       = m_impl->circuitState;

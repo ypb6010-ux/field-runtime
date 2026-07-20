@@ -16,7 +16,7 @@ without hard-coding register logic into UI code.
   writeback windows, heartbeats, commands, and acknowledgements.
 - Typed datapoints that can be consumed by C++, QML, plugins, or persistence
   modules without exposing raw register layout to the application layer.
-- Modbus TCP/RTU support, plus optional OPC UA, Qt MQTT, Paho MQTT, and S7
+- Modbus TCP/RTU support, plus optional OPC UA, Qt MQTT, and Paho MQTT
   extension points.
 - Serial, credit, and priority schedulers for half-duplex PLC links and
   higher-throughput transports.
@@ -151,7 +151,7 @@ and [`CLA.md`](CLA.md). The project name is covered by a trademark policy
 |---|---|---|---|
 | **ICore** | `ICore.h` | 门面:加载配置、持有并装配所有子系统、`start/stop` | 全部 |
 | **config** | `config/` | TOML 解析(`ConfigLoader`)→ 结构体(`ConfigSchema`)+ 校验 | — |
-| **transport** | `transport/` | 协议 I/O(Modbus TCP/RTU、OPC UA、MQTT、S7);`readAsync/writeAsync` | sched, bus |
+| **transport** | `transport/` | 协议 I/O(Modbus TCP/RTU、OPC UA、MQTT);`readAsync/writeAsync` | sched, bus |
 | **sched** | `sched/` | 请求限流/优先级/熔断/半双工 gap;`submitAsync` 事件驱动 | — |
 | **codec** | `codec/` | 寄存器 ↔ 值 编解码(标量/枚举/Lua) | dp(PortRef) |
 | **dp** | `dp/` | `Datapoint`(QObject)+ `DatapointRegistry`;`PortRef` 寻址 | codec |
@@ -257,7 +257,7 @@ template <class T> void         publish(T const& event);
 ## 6. 核心概念
 
 ### Transport(`transport/Transport.h`)
-一条协议连接。统一接口:`connect/disconnect/state`、同步 `read/writeBatch`、**异步 `readAsync/writeAsync`**(非阻塞)、`scheduler()`。实现:Modbus TCP Client/Server、Modbus RTU、OPC UA Client、MQTT(Qt/paho)、S7(桩)。每条 transport 自带一个 `Scheduler`。
+一条协议连接。统一接口:`connect/disconnect/state`、同步 `read/writeBatch`、**异步 `readAsync/writeAsync`**(非阻塞)、`scheduler()`。实现:Modbus TCP Client/Server、Modbus RTU、OPC UA Client、MQTT(Qt/paho)；S7 尚未实现且配置会被拒绝。每条 transport 自带一个 `Scheduler`。
 
 ### Scheduler(`sched/RequestScheduler.h`)
 请求网关。`submitAsync(tag, work)` 事件驱动:work 发起非阻塞 I/O,完成回调里泵下一个。
@@ -308,7 +308,7 @@ log_level = "info"     # trace|debug|info|warn|error|critical;空=默认
 [[transport]]
 id    = "plc1"
 kind  = "modbus_tcp_client"   # modbus_tcp_client/modbus_tcp_server/modbus_rtu/
-                              # opc_ua_client/mqtt_client/mqtt_paho_client/s7_client
+                              # opc_ua_client/mqtt_client/mqtt_paho_client
 host  = "127.0.0.1"
 port  = 502
 slave_id = 1
@@ -326,11 +326,10 @@ circuit_breaker_threshold = 10    # 连续失败多少次开熔断
 circuit_breaker_open_ms   = 5000
 ```
 其它 kind 的专属键:
-- **server**:`listen_address` / `listen_port` / `max_clients` / `[[transport.listen_ranges]]`(`table`+`range=[start,size]`)
+- **server**:`listen_address` / `listen_port` / `[[transport.listen_ranges]]`(`table`+`range=[start,size]`)
 - **rtu**:`port_name="COM3"` / `baud_rate` / `data_bits` / `stop_bits` / `parity="none|even|odd"`
-- **opc_ua**:`endpoint_url` / `security_policy` / `username` / `password` / `node_id_template="ns=2;s=Var_%1"`
+- **opc_ua**:`endpoint_url` / `security_policy="None"`(当前仅支持 None) / `username` / `password` / `node_id_template="ns=2;s=Var_%1"`
 - **mqtt**:`broker_uri="tcp://host:1883"` / `client_id` / `topic_prefix` / `topic_template="reg/%1"` / `qos` / `clean_session`
-- **s7**:`rack` / `slot`
 
 ### `[[codec]]` —— 自定义编解码(内置标量无需声明)
 ```toml
@@ -362,12 +361,12 @@ priority  = "Normal"      # Low/Normal/High/Critical
 [[datapoint]]
 id      = "temperature"
 kind    = "Status"        # Status(只读) / Command(只写) / Bidirectional
-type    = "S16"           # Bool/U16/S16/U32/S32/F32/U64/S64/F64/EnumU16/String
+type    = "S16"           # Bool/U16/S16/U32/S32/F32/U64/S64/F64/EnumU16（String 尚未实现）
 persist = "plc1.temperature"   # 设了就落 telemetry 表;不设不落库
 # 读端:从哪个寄存器解码
 source  = { port = "plc1", table = "HR", addr = 0, scale = 0.1, codec = "" }
-# 写端(可选):写回到哪(直连寄存器,或某个 sink_window)
-# sink  = { port = "plc1", table = "HR", addr = 100 }      # 或 window = "win.cmd"
+# 写端(可选):写进哪个 sink_window；省略 window 时按 port/table/addr 自动匹配覆盖窗口
+# sink  = { port = "plc1", table = "HR", addr = 100 }      # 或显式 window = "win.cmd"
 ```
 `source`/`sink` 即 `PortRef`,可带:`addr`、`bit`(取某位)、`wordOrder`(ABCD/CDAB/BADC/DCBA)、
 `shift`/`mask`(位域)、`scale`/`offset`(线性)、`codec`(指定自定义 codec id)、`window`(写进某 sink_window)。
@@ -382,17 +381,15 @@ range     = [100, 4]      # [起始, 大小]
 [sink_window.flush]
 debounce_ms  = 20         # 暂存后多久 flush
 keepalive_ms = 100        # >0 则周期重写(在线保活;断线重连自动 forceFlush)
-coalesce     = true       # 合并写
-max_retries  = 2
 ```
 
 ### 其余节(简）
 ```toml
-[[heartbeat]]  module_id="hb" transport="plc1" table="HR" address=200 value=1 period_ms=1000  # 或 values=[...] / incrementer="u16_inc|timestamp"
-[[command]]    module_id="reset" transport="plc1" trigger="..." writes=[{table="HR",address=10,value=1}]
+[[heartbeat]]  module_id="hb" transport="plc1" table="HR" address=200 value=1 period_ms=1000  # 或 values=[...]
+[[command]]    module_id="reset" transport="plc1" writes=[{table="HR",address=10,value=1}]
 [[ack_watch]]  module_id="ackOpen" dp="breaker" expected=1 timeout_ms=3000
 [[route]]      name="opbox→plc" from="opbox.cmd" to="plc.cmd" policy="ContinuousMirror"
-[[plugin]]     name="MyLogic" dll="Plugins/MyLogic.dll" config=""    # DLL 插件,见 §9
+[[plugin]]     name="MyLogic" dll="Plugins/MyLogic.dll"              # name 必须匹配插件,见 §9
 ```
 
 > `[[route]]` 是**逐 datapoint**的单点映射;要把操作箱 server 与 PLC client 做**整段双向
@@ -416,7 +413,7 @@ mirror_period_ms = 100    # 镜像刷新周期(默认 100)
 ```
 
 - **转发**(写区):操作箱写 server 触发 `ServerWriteEvent` → 命中写区的子段 `stageRegister`
-  到 PLC 侧一个**自动创建的 SinkWindow**(`bridge.fwd.<server>`,High 优先级,带重试/coalesce)
+  到 PLC 侧一个**自动创建的 SinkWindow**(`bridge.fwd.<server>`,High 优先级,带重试和单在途刷写)
   → 由 TickDriver 刷到 PLC。地址按 `plc = server - offset` 映射。
 - **镜像**(读区):每 `mirror_period_ms` 把 PLC 读区的 datapoint 值整段 `writeBatch` 回 server
   transport **自己的寄存器表**,操作箱即可读到 PLC 状态。镜像区必须有来自 `plc` 的 HR datapoint
@@ -437,9 +434,11 @@ bool on = core->serverForwardEnabled("main");
 - 由业务逻辑驱动,例如按模式位决定是否放行(MYP:仅"井上远程"模式才转发)。审计记录
   (`server-write`)照常产生,只是不再转发。
 
-> 校验:`ConfigLoader::validate` 会查"引用是否命中已声明项""id 唯一""sink.addr 是否落在所引用
-> 的 sink_window 范围内""bridge.server/plc transport 是否存在""bridge 镜像区是否有 PLC datapoint"
-> 等,出错会在加载时把 section/field/行号一并报出。
+> 校验:`ConfigLoader` 会拒绝未知/拼错字段及错误字段类型，并检查"引用是否命中已声明项""id 唯一"
+> "sink.addr 是否落在所引用的 sink_window 范围内""bridge.server/plc transport 是否存在"
+> "source 是否被 poll_range/Server route 驱动""各独立写模块地址不重叠""bridge 写区与镜像区不重叠"
+> "bridge 镜像区是否有 PLC datapoint"等；出错会在加载时把
+> section/field/行号一并报出。
 
 ---
 
@@ -499,7 +498,7 @@ return {
 | **日志过滤(类别×等级双轴)** | `log/LogFilter.h`:`Logger` 内置门(`setFilter`/`filter`/`setThreshold`)为基线;业务 sink 用 `LogFilter::inherit(logger().filter())` 继承再覆盖。`OperationRecord` 仅按类别轴过滤。`DedupFilter` 做重复事件聚合。详见使用手册 §7。 |
 | **控制台输出** | `ICore::create(qml)` 默认挂 `ConsoleSink`;传 `create(qml, /*installDefaultConsole=*/false)` 关闭它,由 app 自己装(可套 `LogFilter`)。 |
 | **自定义协议** | 实现 `transport/Transport.h`,提供非阻塞 `readAsync/writeAsync`(否则会阻塞 GUI 线程 tick)。 |
-| **QML 接入** | `ICore::create(qmlContext)` 自动注入 `log` 桥;datapoint 本身是 QObject,作为 context property 或经 `DatapointQmlBridge` 暴露后直接绑 `value`。 |
+| **QML 接入** | `ICore::create(qmlContext)` 自动注入 `dp` (`DatapointQmlBridge`) 与 `log`；例如 `dp.dp("belt.speed").value`。 |
 
 > 插件模型(InPort/OutPort)只给 datapoint 端口,**不给原始 EventBus / 核心句柄**——刻意保持窄,
 > 业务逻辑("操作箱拆位""跨点告警/联锁")若需要更多上下文,放 app 层适配器,或显式扩展插件契约。

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <utility>
 
@@ -21,6 +22,7 @@
 #include "core/sched/SerialScheduler.h"
 
 #include "ModbusReplyAsync.h"
+#include "QtThreadInvoke.h"
 
 namespace core::transport {
 
@@ -51,6 +53,16 @@ ConnectionState stateFromQt(QModbusDevice::State s) {
     return ConnectionState::Disconnected;
 }
 
+struct PendingRead {
+    QSemaphore done{0};
+    ReadResult result;
+};
+
+struct PendingWrite {
+    QSemaphore  done{0};
+    WriteResult result;
+};
+
 } // namespace
 
 class ModbusTcpClientTransport::Impl {
@@ -58,7 +70,7 @@ public:
     Impl(Config c, bus::EventBus* b)
         : cfg(std::move(c))
         , busPtr(b)
-        , scheduler(std::make_unique<sched::SerialScheduler>(cfg.scheduler))
+        , scheduler(sched::makeScheduler(cfg.scheduler))
         , thread(new QThread)
         , client(new QModbusTcpClient) {
 
@@ -103,11 +115,11 @@ public:
         QObject::connect(client, &QModbusDevice::errorOccurred,
                          client, [this](QModbusDevice::Error e) {
             if (e != QModbusDevice::NoError) {
-                auto const prev = state.exchange(ConnectionState::Error,
-                                                  std::memory_order_acq_rel);
                 QString msg = client->errorString();
                 if (msg.isEmpty()) msg = errorStringFor(e);
-                lastError = msg;
+                setLastError(msg);
+                auto const prev = state.exchange(ConnectionState::Error,
+                                                  std::memory_order_acq_rel);
                 if (busPtr && prev == ConnectionState::Connected) {
                     busPtr->publish(bus::TransportEvent{
                         cfg.id, bus::TransportEventKind::Disconnected, msg});
@@ -123,11 +135,11 @@ public:
         // request into this half-destroyed transport.
         if (scheduler) scheduler->stopAsync();
         if (reconnectTimer) {
-            QMetaObject::invokeMethod(reconnectTimer, [this] {
+            detail::invokeBlocking(reconnectTimer, [this] {
                 reconnectTimer->stop();
                 delete reconnectTimer;
                 reconnectTimer = nullptr;
-            }, Qt::BlockingQueuedConnection);
+            });
         }
         // Tear down the QObject that lives on the worker thread *while that
         // thread is still spinning its event loop*, so any in-flight Modbus
@@ -136,25 +148,36 @@ public:
         // pending QModbusReply::finished callbacks would fire into freed
         // memory.
         if (client) {
-            QMetaObject::invokeMethod(client, [this] {
+            detail::invokeBlocking(client, [this] {
                 client->disconnectDevice();
                 delete client;
                 client = nullptr;
-            }, Qt::BlockingQueuedConnection);
+            });
         }
         thread->quit();
         thread->wait();
         delete thread;
     }
 
+    void setLastError(QString message) {
+        std::lock_guard lock(errorMutex);
+        lastError = std::move(message);
+    }
+
+    QString getLastError() const {
+        std::lock_guard lock(errorMutex);
+        return lastError;
+    }
+
     Config                                            cfg;
     bus::EventBus*                                    busPtr = nullptr;
-    std::unique_ptr<sched::SerialScheduler>            scheduler;
+    std::unique_ptr<sched::RequestScheduler>           scheduler;
     QThread*                                           thread = nullptr;
     QModbusTcpClient*                                  client = nullptr;
     QTimer*                                            reconnectTimer = nullptr;
     std::atomic<bool>                                  autoReconnect{false};
     std::atomic<ConnectionState>                       state{ConnectionState::Disconnected};
+    mutable std::mutex                                 errorMutex;
     QString                                            lastError;
 };
 
@@ -171,13 +194,18 @@ sched::RequestScheduler& ModbusTcpClientTransport::scheduler() { return *m_impl-
 
 std::expected<void, QString>
 ModbusTcpClientTransport::connect() {
+    if (QThread::currentThread() == m_impl->client->thread()) {
+        return std::unexpected(QStringLiteral(
+            "connect() cannot block the Modbus TCP worker thread"));
+    }
     if (state() == ConnectionState::Connected) {
         armReconnectIfConfigured();
         return {};
     }
 
+    m_impl->setLastError({});
     bool kicked = false;
-    QMetaObject::invokeMethod(m_impl->client, [this, &kicked] {
+    detail::invokeBlocking(m_impl->client, [this, &kicked] {
         m_impl->client->setConnectionParameter(
             QModbusDevice::NetworkAddressParameter, m_impl->cfg.host);
         m_impl->client->setConnectionParameter(
@@ -185,13 +213,15 @@ ModbusTcpClientTransport::connect() {
         m_impl->client->setTimeout(m_impl->cfg.requestTimeoutMs);
         m_impl->client->setNumberOfRetries(0);
         kicked = m_impl->client->connectDevice();
-    }, Qt::BlockingQueuedConnection);
+        if (!kicked) m_impl->setLastError(m_impl->client->errorString());
+    });
 
     if (!kicked) {
         armReconnectIfConfigured();
-        return std::unexpected(m_impl->lastError.isEmpty()
+        auto const error = m_impl->getLastError();
+        return std::unexpected(error.isEmpty()
             ? QStringLiteral("connectDevice() returned false")
-            : m_impl->lastError);
+            : error);
     }
 
     // Poll for terminal state up to connectTimeoutMs. We deliberately avoid
@@ -207,12 +237,14 @@ ModbusTcpClientTransport::connect() {
         }
         if (s == ConnectionState::Error) {
             armReconnectIfConfigured();
-            return std::unexpected(m_impl->lastError);
+            return std::unexpected(m_impl->getLastError());
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     armReconnectIfConfigured();
-    return std::unexpected(QStringLiteral("connect timeout"));
+    auto const error = m_impl->getLastError();
+    return std::unexpected(error.isEmpty()
+        ? QStringLiteral("connect timeout") : error);
 }
 
 void ModbusTcpClientTransport::armReconnectIfConfigured() {
@@ -224,8 +256,11 @@ void ModbusTcpClientTransport::armReconnectIfConfigured() {
     QString const id = m_impl->cfg.id;
     int const intervalMs = m_impl->cfg.reconnectIntervalMs;
 
-    QMetaObject::invokeMethod(m_impl->client, [impl, id, intervalMs] {
-        if (impl->reconnectTimer) return;
+    detail::invokeBlocking(m_impl->client, [impl, id, intervalMs] {
+        if (impl->reconnectTimer) {
+            if (!impl->reconnectTimer->isActive()) impl->reconnectTimer->start();
+            return;
+        }
         impl->reconnectTimer = new QTimer(impl->client);
         impl->reconnectTimer->setInterval(intervalMs);
         impl->reconnectTimer->setSingleShot(false);
@@ -246,15 +281,15 @@ void ModbusTcpClientTransport::armReconnectIfConfigured() {
                 impl->client->connectDevice();
             });
         impl->reconnectTimer->start();
-    }, Qt::BlockingQueuedConnection);
+    });
 }
 
 void ModbusTcpClientTransport::disconnect() {
     m_impl->autoReconnect.store(false, std::memory_order_release);
-    QMetaObject::invokeMethod(m_impl->client, [this] {
+    detail::invokeBlocking(m_impl->client, [this] {
         if (m_impl->reconnectTimer) m_impl->reconnectTimer->stop();
         m_impl->client->disconnectDevice();
-    }, Qt::BlockingQueuedConnection);
+    });
 
     auto const deadline = std::chrono::steady_clock::now()
                         + std::chrono::milliseconds(1000);
@@ -264,66 +299,15 @@ void ModbusTcpClientTransport::disconnect() {
     }
 }
 
-namespace {
-
-template <class Init>
-auto invokeReplyAndWait(QModbusTcpClient*  client,
-                         int                timeoutMs,
-                         Init               buildReply)
-    -> std::pair<bool, QString> {
-
-    QSemaphore     done(0);
-    bool           ok       = false;
-    QString        err;
-    QModbusReply*  captured = nullptr;
-    QList<quint16> values;
-
-    QMetaObject::invokeMethod(client, [&] {
-        QModbusReply* reply = buildReply(client);
-        if (!reply) {
-            err = client->errorString();
-            if (err.isEmpty()) err = QStringLiteral("send failed");
-            done.release();
-            return;
-        }
-        captured = reply;
-        if (reply->isFinished()) {
-            if (reply->error() != QModbusDevice::NoError) {
-                err = reply->errorString();
-            } else {
-                ok = true;
-                values = reply->result().values();
-            }
-            reply->deleteLater();
-            done.release();
-            return;
-        }
-        QObject::connect(reply, &QModbusReply::finished, client,
-            [reply, &ok, &err, &values, &done] {
-                if (reply->error() != QModbusDevice::NoError) {
-                    err = reply->errorString();
-                } else {
-                    ok     = true;
-                    values = reply->result().values();
-                }
-                reply->deleteLater();
-                done.release();
-            });
-    }, Qt::BlockingQueuedConnection);
-
-    if (!done.tryAcquire(1, timeoutMs)) {
-        return {false, QStringLiteral("client timeout")};
-    }
-    Q_UNUSED(captured);
-    (void)values;  // values used for read paths via lambda
-    return {ok, err};
-}
-
-} // namespace
-
 ReadResult ModbusTcpClientTransport::read(ReadRequest const& req) {
     ReadResult result;
     result.startAddress = req.startAddress;
+
+    if (QThread::currentThread() == m_impl->client->thread()) {
+        result.errorMessage = QStringLiteral(
+            "synchronous read cannot run on the Modbus TCP worker thread");
+        return result;
+    }
 
     if (state() != ConnectionState::Connected) {
         result.ok           = false;
@@ -331,53 +315,60 @@ ReadResult ModbusTcpClientTransport::read(ReadRequest const& req) {
         return result;
     }
 
-    QSemaphore done(0);
-    QMetaObject::invokeMethod(m_impl->client, [this, req, &result, &done] {
+    auto pending = std::make_shared<PendingRead>();
+    pending->result.startAddress = req.startAddress;
+    detail::invokeBlocking(m_impl->client, [this, req, pending] {
         QModbusDataUnit unit(req.table, req.startAddress, req.count);
         auto* reply = m_impl->client->sendReadRequest(unit, m_impl->cfg.slaveId);
         if (!reply) {
-            result.ok           = false;
-            result.errorMessage = m_impl->client->errorString();
-            if (result.errorMessage.isEmpty())
-                result.errorMessage = QStringLiteral("sendReadRequest failed");
-            done.release();
+            pending->result.ok           = false;
+            pending->result.errorMessage = m_impl->client->errorString();
+            if (pending->result.errorMessage.isEmpty())
+                pending->result.errorMessage = QStringLiteral("sendReadRequest failed");
+            pending->done.release();
             return;
         }
         if (reply->isFinished()) {
             if (reply->error() != QModbusDevice::NoError) {
-                result.ok           = false;
-                result.errorMessage = reply->errorString();
+                pending->result.ok           = false;
+                pending->result.errorMessage = reply->errorString();
             } else {
-                result.ok     = true;
-                result.values = reply->result().values();
+                pending->result.ok     = true;
+                pending->result.values = reply->result().values();
             }
             reply->deleteLater();
-            done.release();
+            pending->done.release();
             return;
         }
         QObject::connect(reply, &QModbusReply::finished, m_impl->client,
-            [reply, &result, &done] {
+            [reply, pending] {
                 if (reply->error() != QModbusDevice::NoError) {
-                    result.ok           = false;
-                    result.errorMessage = reply->errorString();
+                    pending->result.ok           = false;
+                    pending->result.errorMessage = reply->errorString();
                 } else {
-                    result.ok     = true;
-                    result.values = reply->result().values();
+                    pending->result.ok     = true;
+                    pending->result.values = reply->result().values();
                 }
                 reply->deleteLater();
-                done.release();
+                pending->done.release();
             });
-    }, Qt::BlockingQueuedConnection);
+    });
 
-    if (!done.tryAcquire(1, m_impl->cfg.requestTimeoutMs * 2 + 500)) {
+    if (!pending->done.tryAcquire(1, m_impl->cfg.requestTimeoutMs * 2 + 500)) {
         result.ok           = false;
         result.errorMessage = QStringLiteral("read timeout");
+        return result;
     }
-    return result;
+    return std::move(pending->result);
 }
 
 WriteResult ModbusTcpClientTransport::writeBatch(WriteBatch const& batch) {
     WriteResult result;
+    if (QThread::currentThread() == m_impl->client->thread()) {
+        result.errorMessage = QStringLiteral(
+            "synchronous write cannot run on the Modbus TCP worker thread");
+        return result;
+    }
     if (state() != ConnectionState::Connected) {
         result.ok           = false;
         result.errorMessage = QStringLiteral("not connected");
@@ -388,50 +379,51 @@ WriteResult ModbusTcpClientTransport::writeBatch(WriteBatch const& batch) {
         return result;
     }
 
-    QSemaphore done(0);
-    QMetaObject::invokeMethod(m_impl->client, [this, batch, &result, &done] {
+    auto pending = std::make_shared<PendingWrite>();
+    detail::invokeBlocking(m_impl->client, [this, batch, pending] {
         QModbusDataUnit unit(batch.table, batch.startAddress, batch.values.size());
         for (int i = 0; i < batch.values.size(); ++i) {
             unit.setValue(i, batch.values.at(i));
         }
         auto* reply = m_impl->client->sendWriteRequest(unit, m_impl->cfg.slaveId);
         if (!reply) {
-            result.ok           = false;
-            result.errorMessage = m_impl->client->errorString();
-            if (result.errorMessage.isEmpty())
-                result.errorMessage = QStringLiteral("sendWriteRequest failed");
-            done.release();
+            pending->result.ok           = false;
+            pending->result.errorMessage = m_impl->client->errorString();
+            if (pending->result.errorMessage.isEmpty())
+                pending->result.errorMessage = QStringLiteral("sendWriteRequest failed");
+            pending->done.release();
             return;
         }
         if (reply->isFinished()) {
             if (reply->error() != QModbusDevice::NoError) {
-                result.ok           = false;
-                result.errorMessage = reply->errorString();
+                pending->result.ok           = false;
+                pending->result.errorMessage = reply->errorString();
             } else {
-                result.ok = true;
+                pending->result.ok = true;
             }
             reply->deleteLater();
-            done.release();
+            pending->done.release();
             return;
         }
         QObject::connect(reply, &QModbusReply::finished, m_impl->client,
-            [reply, &result, &done] {
+            [reply, pending] {
                 if (reply->error() != QModbusDevice::NoError) {
-                    result.ok           = false;
-                    result.errorMessage = reply->errorString();
+                    pending->result.ok           = false;
+                    pending->result.errorMessage = reply->errorString();
                 } else {
-                    result.ok = true;
+                    pending->result.ok = true;
                 }
                 reply->deleteLater();
-                done.release();
+                pending->done.release();
             });
-    }, Qt::BlockingQueuedConnection);
+    });
 
-    if (!done.tryAcquire(1, m_impl->cfg.requestTimeoutMs * 2 + 500)) {
+    if (!pending->done.tryAcquire(1, m_impl->cfg.requestTimeoutMs * 2 + 500)) {
         result.ok           = false;
         result.errorMessage = QStringLiteral("write timeout");
+        return result;
     }
-    return result;
+    return std::move(pending->result);
 }
 
 // Async I/O — non-blocking; the shared QModbusReply helper posts the request to

@@ -8,8 +8,9 @@
 
 namespace core::bus {
 
-// RAII handle for an EventBus subscription. The destructor unsubscribes; the
-// underlying handler is invoked at most until destruction returns.
+// RAII handle for an EventBus subscription. Destruction/cancel prevents new
+// invocations and drains callbacks already running on other threads before it
+// returns. Cancelling from inside the handler itself is supported.
 class CORE_EXPORT Subscription {
 public:
     Subscription() noexcept = default;

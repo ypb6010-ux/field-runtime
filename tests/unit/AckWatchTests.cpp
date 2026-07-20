@@ -3,10 +3,14 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <future>
+#include <memory>
 #include <thread>
 
 #include "core/bus/BusEvents.h"
 #include "core/bus/EventBus.h"
+#include "core/dp/Datapoint.h"
+#include "core/dp/DatapointRegistry.h"
 #include "core/module/AckWatch.h"
 
 using namespace core;
@@ -98,4 +102,40 @@ TEST_CASE("AckWatch exposes its watched dp id", "[ack][meta]") {
     module::AckWatch watch(cfgFor("belt.fb", true), bus);
     REQUIRE(watch.dpId() == "belt.fb");
     REQUIRE(watch.id()   == "ack.belt.fb");
+}
+
+TEST_CASE("AckWatch observes an acknowledgement that arrived before waitOnce",
+          "[ack][stability][race]") {
+    bus::EventBus bus;
+    dp::DatapointRegistry datapoints;
+    dp::DatapointSpec spec;
+    spec.id = QStringLiteral("dp.fast");
+    auto point = std::make_shared<dp::Datapoint>(spec);
+    datapoints.registerDp(point);
+    point->setValue(true);
+
+    module::AckWatch watch(cfgFor("dp.fast", true, 3000), bus, &datapoints);
+    watch.start();
+    auto const t0 = std::chrono::steady_clock::now();
+    REQUIRE(watch.waitOnce() == module::AckWatch::AckResult::Ok);
+    auto const elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+    REQUIRE(elapsed < 100);
+}
+
+TEST_CASE("AckWatch cancel wakes an active waiter immediately",
+          "[ack][cancel][stability]") {
+    bus::EventBus bus;
+    module::AckWatch watch(cfgFor("dp.silent", true, 3000), bus);
+    watch.start();
+
+    auto waiting = std::async(std::launch::async, [&] { return watch.waitOnce(); });
+    std::this_thread::sleep_for(20ms);
+
+    auto const t0 = std::chrono::steady_clock::now();
+    watch.cancel();
+    REQUIRE(waiting.get() == module::AckWatch::AckResult::Cancelled);
+    auto const elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+    REQUIRE(elapsed < 500);
 }

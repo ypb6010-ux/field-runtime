@@ -1,6 +1,6 @@
 # Core Handbook (English)
 
-> Multi-protocol industrial runtime (Modbus / OPC UA / MQTT / S7) with typed
+> Multi-protocol industrial runtime (Modbus / OPC UA / MQTT) with typed
 > datapoints, declarative routing, and half-duplex aware scheduling.
 
 ## Contents
@@ -23,7 +23,7 @@ Core is a runtime library for mining / industrial SCADA upper-computer
 software. It distils the "PLC ↔ operator box ↔ HMI" stack into a small set
 of crisply defined concepts:
 
-- **Transport** — one physical connection (Modbus TCP/RTU, OPC UA, MQTT, S7)
+- **Transport** — one physical connection (Modbus TCP/RTU, OPC UA, MQTT)
 - **Scheduler** — per-Transport request gatekeeper (Serial / Credit / Priority)
 - **Datapoint** — a named logical signal with typed value + codec pipeline
 - **Module** — a periodic or event-driven runtime unit (PollRange,
@@ -93,6 +93,9 @@ core->start();
 return app.exec();
 ```
 
+With QML enabled, passing a `QQmlContext*` automatically installs `dp` and
+`log`; QML can bind through `dp.dp("belt.speed").value`.
+
 ---
 
 ## 3. Architecture
@@ -117,7 +120,7 @@ return app.exec();
         ▼              ▼             ▼
    ┌──────────────────────────────────────┐
    │             Transport                 │
-   │  (Modbus TCP/RTU, OPC UA, MQTT, S7)   │
+   │       (Modbus TCP/RTU, OPC UA, MQTT)  │
    │            ──────────                  │
    │           RequestScheduler             │
    │     (Serial / Credit / Priority)       │
@@ -162,9 +165,9 @@ Below is the cheat sheet.
 ```toml
 [[transport]]
 id   = "plc"                 # globally unique
-kind = "modbus_tcp_client"   # or modbus_tcp_server / modbus_rtu / opc_ua_client / mqtt_client / s7_client
+kind = "modbus_tcp_client"   # or modbus_tcp_server / modbus_rtu / opc_ua_client / mqtt_client
 
-# Modbus TCP client / server / S7
+# Modbus TCP client / server
 host = "192.168.0.10"
 port = 502
 slave_id = 1
@@ -224,7 +227,7 @@ range     = [0, 16]        # [start_addr, register_count]
 period_ms = 200
 priority  = "Normal"       # Low / Normal / High / Critical
 
-# Batched write window (Modbus FC16 cap = 123 registers)
+# Batched write window (Modbus-client HR cap = 123; other transports are not subject to it)
 [[sink_window]]
 module_id = "sw.plc"
 transport = "plc"
@@ -235,7 +238,6 @@ initial   = [0, 0, 0, 0]
 [sink_window.flush]
 debounce_ms  = 20          # how long after the last stage to flush
 keepalive_ms = 5000        # even if nothing changed, refresh every N ms
-coalesce     = true        # merge adjacent stages
 
 # Heartbeat write
 [[heartbeat]]
@@ -271,7 +273,7 @@ timeout_ms = 2000
 [[datapoint]]
 id   = "temperature"
 kind = "Status"            # Status / Command / Bidirectional
-type = "S16"               # Bool/U16/S16/U32/S32/F32/U64/S64/F64/EnumU16/String
+type = "S16"               # Bool/U16/S16/U32/S32/F32/U64/S64/F64/EnumU16 (String is not implemented yet)
 source = { port="plc", table="HR", addr=0, scale=0.1, offset=-40.0 }
 
 [[datapoint]]
@@ -285,24 +287,29 @@ sink   = { port="plc", table="HR", addr=100, bit=0, window="sw.plc" }
 name   = "start-button-fwd"
 from   = "start_button"
 to     = "start_button"
-policy = "ContinuousMirror"  # ContinuousMirror / EdgeOnce / Pulsed / UntilAck
+policy = "ContinuousMirror"  # the only currently implemented policy
 ```
 
 ### 4.4 Startup validation
 
-Loading goes through fail-fast validation; see spec §4.3. The most common
-rules:
+Loading goes through fail-fast validation. Unknown, misspelled, or wrongly typed
+fields are rejected instead of silently falling back to defaults; see spec §4.3. The most
+common rules:
 
-- IDs are globally unique across sections (transport / module_id / datapoint /
-  codec)
+- IDs are unique within the transport, datapoint, and codec namespaces; all
+  module-bearing sections share one unique module-id namespace
 - Every transport / datapoint / codec / sink_window reference must resolve
 - 32-bit numeric types must declare `wordOrder`
 - `Bool` must declare `bit`
 - `EnumU16` must declare `codec`
-- `sink_window.range[1] ≤ 123`
+- Modbus-client sink windows obey the applicable single-request write cap (123 for HR)
+- sink windows, heartbeats, commands, and bridge write ranges may not overlap on the same transport/table
+- a datapoint sink must name a sink window or be fully covered by one on the same transport/table
+- a client datapoint source must be fully covered by a poll range on the same transport/table
 - `datapoint.sink.addr` must fall inside its referenced window
 - `mask` may not exceed the type's bit width
-- `policy=UntilAck` requires a `[datapoint.ack]` block
+- datapoint policy currently supports `ContinuousMirror` only; use standalone
+  `[[ack_watch]]` for explicit feedback waits
 
 Errors carry both the field name and the source line:
 
@@ -373,9 +380,10 @@ only in the underlying library and its licensing:
 - LGPLv3 audit risk is high → **paho**
 
 The two backends are gated by `CORE_BUILD_MQTT_QT` and
-`CORE_BUILD_MQTT_PAHO` in `core/CMakeLists.txt` (both default ON); each
-gracefully degrades to a stub when the library isn't found, so the
-project still compiles either way.
+`CORE_BUILD_MQTT_PAHO` in `CMakeLists.txt` (both default ON). Qt MQTT is a
+required dependency while its option is enabled; a missing Paho package
+automatically disables only that backend. TOML that selects a backend disabled
+in the current build is rejected during configuration loading.
 
 ### OPC UA node mapping
 
@@ -403,9 +411,8 @@ backend          = "open62541"        # Qt OpcUa backend
 |----------|-------|---------|
 | Siemens S7 | `S7ClientTransport` | [snap7](http://snap7.sourceforge.net/) v1.4.2 (LGPL) |
 
-The S7 stub returns `"snap7 library not yet vendored"` from `connect()`.
-If your field deployment has Siemens S7 hardware, build snap7 and tell us
-where it lives.
+The configuration loader rejects `s7_client` until the snap7-backed transport
+is implemented, so a deployment cannot silently start with a non-working PLC.
 
 ### Other protocols on the radar
 
@@ -496,7 +503,7 @@ First occurrence passes; repeats within the window are suppressed and counted;
 the next occurrence after the window passes again carrying the suppressed count.
 
 ```cpp
-DedupFilter d(60'000);                          // 60s window
+DedupFilter d(60'000);                          // 60s window, max 4096 keys by default
 QString key = "alarm:plc1:HR70.bit3:on";        // <category>:<source>:<eventKey>
 if (d.accept(key)) {
     quint64 n = d.takeSuppressed(key);          // aggregate "repeated N times in 60s"

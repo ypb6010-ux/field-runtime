@@ -4,10 +4,12 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <QString>
 #include <QVector>
 
 #include "core/core_global.h"
+#include "core/dp/PortRef.h"
 #include "core/module/FunctionalModule.h"
 #include "core/sched/RequestScheduler.h"   // SubmitResult lives here
 #include "core/transport/TransportTypes.h"
@@ -69,7 +71,9 @@ private:
     struct Binding {
         std::shared_ptr<dp::Datapoint> dp;
         std::shared_ptr<codec::Codec>  codec;
+        std::optional<dp::PortRef>      source;
         int                             offset;
+        int                             registerCount;
     };
 
     // Decode a successful read into the bound datapoints, or mark them
@@ -82,6 +86,9 @@ private:
     QVector<Binding>            m_bindings;
     std::atomic<bool>           m_paused{false};   // read on tick thread, set on stop/pause
     std::atomic<bool>           m_inFlight{false};
+    // Incremented on every lifecycle transition. An async reply from a prior
+    // run is discarded after stop/pause/restart instead of reviving stale data.
+    std::atomic<quint64>        m_runGeneration{0};
 };
 
 } // namespace core::module

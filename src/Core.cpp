@@ -3,15 +3,24 @@
 #include "core/ICore.h"
 #include "core/internal/Testing.h"
 
+#include <atomic>
+#include <chrono>
+#include <exception>
 #include <map>
+#include <limits>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
 
 #include <QHash>
+#include <QDateTime>
+#ifdef CORE_HAS_QML
+#include <QPointer>
 #include <QQmlContext>
+#endif
 #include <QTimer>
 #include <QtSerialBus/QModbusDataUnit>
 
@@ -30,7 +39,10 @@
 #include "core/dp/PortRef.h"
 #include "core/log/Logger.h"
 #include "core/log/Sinks.h"
+#ifdef CORE_HAS_QML
+#include "core/qml/DatapointQmlBridge.h"
 #include "core/qml/LogBridge.h"
+#endif
 #include "core/module/AckWatch.h"
 #include "core/module/Command.h"
 #include "core/module/Heartbeat.h"
@@ -80,6 +92,12 @@ dp::Kind kindFromString(QString const& s) {
     return dp::Kind::Status;
 }
 
+quint16 stageMaskFor(dp::PortRef const& ref, int word, int wordCount) {
+    if (wordCount != 1 || word != 0) return 0xFFFFu;
+    if (ref.bit.has_value()) return quint16(1u << *ref.bit);
+    return quint16((ref.mask << ref.shift) & 0xFFFFu);
+}
+
 dp::PortRef makePortRef(config::PortRefConfig const& pc,
                          std::shared_ptr<codec::Codec> codec) {
     dp::PortRef p;
@@ -117,10 +135,18 @@ public:
         if (installDefaultConsole) {
             m_logger->addSink(std::make_shared<log::ConsoleSink>());
         }
-        installLogBridge();
+        installQmlBridges();
     }
 
     ~CoreImpl() override {
+#ifdef CORE_HAS_QML
+        if (m_qml) {
+            m_qml->setContextProperty(QStringLiteral("dp"),
+                                      static_cast<QObject*>(nullptr));
+            m_qml->setContextProperty(QStringLiteral("log"),
+                                      static_cast<QObject*>(nullptr));
+        }
+#endif
         // Async-safe teardown order:
         //   1. drop event-bus subscriptions (no more routing into modules);
         //   2. stop the module tick driver so no NEW driveTick() is issued
@@ -137,6 +163,7 @@ public:
         //   5. datapoints / codecs / bus, then the logger last.
         stopMirrorPump();                      // no bridge mirror fires during teardown
         m_bridgeMirrors.clear();               // drop datapoint refs before the registry dies
+        m_bridgeMirrorInFlight.clear();
         m_bridgeFwdSinks.clear();              // raw ptrs owned by m_modules
         m_bridges.clear();
         m_transportEventSub.reset();
@@ -147,19 +174,45 @@ public:
         m_pollRangePtrs.clear();
         m_sinkWindowPtrs.clear();
         m_modules.reset();                     // safe: no completion can fire now
-        m_plugins.reset();                     // destroy plugins (and their port emitters) first
-        m_ports.reset();                       // then the port registry (drops its bus sub)
+        // PortRegistry handlers capture plugin InPort references. Drop the bus
+        // subscription and those handlers before destroying/unloading plugin
+        // objects; Subscription destruction now drains concurrent dispatch.
+        m_ports.reset();
+        m_plugins.reset();
+#ifdef CORE_HAS_QML
+        m_dpBridge.reset();
+#endif
         m_dps.reset();
         m_codecs.reset();
         m_bus.reset();
         // Logger last — subsystems above may log during teardown.
+#ifdef CORE_HAS_QML
         m_logBridge.reset();
+#endif
         if (m_logger) m_logger->stop();
         m_logger.reset();
     }
 
     std::expected<void, config::ValidationErrors>
     loadConfig(QString const& path) override {
+        if (m_started) {
+            return std::unexpected(config::ValidationErrors{
+                {QStringLiteral("core"), QStringLiteral("loadConfig"),
+                 QStringLiteral("configuration cannot be loaded while Core is running"),
+                 -1}});
+        }
+        if (m_configLoaded) {
+            return std::unexpected(config::ValidationErrors{
+                {QStringLiteral("core"), QStringLiteral("loadConfig"),
+                 QStringLiteral("configuration is already loaded; create a new Core instance to replace it"),
+                 -1}});
+        }
+        if (m_configLoadPoisoned) {
+            return std::unexpected(config::ValidationErrors{
+                {QStringLiteral("core"), QStringLiteral("loadConfig"),
+                 QStringLiteral("a previous runtime graph build failed; create a new Core instance"),
+                 -1}});
+        }
         config::ConfigLoader loader;
         auto schema = loader.loadFromToml(path);
         if (!schema.has_value()) {
@@ -171,13 +224,55 @@ public:
             return std::unexpected(schema.error());
         }
 
-        if (!schema->meta.logLevel.isEmpty()) {
-            m_logger->setThreshold(log::levelFromString(schema->meta.logLevel));
-        }
         // Resolve config-relative paths (e.g. lua codec scripts) against the
         // config file's directory.
         m_configDir = QFileInfo(path).absolutePath();
-        wireFromSchema(*schema);
+        auto codecErrors = registerCustomCodecs(*schema);
+        if (!codecErrors.isEmpty()) {
+            for (auto const& err : codecErrors) {
+                m_logger->logf(log::LogLevel::Error,
+                               QStringLiteral("config"), path, err.message);
+            }
+            return std::unexpected(std::move(codecErrors));
+        }
+        auto pluginErrors = loadPluginLibraries(*schema);
+        if (!pluginErrors.isEmpty()) {
+            m_plugins->unloadAll();
+            for (auto const& err : pluginErrors) {
+                m_logger->logf(log::LogLevel::Error,
+                               QStringLiteral("config"), path, err.message);
+            }
+            return std::unexpected(std::move(pluginErrors));
+        }
+        if (!schema->meta.logLevel.isEmpty()) {
+            m_logger->setThreshold(log::levelFromString(schema->meta.logLevel));
+        }
+        try {
+            wireFromSchema(*schema);
+        } catch (std::exception const& e) {
+            m_ports.reset();
+            m_plugins->unloadAll();
+            m_configLoadPoisoned = true;
+            QString const message = QStringLiteral("runtime graph initialization failed: %1")
+                                        .arg(QString::fromUtf8(e.what()));
+            m_logger->logf(log::LogLevel::Error,
+                           QStringLiteral("config"), path, message);
+            return std::unexpected(config::ValidationErrors{
+                {QStringLiteral("core"), QStringLiteral("initialization"),
+                 message, -1}});
+        } catch (...) {
+            m_ports.reset();
+            m_plugins->unloadAll();
+            m_configLoadPoisoned = true;
+            QString const message = QStringLiteral(
+                "runtime graph initialization failed with an unknown exception");
+            m_logger->logf(log::LogLevel::Error,
+                           QStringLiteral("config"), path, message);
+            return std::unexpected(config::ValidationErrors{
+                {QStringLiteral("core"), QStringLiteral("initialization"),
+                 message, -1}});
+        }
+        m_configLoaded = true;
         m_logger->logf(log::LogLevel::Info, QStringLiteral("config"), path,
                        QStringLiteral("loaded"),
                        {{QStringLiteral("transports"),
@@ -226,8 +321,14 @@ public:
     }
 
     void start() override {
-        if (m_started) return;   // one-shot: a second start() must not spawn a
-        m_started = true;        // second concurrent connect() per transport
+        if (m_started) return;   // idempotent while already running
+        if (!m_configLoaded) {
+            m_logger->logf(log::LogLevel::Error,
+                           QStringLiteral("core"), QStringLiteral("ICore"),
+                           QStringLiteral("start rejected: no valid configuration is loaded"));
+            return;
+        }
+        m_started = true;
         installEventWiring();
         // Connect transports in PARALLEL, off the calling (GUI) thread: a slow
         // or unreachable transport (e.g. a wrong MQTT / OPC UA endpoint) must
@@ -236,7 +337,15 @@ public:
         // before a connection completes simply report "not connected".
         for (auto& [id, t] : m_transports) {
             transport::Transport* tp = t.get();
-            m_connectThreads.emplace_back([tp]() { (void)tp->connect(); });
+            m_connectThreads.emplace_back([this, tp, id]() {
+                auto const connected = tp->connect();
+                if (!connected) {
+                    m_logger->logf(log::LogLevel::Error,
+                                   QStringLiteral("transport"), id,
+                                   QStringLiteral("initial connect failed: %1")
+                                       .arg(connected.error()));
+                }
+            });
         }
         m_modules->startAll();
         startStatsPump();
@@ -277,42 +386,105 @@ public:
 
     void publishSchedulerStatsOnce() {
         for (auto& [id, t] : m_transports) {
-            m_bus->publish(bus::SchedulerStatsEvent{id, t->scheduler().stats()});
+            auto const stats = t->scheduler().stats();
+            m_bus->publish(bus::SchedulerStatsEvent{id, stats});
+            auto const previous = m_lastCircuitStates.value(
+                id, sched::CircuitState::Closed);
+            if (stats.circuitState != previous) {
+                bus::TransportEventKind kind;
+                switch (stats.circuitState) {
+                    case sched::CircuitState::Open:
+                        kind = bus::TransportEventKind::CircuitOpened;
+                        break;
+                    case sched::CircuitState::HalfOpen:
+                        kind = bus::TransportEventKind::CircuitHalfOpen;
+                        break;
+                    case sched::CircuitState::Closed:
+                        kind = bus::TransportEventKind::CircuitClosed;
+                        break;
+                }
+                m_bus->publish(bus::TransportEvent{id, kind, {}});
+            }
+            m_lastCircuitStates[id] = stats.circuitState;
         }
     }
 
     void setSchedulerStatsIntervalMs(int ms) { m_statsIntervalMs = ms; }
 
 private:
+    void registerModule(std::unique_ptr<module::FunctionalModule> mod) {
+        QString const id = mod ? mod->id() : QString{};
+        if (!m_modules->registerModule(std::move(mod))) {
+            throw std::runtime_error(
+                QStringLiteral("failed to register duplicate/invalid module '%1'")
+                    .arg(id).toStdString());
+        }
+    }
+
     void wireFromSchema(config::ConfigSchema const& schema) {
-        registerCustomCodecs(schema);
         buildTransports(schema);
+        // Sink windows are needed while datapoints are built so an implicit
+        // sink (port/table/address without `window`) can be resolved once and
+        // QML writes cannot silently end up with no writer.
+        buildSinkWindows(schema);
         auto byId = buildDatapoints(schema);
         buildPollRanges(schema, byId);
-        buildSinkWindows(schema);
+        buildServerRoutes(schema);
         buildHeartbeats(schema);
         buildAckWatches(schema);
         buildCommands(schema);
-        m_routes = schema.routes;
         buildBridges(schema);
-        loadPlugins(schema);
+        initializePlugins();
     }
 
-    // Load each [[plugin]] DLL, let it bind In/OutPorts to datapoints (which now
-    // exist), then notify all that Core is wired. dll paths resolve against the
-    // config dir when relative.
-    void loadPlugins(config::ConfigSchema const& schema) {
-        if (schema.plugins.isEmpty()) return;
-        m_ports = std::make_unique<plugin::PortRegistry>(*m_dps, *m_bus);
-        for (auto const& pc : schema.plugins) {
+    // Load every declared DLL before mutating the runtime object graph. A bad
+    // path/export is a configuration failure, not a partially functional Core.
+    config::ValidationErrors
+    loadPluginLibraries(config::ConfigSchema const& schema) {
+        config::ValidationErrors errs;
+        for (int i = 0; i < schema.plugins.size(); ++i) {
+            auto const& pc = schema.plugins[i];
             QString dll = pc.dllPath;
             if (QFileInfo(dll).isRelative() && !m_configDir.isEmpty())
                 dll = QDir(m_configDir).filePath(dll);
             if (!m_plugins->load(dll)) {
-                m_logger->logf(log::LogLevel::Error, QStringLiteral("plugin"), dll,
-                               QStringLiteral("failed to load plugin '%1'").arg(pc.name));
+                errs.push_back({QStringLiteral("plugin[%1]").arg(i),
+                                QStringLiteral("dll"),
+                                QStringLiteral("failed to load '%1': %2")
+                                    .arg(dll, m_plugins->lastError()),
+                                -1});
+            } else if (!pc.name.isEmpty()) {
+                auto const loaded = m_plugins->all();
+                auto* const plugin = loaded.isEmpty() ? nullptr : loaded.back();
+                QString actualName = QStringLiteral("<none>");
+                bool nameOk = false;
+                try {
+                    if (plugin) {
+                        actualName = plugin->name();
+                        nameOk = actualName == pc.name;
+                    }
+                } catch (std::exception const& e) {
+                    actualName = QStringLiteral("<name() threw: %1>")
+                                     .arg(QString::fromUtf8(e.what()));
+                } catch (...) {
+                    actualName = QStringLiteral("<name() threw>");
+                }
+                if (!nameOk) {
+                    errs.push_back({QStringLiteral("plugin[%1]").arg(i),
+                                    QStringLiteral("name"),
+                                    QStringLiteral("declared plugin name '%1' does not match loaded plugin '%2'")
+                                        .arg(pc.name, actualName),
+                                    -1});
+                }
             }
         }
+        return errs;
+    }
+
+    // Once datapoints exist, let preloaded plugins bind ports and initialize.
+    void initializePlugins() {
+        if (m_plugins->all().isEmpty()) return;
+        m_ports = std::make_unique<plugin::PortRegistry>(*m_dps, *m_bus);
         m_plugins->registerAllPorts(*m_ports);
         for (auto* p : m_plugins->all()) p->onInitialized();
     }
@@ -335,10 +507,14 @@ private:
         m_statsTimer = nullptr;
     }
 
-    void installLogBridge() {
+    void installQmlBridges() {
+#ifdef CORE_HAS_QML
         if (!m_qml) return;
+        m_dpBridge = std::make_unique<qml::DatapointQmlBridge>(*m_dps);
         m_logBridge = std::make_unique<qml::LogBridge>(*m_logger);
+        m_qml->setContextProperty(QStringLiteral("dp"), m_dpBridge.get());
         m_qml->setContextProperty(QStringLiteral("log"), m_logBridge.get());
+#endif
     }
 
     void installEventWiring() {
@@ -375,6 +551,10 @@ private:
     }
 
     void logTransportEvent(bus::TransportEvent const& e) {
+        // An explicit Core::stop() disconnect is expected lifecycle noise, not
+        // a connectivity warning. Unexpected runtime drops still arrive while
+        // m_started is true and remain visible.
+        if (!m_started && e.kind == bus::TransportEventKind::Disconnected) return;
         char const* what = nullptr;
         auto level = log::LogLevel::Info;
         switch (e.kind) {
@@ -392,52 +572,78 @@ private:
     }
 
     void routeServerWrite(bus::ServerWriteEvent const& e) {
-        // Routes operate on datapoint IDs; for the server→PLC path, we look
-        // at each `from` datapoint whose source is the server transport and
-        // whose source address falls within the written range, then call
-        // stageRegister on the SinkWindow associated with the `to` datapoint.
-        for (auto const& r : m_routes) {
-            auto fromIt = m_datapointById.find(r.from);
-            auto toIt   = m_datapointById.find(r.to);
-            if (fromIt == m_datapointById.end() || toIt == m_datapointById.end()) continue;
-            auto const& fromDp = fromIt->second;
-            auto const& toDp   = toIt->second;
-            if (!fromDp->source().has_value()) continue;
-            auto const& fromSrc = *fromDp->source();
-            if (fromSrc.transport != e.transportId) continue;
-            if (fromSrc.table     != e.table)       continue;
-            int const offset = fromSrc.address - e.startAddress;
-            if (offset < 0 || offset >= e.values.size()) continue;
-            quint16 const raw = e.values.at(offset);
+        auto const it = m_serverRouteBindings.constFind(e.transportId);
+        if (it == m_serverRouteBindings.constEnd()) return;
+        for (auto const& binding : it.value()) {
+            if (binding.source.table != e.table) continue;
+            int const offset = binding.source.address - e.startAddress;
+            if (offset < 0
+                || offset + binding.sourceRegisterCount > e.values.size()) {
+                continue;
+            }
+            QVariant decoded;
+            QList<quint16> encoded;
+            try {
+                decoded = binding.source.codec->decode(
+                    e.values.mid(offset, binding.sourceRegisterCount),
+                    binding.source);
+                if (!decoded.isValid()) {
+                    binding.sourceDp->setState(dp::DpState::Error);
+                    binding.targetDp->setState(dp::DpState::Error);
+                    continue;
+                }
+                binding.sourceDp->setValue(decoded);
+                encoded = binding.sink.codec->encode(decoded, binding.sink);
+            } catch (...) {
+                binding.sourceDp->setState(dp::DpState::Error);
+                binding.targetDp->setState(dp::DpState::Error);
+                continue;
+            }
+            if (encoded.isEmpty()) {
+                binding.targetDp->setState(dp::DpState::Error);
+                continue;
+            }
+            for (int word = 0; word < encoded.size(); ++word) {
+                binding.target->stageRegister(
+                    binding.sink.address + word, encoded.at(word),
+                    stageMaskFor(binding.sink, word, encoded.size()));
+            }
+        }
+    }
 
-            // Resolve which SinkWindow owns the sink-side register.
-            if (!toDp->sink().has_value()) continue;
-            auto const& sink = *toDp->sink();
+    void buildServerRoutes(config::ConfigSchema const& schema) {
+        m_serverRouteBindings.clear();
+        for (auto const& route : schema.routes) {
+            auto const fromIt = m_datapointById.find(route.from);
+            auto const toIt   = m_datapointById.find(route.to);
+            if (fromIt == m_datapointById.end()
+             || toIt == m_datapointById.end()) continue;
+
+            auto const source = fromIt->second->source();
+            auto const sink   = toIt->second->sink();
+            if (!source || !sink || !source->codec || !sink->codec) continue;
+
             module::SinkWindow* target = nullptr;
-            // Look up by named window first, fall back to address-based match.
             for (auto* sw : m_sinkWindowPtrs) {
-                if (!sink.window.isEmpty() && sw->id() == sink.window) {
+                if (!sink->window.isEmpty() && sw->id() == sink->window) {
                     target = sw;
                     break;
                 }
             }
-            if (!target && !sink.transport.isEmpty()) {
+            if (!target && !sink->transport.isEmpty()) {
                 for (auto* sw : m_sinkWindowPtrs) {
-                    if (sw->transportId() != sink.transport) continue;
-                    int const addr = sink.address;
-                    if (addr < sw->startAddress()
-                     || addr >= sw->startAddress() + sw->size()) continue;
+                    if (sw->transportId() != sink->transport) continue;
+                    if (sink->address < sw->startAddress()
+                     || sink->address >= sw->startAddress() + sw->size()) continue;
                     target = sw;
                     break;
                 }
             }
-            if (!target) continue;
-            int const addr = sink.address;
-            if (addr < target->startAddress()
-             || addr >= target->startAddress() + target->size()) continue;
-            quint16 mask = quint16(sink.mask & 0xFFFFu);
-            if (mask == 0) mask = 0xFFFFu;
-            target->stageRegister(addr, raw, mask);
+            if (!target) continue;   // validation normally prevents this
+
+            m_serverRouteBindings[source->transport].append(ServerRouteBinding{
+                *source, dp::registerCountFor(fromIt->second->type()),
+                fromIt->second, toIt->second, target, *sink});
         }
     }
 
@@ -445,18 +651,27 @@ private:
     void buildBridges(config::ConfigSchema const& schema) {
         m_bridges = schema.bridges;
         m_bridgeMirrors.assign(size_t(m_bridges.size()), {});
+        m_bridgeMirrorSnapshots.assign(size_t(m_bridges.size()), {});
+        m_bridgeMirrorLastAt.assign(size_t(m_bridges.size()), {});
+        m_bridgeMirrorInFlight.clear();
+        m_bridgeMirrorInFlight.reserve(size_t(m_bridges.size()));
+        for (int i = 0; i < m_bridges.size(); ++i) {
+            m_bridgeMirrorInFlight.push_back(
+                std::make_shared<std::atomic_bool>(false));
+        }
         m_bridgeFwdSinks.assign(size_t(m_bridges.size()), nullptr);
         for (int i = 0; i < m_bridges.size(); ++i) {
             auto const& b = m_bridges[i];
             auto& list = m_bridgeMirrors[size_t(i)];
+            m_bridgeMirrorSnapshots[size_t(i)].fill(0, b.mirrorCount);
             for (auto const& dp : m_dps->all()) {
-                auto const& src = dp->source();
+                auto const src = dp->source();
                 if (!src.has_value()) continue;
                 if (src->transport != b.plc) continue;
                 if (src->table != QModbusDataUnit::HoldingRegisters) continue;
                 int const a = src->address;
                 if (a < b.mirrorStart || a >= b.mirrorStart + b.mirrorCount) continue;
-                list.emplace_back(a, dp);
+                list.push_back(BridgeMirrorBinding{a, dp, *src});
             }
             // 转发走 PLC 侧的 SinkWindow(同 route 路径):线程安全地 stageRegister,
             // 由 TickDriver 在生命周期线程带重试/coalesce 地刷到 PLC —— 避免单次
@@ -464,18 +679,19 @@ private:
             if (b.writeCount > 0) {
                 if (auto* plc = transport(b.plc)) {
                     module::SinkWindow::Config cfg;
-                    cfg.moduleId       = QStringLiteral("bridge.fwd.") + b.server;
+                    cfg.moduleId = QStringLiteral("bridge.fwd.%1.%2")
+                        .arg(b.server).arg(i);
                     cfg.table          = QModbusDataUnit::HoldingRegisters;
                     cfg.startAddress   = b.writeStart - b.offset;
                     cfg.size           = b.writeCount;
                     cfg.priority       = sched::Priority::High;
                     cfg.debounceMs     = 0;
                     cfg.keepAlivePeriodMs = 0;
-                    cfg.coalesceWrites = true;
                     auto sw = std::make_unique<module::SinkWindow>(std::move(cfg), *plc);
-                    m_bridgeFwdSinks[size_t(i)] = sw.get();
-                    m_sinkWindowPtrs.push_back(sw.get());
-                    m_modules->registerModule(std::move(sw));
+                    auto* raw = sw.get();
+                    registerModule(std::move(sw));
+                    m_bridgeFwdSinks[size_t(i)] = raw;
+                    m_sinkWindowPtrs.push_back(raw);
                 }
             }
         }
@@ -511,6 +727,11 @@ private:
             for (int a = b.writeStart; a < b.writeStart + b.writeCount; ++a) {
                 sink->stageRegister(a - b.offset, 0);
             }
+            // stageRegister intentionally ignores unchanged values. Disabling
+            // forwarding is a safety edge, however: force a physical zero
+            // snapshot even when our local snapshot was already zero, because
+            // the PLC may have been changed by another master or a prior run.
+            sink->forceFlush();
         }
     }
 
@@ -518,34 +739,81 @@ public:
     // 周期把 PLC 读区数据整段镜像回 server 自己的寄存器表(操作箱即可读到)。
     // 也是测试入口(internal::mirrorBridgesOnce)。
     void mirrorBridgesOnce() {
+        mirrorBridges(false);
+    }
+
+private:
+    void mirrorBridges(bool respectCadence) {
+        auto const now = std::chrono::steady_clock::now();
         for (int i = 0; i < m_bridges.size(); ++i) {
             auto const& b = m_bridges[i];
             if (b.mirrorCount <= 0) continue;
+            auto& lastAt = m_bridgeMirrorLastAt[size_t(i)];
+            if (respectCadence && lastAt.time_since_epoch().count() > 0
+                && now - lastAt < std::chrono::milliseconds(b.mirrorPeriodMs)) {
+                continue;
+            }
             auto* server = transport(b.server);
             if (!server) continue;
-            QList<quint16> values(b.mirrorCount, quint16(0));
-            for (auto const& [addr, dp] : m_bridgeMirrors[size_t(i)]) {
-                int const idx = addr - b.mirrorStart;
-                if (idx >= 0 && idx < b.mirrorCount) values[idx] = quint16(dp->value().toUInt());
+            auto& values = m_bridgeMirrorSnapshots[size_t(i)];
+            for (auto const& binding : m_bridgeMirrors[size_t(i)]) {
+                if (binding.datapoint->state() != dp::DpState::Ok
+                    || !binding.source.codec) {
+                    continue; // retain the last good raw mirror value
+                }
+                QList<quint16> encoded;
+                try {
+                    encoded = binding.source.codec->encode(
+                        binding.datapoint->value(), binding.source);
+                } catch (...) {
+                    continue;
+                }
+                int const first = binding.address - b.mirrorStart;
+                for (int word = 0; word < encoded.size(); ++word) {
+                    int const idx = first + word;
+                    if (idx >= 0 && idx < values.size()) {
+                        values[idx] = encoded.at(word);
+                    }
+                }
             }
             transport::WriteBatch batch;
             batch.table        = QModbusDataUnit::HoldingRegisters;
             batch.startAddress = b.mirrorStart + b.offset;
-            batch.values       = std::move(values);
+            batch.values       = values;
             sched::RequestTag tag;
-            tag.moduleId = QStringLiteral("bridge.mirror.") + b.server;
+            tag.moduleId = QStringLiteral("bridge.mirror.%1.%2")
+                .arg(b.server).arg(i);
             tag.priority = sched::Priority::Low;
-            tag.coalesce = true;
-            server->scheduler().submitAsync(tag, [server, batch](sched::AsyncDone done) {
-                server->writeAsync(batch, [done](transport::WriteResult w) mutable { done(w.ok); });
+            auto const inFlight = m_bridgeMirrorInFlight[size_t(i)];
+            bool expected = false;
+            if (!inFlight->compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel)) {
+                continue;
+            }
+            auto const submitted = server->scheduler().submitAsync(
+                tag, [server, batch, inFlight](sched::AsyncDone done) {
+                try {
+                    server->writeAsync(batch,
+                        [done = std::move(done), inFlight](transport::WriteResult w) mutable {
+                            inFlight->store(false, std::memory_order_release);
+                            done(w.ok);
+                        });
+                } catch (...) {
+                    inFlight->store(false, std::memory_order_release);
+                    throw;
+                }
             });
+            if (submitted.kind == sched::ResultKind::Ok) {
+                lastAt = now;
+            } else {
+                inFlight->store(false, std::memory_order_release);
+            }
         }
     }
 
-private:
     void startMirrorPump() {
         if (m_mirrorTimer) return;
-        int period = 100;
+        int period = std::numeric_limits<int>::max();
         bool any = false;
         for (auto const& b : m_bridges) {
             if (b.mirrorCount > 0) { any = true; period = std::min(period, std::max(20, b.mirrorPeriodMs)); }
@@ -555,7 +823,7 @@ private:
         m_mirrorTimer->setInterval(period);
         m_mirrorTimer->setSingleShot(false);
         QObject::connect(m_mirrorTimer, &QTimer::timeout, m_bus.get(),
-            [this]() { mirrorBridgesOnce(); });
+            [this]() { mirrorBridges(true); });
         m_mirrorTimer->start();
     }
 
@@ -566,15 +834,18 @@ private:
         m_mirrorTimer = nullptr;
     }
 
-    void registerCustomCodecs(config::ConfigSchema const& schema) {
-        for (auto const& cc : schema.codecs) {
+    config::ValidationErrors
+    registerCustomCodecs(config::ConfigSchema const& schema) {
+        config::ValidationErrors errs;
+        for (int i = 0; i < schema.codecs.size(); ++i) {
+            auto const& cc = schema.codecs[i];
             if (cc.kind == "enum_u16") {
                 std::unordered_map<quint16, QString> map;
                 for (auto it = cc.map.constBegin(); it != cc.map.constEnd(); ++it) {
                     bool ok = false;
-                    quint16 raw = quint16(it.key().toUInt(&ok));
-                    if (!ok) continue;
-                    map.emplace(raw, it.value().toString());
+                    uint const raw = it.key().toUInt(&ok);
+                    if (!ok || raw > 65535) continue;   // schema validation caught it
+                    map.emplace(quint16(raw), it.value().toString());
                 }
                 m_codecs->registerCodec(
                     std::make_shared<codec::EnumU16Codec>(cc.id, std::move(map)));
@@ -587,14 +858,16 @@ private:
                 if (lc) {
                     m_codecs->registerCodec(std::move(lc));
                 } else {
-                    m_logger->logf(log::LogLevel::Error, QStringLiteral("config"),
-                                   script,
-                                   err.isEmpty()
-                                       ? QStringLiteral("lua codec load failed")
-                                       : err);
+                    errs.push_back({QStringLiteral("codec[%1]").arg(i),
+                                    QStringLiteral("script"),
+                                    err.isEmpty()
+                                        ? QStringLiteral("lua codec load failed")
+                                        : err,
+                                    -1});
                 }
             }
         }
+        return errs;
     }
 
     void buildTransports(config::ConfigSchema const& schema) {
@@ -606,6 +879,7 @@ private:
                 cfg.port                 = quint16(tc.port);
                 cfg.slaveId              = tc.slaveId;
                 cfg.connectTimeoutMs     = tc.connectTimeoutMs;
+                cfg.requestTimeoutMs     = tc.requestTimeoutMs;
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
                 cfg.scheduler            = tc.scheduler;
                 m_transports.emplace(
@@ -618,7 +892,7 @@ private:
                 cfg.listenAddress        = tc.listenAddress;
                 cfg.listenPort           = quint16(tc.listenPort);
                 cfg.slaveId              = tc.slaveId;
-                cfg.maxClients           = tc.maxClients;
+                cfg.connectTimeoutMs      = tc.connectTimeoutMs;
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
                 cfg.listenRanges         = tc.listenRanges;
                 cfg.scheduler            = tc.scheduler;
@@ -674,7 +948,6 @@ private:
                 cfg.qos                  = tc.qos;
                 cfg.cleanSession         = tc.cleanSession;
                 cfg.connectTimeoutMs     = tc.connectTimeoutMs;
-                cfg.requestTimeoutMs     = tc.requestTimeoutMs;
                 cfg.reconnectIntervalMs  = tc.reconnectIntervalMs;
                 cfg.scheduler            = tc.scheduler;
                 m_transports.emplace(
@@ -733,11 +1006,10 @@ private:
             cfg.priority          = sc.priority;
             cfg.debounceMs        = sc.flush.debounceMs;
             cfg.keepAlivePeriodMs = sc.flush.keepaliveMs;
-            cfg.coalesceWrites    = sc.flush.coalesceWrites;
             cfg.initial           = sc.initial;
             auto sw = std::make_unique<module::SinkWindow>(std::move(cfg), *t);
             auto* raw = sw.get();
-            m_modules->registerModule(std::move(sw));
+            registerModule(std::move(sw));
             m_sinkWindowPtrs.push_back(raw);
         }
     }
@@ -753,7 +1025,7 @@ private:
             cfg.values   = hc.values;
             cfg.periodMs = hc.periodMs;
             cfg.priority = hc.priority;
-            m_modules->registerModule(
+            registerModule(
                 std::make_unique<module::Heartbeat>(std::move(cfg), *t));
         }
     }
@@ -765,8 +1037,9 @@ private:
             cfg.dpId      = ac.dp;
             cfg.expected  = ac.expected;
             cfg.timeoutMs = ac.timeoutMs;
-            m_modules->registerModule(
-                std::make_unique<module::AckWatch>(std::move(cfg), *m_bus));
+            registerModule(
+                std::make_unique<module::AckWatch>(std::move(cfg), *m_bus,
+                                                   m_dps.get()));
         }
     }
 
@@ -785,7 +1058,7 @@ private:
                 e.value   = w.value;
                 cfg.writes.append(e);
             }
-            m_modules->registerModule(
+            registerModule(
                 std::make_unique<module::Command>(std::move(cfg), *t));
         }
     }
@@ -797,8 +1070,7 @@ private:
             if (dc.hasSource) {
                 if (!dc.source.codec.isEmpty()) {
                     sourceCodec = m_codecs->find(dc.source.codec);
-                }
-                if (!sourceCodec) {
+                } else {
                     sourceCodec = m_codecs->find(
                         codec::BuiltinScalarCodec::idFor(dc.type));
                 }
@@ -810,14 +1082,48 @@ private:
             spec.type       = dc.type;
             if (dc.hasSource) spec.source = makePortRef(dc.source, sourceCodec);
             if (dc.hasSink) {
-                spec.sink = makePortRef(dc.sink,
-                    m_codecs->find(codec::BuiltinScalarCodec::idFor(dc.type)));
+                auto sinkCodec = dc.sink.codec.isEmpty()
+                    ? m_codecs->find(codec::BuiltinScalarCodec::idFor(dc.type))
+                    : m_codecs->find(dc.sink.codec);
+                auto sinkRef = makePortRef(dc.sink, std::move(sinkCodec));
+                config::SinkWindowConfig const* owner = nullptr;
+                if (!dc.sink.window.isEmpty()) {
+                    for (auto const& sw : schema.sinkWindows) {
+                        if (sw.moduleId == dc.sink.window) {
+                            owner = &sw;
+                            break;
+                        }
+                    }
+                } else {
+                    int const words = std::max(1, dp::registerCountFor(dc.type));
+                    for (auto const& sw : schema.sinkWindows) {
+                        if (sw.transport != dc.sink.port
+                            || tableFromString(sw.table) != sinkRef.table
+                            || dc.sink.address < sw.startAddress
+                            || qint64(dc.sink.address) + words
+                                > qint64(sw.startAddress) + sw.size) {
+                            continue;
+                        }
+                        owner = &sw;
+                        break;
+                    }
+                }
+                if (owner) {
+                    sinkRef.window    = owner->moduleId;
+                    sinkRef.transport = owner->transport;
+                    sinkRef.table     = tableFromString(owner->table);
+                }
+                spec.sink = std::move(sinkRef);
             }
             spec.uiBinding  = dc.ui;
             spec.persistTag = dc.persist;
 
             auto datapoint = std::make_shared<dp::Datapoint>(std::move(spec));
-            m_dps->registerDp(datapoint);
+            if (!m_dps->registerDp(datapoint)) {
+                throw std::runtime_error(
+                    QStringLiteral("failed to register duplicate/invalid datapoint '%1'")
+                        .arg(dc.id).toStdString());
+            }
             out.emplace(dc.id, datapoint);
             m_datapointById.emplace(dc.id, datapoint);
 
@@ -831,34 +1137,62 @@ private:
                     m_bus->publish(bus::DpChanged{
                         sp->id(), sp->value(), sp->timestamp()});
                 });
+            QObject::connect(datapoint.get(), &dp::Datapoint::stateChanged,
+                m_bus.get(), [this, weak] {
+                    auto sp = weak.lock();
+                    if (!sp) return;
+                    m_bus->publish(bus::DpStateChanged{
+                        sp->id(), sp->value(), int(sp->state()),
+                        QDateTime::currentDateTime()});
+                });
 
             // For Command / Bidirectional datapoints with a SinkWindow sink,
             // wire a writer that encodes the value through the codec then
             // stages into the named SinkWindow. QML calls `dp.write(v)` and
             // the new value lands on the PLC at the next flush tick.
+            auto const sink = datapoint->sink();
             if ((datapoint->kind() == dp::Kind::Command
                  || datapoint->kind() == dp::Kind::Bidirectional)
-                && datapoint->sink().has_value()
-                && !datapoint->sink()->window.isEmpty()) {
-                QString const windowId = datapoint->sink()->window;
+                && sink.has_value()
+                && !sink->window.isEmpty()) {
+                QString const windowId = sink->window;
                 datapoint->setWriter([this, weak, windowId](QVariant v) {
                     auto sp = weak.lock();
-                    if (!sp || !sp->sink().has_value()) return;
-                    auto sink = *sp->sink();
-                    if (!sink.codec) return;
-                    auto encoded = sink.codec->encode(v, sink);
-                    if (encoded.isEmpty()) return;
+                    if (!sp) return;
+                    auto const sinkRef = sp->sink();
+                    if (!sinkRef.has_value()) {
+                        sp->setState(dp::DpState::Error);
+                        return;
+                    }
+                    auto sink = *sinkRef;
+                    if (!sink.codec) {
+                        sp->setState(dp::DpState::Error);
+                        return;
+                    }
+                    QList<quint16> encoded;
+                    try {
+                        encoded = sink.codec->encode(v, sink);
+                    } catch (...) {
+                        sp->setState(dp::DpState::Error);
+                        return;
+                    }
+                    if (encoded.isEmpty()) {
+                        sp->setState(dp::DpState::Error);
+                        return;
+                    }
+                    bool staged = false;
                     for (auto* sw : m_sinkWindowPtrs) {
                         if (sw->id() != windowId) continue;
                         for (int i = 0; i < encoded.size(); ++i) {
-                            quint16 mask = (sink.bit.has_value() && i == 0)
-                                ? quint16(1u << *sink.bit)
-                                : 0xFFFFu;
+                            quint16 const mask = stageMaskFor(
+                                sink, i, encoded.size());
                             sw->stageRegister(sink.address + i,
                                               encoded.at(i), mask);
                         }
+                        staged = true;
                         break;
                     }
+                    if (!staged) sp->setState(dp::DpState::Error);
                 });
             }
         }
@@ -880,7 +1214,7 @@ private:
             wireBindings(*poll, schema, byId, pc.transport, req);
 
             auto* raw = poll.get();
-            m_modules->registerModule(std::move(poll));
+            registerModule(std::move(poll));
             m_pollRangePtrs.push_back(raw);
         }
     }
@@ -909,10 +1243,32 @@ private:
     }
 
 private:
+    struct ServerRouteBinding {
+        dp::PortRef                   source;
+        int                           sourceRegisterCount;
+        std::shared_ptr<dp::Datapoint> sourceDp;
+        std::shared_ptr<dp::Datapoint> targetDp;
+        module::SinkWindow*           target;
+        dp::PortRef                   sink;
+    };
+
+    struct BridgeMirrorBinding {
+        int                           address;
+        std::shared_ptr<dp::Datapoint> datapoint;
+        dp::PortRef                   source;
+    };
+
+#ifdef CORE_HAS_QML
+    QPointer<QQmlContext>                                       m_qml;
+#else
     QQmlContext*                                                m_qml;
+#endif
     QString                                                     m_configDir;
     std::unique_ptr<log::Logger>                                m_logger;
+#ifdef CORE_HAS_QML
+    std::unique_ptr<qml::DatapointQmlBridge>                    m_dpBridge;
     std::unique_ptr<qml::LogBridge>                             m_logBridge;
+#endif
     std::unique_ptr<bus::EventBus>                              m_bus;
     std::unique_ptr<codec::CodecRegistry>                       m_codecs;
     std::unique_ptr<dp::DatapointRegistry>                      m_dps;
@@ -921,13 +1277,19 @@ private:
     std::unique_ptr<plugin::PortRegistry>                       m_ports;
     std::map<QString, std::unique_ptr<transport::Transport>>    m_transports;
     std::vector<std::thread>                                    m_connectThreads;
-    bool                                                        m_started = false;
+    std::atomic_bool                                            m_started{false};
+    bool                                                        m_configLoaded = false;
+    bool                                                        m_configLoadPoisoned = false;
     std::vector<module::PollRange*>                             m_pollRangePtrs;
     std::vector<module::SinkWindow*>                            m_sinkWindowPtrs;
     std::map<QString, std::shared_ptr<dp::Datapoint>>           m_datapointById;
-    QList<config::RouteConfig>                                  m_routes;
+    QHash<QString, QList<ServerRouteBinding>>                   m_serverRouteBindings;
+    QHash<QString, sched::CircuitState>                         m_lastCircuitStates;
     QList<config::BridgeConfig>                                 m_bridges;
-    std::vector<std::vector<std::pair<int, std::shared_ptr<dp::Datapoint>>>> m_bridgeMirrors;
+    std::vector<std::vector<BridgeMirrorBinding>>               m_bridgeMirrors;
+    std::vector<QList<quint16>>                                 m_bridgeMirrorSnapshots;
+    std::vector<std::chrono::steady_clock::time_point>          m_bridgeMirrorLastAt;
+    std::vector<std::shared_ptr<std::atomic_bool>>               m_bridgeMirrorInFlight;
     std::vector<module::SinkWindow*>                            m_bridgeFwdSinks;
     mutable std::mutex                                          m_forwardMtx;
     QHash<QString, bool>                                        m_forwardEnabled;   // server id → 转发使能(默认 true)

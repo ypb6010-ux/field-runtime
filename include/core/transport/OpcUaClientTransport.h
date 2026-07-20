@@ -67,6 +67,8 @@ public:
     void writeAsync(WriteBatch  const& batch, WriteDone done) override;
 
 private:
+    void armReconnectIfConfigured();
+
     class Impl;
     std::unique_ptr<Impl> m_impl;
 };

@@ -3,7 +3,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -49,6 +52,19 @@ TEST_CASE("EventBus delivers to multiple subscribers in registration order",
     REQUIRE(order == std::vector<int>{51, 52});
 }
 
+TEST_CASE("EventBus isolates a throwing subscriber", "[bus][stability]") {
+    core::bus::EventBus bus;
+    int delivered = 0;
+    auto bad = bus.subscribe<Foo>([](Foo const&) {
+        throw std::runtime_error("subscriber failed");
+    });
+    auto good = bus.subscribe<Foo>([&](Foo const&) { ++delivered; });
+
+    REQUIRE_NOTHROW(bus.publish(Foo{1}));
+    REQUIRE(delivered == 1);
+    REQUIRE(bus.stats().totalHandlerFailures == 1);
+}
+
 TEST_CASE("Subscription destruction stops delivery", "[bus][subscription]") {
     core::bus::EventBus bus;
     int received = 0;
@@ -75,6 +91,47 @@ TEST_CASE("Subscription cancel() stops delivery and updates active()",
 
     bus.publish(Foo{2});
     REQUIRE(received == 1);
+}
+
+TEST_CASE("Subscription cancel drains a callback already running on another thread",
+          "[bus][subscription][thread][lifetime]") {
+    core::bus::EventBus bus;
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool entered = false;
+    bool release = false;
+    auto sub = bus.subscribe<Foo>([&](Foo const&) {
+        std::unique_lock lk(mutex);
+        entered = true;
+        cv.notify_all();
+        cv.wait(lk, [&] { return release; });
+    });
+
+    std::thread publisher([&] { bus.publish(Foo{1}); });
+    {
+        std::unique_lock lk(mutex);
+        cv.wait(lk, [&] { return entered; });
+    }
+
+    std::atomic_bool cancelling{false};
+    std::atomic_bool cancelled{false};
+    std::thread canceller([&] {
+        cancelling.store(true, std::memory_order_release);
+        sub.cancel();
+        cancelled.store(true, std::memory_order_release);
+    });
+    while (!cancelling.load(std::memory_order_acquire)) std::this_thread::yield();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    REQUIRE_FALSE(cancelled.load(std::memory_order_acquire));
+
+    {
+        std::lock_guard lk(mutex);
+        release = true;
+    }
+    cv.notify_all();
+    publisher.join();
+    canceller.join();
+    REQUIRE(cancelled.load(std::memory_order_acquire));
 }
 
 TEST_CASE("Subscription is move-only and transfers ownership cleanly",

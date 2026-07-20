@@ -25,6 +25,8 @@ namespace core {
 // Top-level facade. One instance per application; owns all subsystems.
 class CORE_EXPORT ICore {
 public:
+    // With QML support enabled, a non-null context receives `dp`
+    // (DatapointQmlBridge) and `log` (LogBridge) context properties.
     // installDefaultConsole=false lets the app own console output entirely
     // (e.g. wrap a ConsoleSink in its own LogFilter, or omit it on a field box).
     static std::unique_ptr<ICore> create(QQmlContext* qmlContext = nullptr,
@@ -32,6 +34,9 @@ public:
 
     virtual ~ICore() = default;
 
+    // One-shot configuration: call exactly once before start(). A second load
+    // or a load while running is rejected instead of partially mixing two
+    // object graphs. Create a new ICore instance to load another configuration.
     virtual std::expected<void, config::ValidationErrors>
             loadConfig(QString const& tomlPath) = 0;
 

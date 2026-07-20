@@ -76,5 +76,6 @@ TEST_CASE("PortRegistry.bindOut writes an OutPort value to its datapoint",
 TEST_CASE("PluginRegistry.load fails cleanly on a missing DLL", "[plugin]") {
     plugin::PluginRegistry reg;
     REQUIRE_FALSE(reg.load(QStringLiteral("no_such_plugin_xyz")));
+    REQUIRE_FALSE(reg.lastError().isEmpty());
     REQUIRE(reg.all().isEmpty());
 }

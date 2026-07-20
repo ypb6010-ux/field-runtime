@@ -19,7 +19,8 @@ public:
 
     CORE_DISABLE_COPY_MOVE(ModuleRegistry)
 
-    // Register a module. MUST be called before startAll(): once ticking is
+    // Register a uniquely named module. Empty/duplicate ids are rejected.
+    // MUST be called before startAll(): once ticking is
     // live, a tick timer holds a raw FunctionalModule*, so replacing/destroying
     // a module would leave that timer calling a dangling pointer. Returns false
     // (and ignores the module) if called after startAll() without an

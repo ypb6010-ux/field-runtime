@@ -4,6 +4,7 @@
 
 #include <map>
 #include <memory>
+#include <shared_mutex>
 #include <QString>
 
 #include "core/core_global.h"
@@ -26,6 +27,7 @@ public:
     void loadBuiltins();
 
 private:
+    mutable std::shared_mutex                  m_mutex;
     std::map<QString, std::shared_ptr<Codec>> m_codecs;
 };
 

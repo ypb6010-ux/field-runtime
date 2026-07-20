@@ -77,8 +77,8 @@ void DemoController::refresh() {
     QVariantList datapoints;
     for (auto const& dp : m_core.datapoints().all()) {
         QString srcId, srcKind;
-        if (dp->source().has_value()) {
-            srcId = dp->source()->transport;
+        if (auto const source = dp->source()) {
+            srcId = source->transport;
             if (auto* t = m_core.transport(srcId)) srcKind = kindText(t->kind());
         }
         datapoints.append(QVariantMap{

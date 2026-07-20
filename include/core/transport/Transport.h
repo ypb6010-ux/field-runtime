@@ -16,16 +16,10 @@ namespace core::transport {
 // MUST go through `scheduler().submit(...)`; direct calls to `read` /
 // `writeBatch` are reserved for the scheduler's pump.
 //
-// Phase 1 contract: read / writeBatch are synchronous. Concrete
-// implementations either complete the I/O inline (mock, test fixtures) or
-// block the calling thread waiting for the underlying QModbusReply / socket.
-// Because every caller routes through `scheduler().submit(work)` with a
-// `std::function<void()>`, the scheduler thread serialises requests for
-// half-duplex devices regardless of whether the I/O itself is sync or async.
-//
-// Phase 2 will add `coro::Lazy<ReadResult> readAsync(...)` overloads so
-// upper-layer coroutines (PollRange, SinkWindow, AckWatch) can be expressed
-// without blocking a thread per pending request.
+// read / writeBatch are synchronous compatibility entry points. Concrete
+// implementations either complete inline or block the caller while their
+// device-thread operation finishes. Runtime modules use readAsync/writeAsync
+// through the scheduler so device waits do not park the calling thread.
 class CORE_EXPORT Transport {
 public:
     virtual ~Transport() = default;
@@ -39,8 +33,8 @@ public:
 
     virtual sched::RequestScheduler& scheduler() = 0;
 
-    // Internal — called from inside scheduler.submit work lambdas, never
-    // from arbitrary user code.
+    // Synchronous compatibility API. Do not call these from the transport's
+    // own worker thread; use readAsync/writeAsync there.
     virtual ReadResult  read      (ReadRequest const& req)         = 0;
     virtual WriteResult writeBatch(WriteBatch  const& batch)       = 0;
 
