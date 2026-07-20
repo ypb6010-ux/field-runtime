@@ -391,7 +391,7 @@ public:
             auto const previous = m_lastCircuitStates.value(
                 id, sched::CircuitState::Closed);
             if (stats.circuitState != previous) {
-                bus::TransportEventKind kind;
+                bus::TransportEventKind kind {};
                 switch (stats.circuitState) {
                     case sched::CircuitState::Open:
                         kind = bus::TransportEventKind::CircuitOpened;
