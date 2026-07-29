@@ -59,6 +59,10 @@ public:
     // this before joining its worker thread so a completion firing during
     // teardown cannot pump the next request into a half-destroyed transport.
     virtual void stopAsync() = 0;
+    // Re-enable a scheduler after a deliberate transport stop/start cycle.
+    // stopAsync() discards queued work from the previous run; modules submit
+    // fresh work once the runtime starts again.
+    virtual void startAsync() = 0;
 
     virtual int            cancelModule(std::string const& moduleId) = 0;
     virtual SchedulerStats stats() const                         = 0;

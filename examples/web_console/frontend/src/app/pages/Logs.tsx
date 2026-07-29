@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { AlertCircle, Download, Eye, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { AlertCircle, Download, Eye, Loader2, RefreshCw } from "lucide-react";
 import { apiGet } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { Button } from "../components/ui/button";
@@ -15,9 +15,6 @@ import {
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from "../components/ui/sheet";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
-} from "../components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { Label } from "../components/ui/label";
 
@@ -56,6 +53,12 @@ const EMPTY: Filters = { range: "24h", level: "all", source: "all", user: "all",
 const formatTs = (ts: string) => (ts ? new Date(+ts).toLocaleString() : "-");
 const rowKey = (parts: string[]) => parts.join("|");
 const levelMeta = (level: string) => STATUS_META[level as LogLevel] ?? { label: level || "-", cls: "bg-muted text-muted-foreground border-border" };
+const RANGE_MS: Record<string, number> = {
+  "1h": 60 * 60 * 1000,
+  "24h": 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+  "30d": 30 * 24 * 60 * 60 * 1000,
+};
 
 export function Logs() {
   const [filters, setFilters] = useState<Filters>(EMPTY);
@@ -66,13 +69,18 @@ export function Logs() {
   const [eventsError, setEventsError] = useState<string | null>(null);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
-  const [clearOpen, setClearOpen] = useState(false);
+  const since = () => Date.now() - (RANGE_MS[filters.range] ?? RANGE_MS["24h"]);
 
   async function loadEvents(level = filters.level) {
     setEventsLoading(true);
     setEventsError(null);
     try {
-      const p = new URLSearchParams({ level: level === "all" ? "" : level, page: "1", size: "100" });
+      const p = new URLSearchParams({
+        level: level === "all" ? "" : level,
+        page: "0",
+        size: "1000",
+        since: String(since()),
+      });
       setEvents(await apiGet<SystemEvent[]>(`/system/events?${p.toString()}`));
     } catch (e) {
       setEventsError(e instanceof Error ? e.message : "加载失败");
@@ -85,7 +93,9 @@ export function Logs() {
     setAuditLoading(true);
     setAuditError(null);
     try {
-      setAudit(await apiGet<AuditLog[]>("/audit?page=1&size=100"));
+      setAudit(await apiGet<AuditLog[]>(
+        `/audit?page=0&size=1000&since=${since()}`,
+      ));
     } catch (e) {
       setAuditError(e instanceof Error ? e.message : "加载失败");
     } finally {
@@ -97,8 +107,8 @@ export function Logs() {
     await Promise.all([loadEvents(), loadAudit()]);
   }
 
-  useEffect(() => { loadEvents(); }, [filters.level]);
-  useEffect(() => { loadAudit(); }, []);
+  useEffect(() => { loadEvents(); }, [filters.level, filters.range]);
+  useEffect(() => { loadAudit(); }, [filters.range]);
 
   const sources = useMemo(() => Array.from(new Set(events.map((r) => r.source).filter(Boolean))), [events]);
   const users = useMemo(() => Array.from(new Set(audit.map((r) => r.user).filter(Boolean))), [audit]);
@@ -122,6 +132,28 @@ export function Logs() {
     });
   }, [audit, filters]);
 
+  function exportVisible() {
+    const payload = JSON.stringify(
+      {
+        exportedAt: new Date().toISOString(),
+        range: filters.range,
+        events: systemRows,
+        audit: auditRows,
+      },
+      null,
+      2,
+    );
+    const href = URL.createObjectURL(
+      new Blob([payload], { type: "application/json;charset=utf-8" }),
+    );
+    const link = document.createElement("a");
+    link.href = href;
+    link.download = `field-console-logs-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    link.click();
+    URL.revokeObjectURL(href);
+    toast.success(`已导出 ${systemRows.length + auditRows.length} 条当前筛选结果`);
+  }
+
   return (
     <>
       <PageHeader
@@ -133,11 +165,8 @@ export function Logs() {
             <Button variant="ghost" size="sm" className="gap-1.5" onClick={loadAll}>
               <RefreshCw className="size-3.5" />刷新
             </Button>
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => toast.message("已导出日志（演示）")}>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={exportVisible}>
               <Download className="size-3.5" />导出
-            </Button>
-            <Button variant="destructive" size="sm" className="gap-1.5" onClick={() => setClearOpen(true)}>
-              <Trash2 className="size-3.5" />清理日志
             </Button>
           </>
         }
@@ -274,18 +303,6 @@ export function Logs() {
         </SheetContent>
       </Sheet>
 
-      <Dialog open={clearOpen} onOpenChange={setClearOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>确认清理日志？</DialogTitle>
-            <DialogDescription>将按当前保留策略清理过期系统事件和审计日志，该操作会写入审计日志。</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setClearOpen(false)}>取消</Button>
-            <Button variant="destructive" onClick={() => { setClearOpen(false); toast.success("已提交日志清理任务"); }}>确认清理</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }

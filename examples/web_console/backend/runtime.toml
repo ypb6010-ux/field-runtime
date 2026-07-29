@@ -1,6 +1,7 @@
 # Default runtime wiring for the web_console RuntimeHost: pulls live data from
-# field_console_dataservice (Modbus :1502 / S7 :102 / OPC UA :4840). In W6 this
-# is regenerated from the DB config on "apply".
+# field_console_dataservice (Modbus :1502 / S7 :102 / OPC UA :4840). A
+# successful configuration publish generates <database>.runtime.toml, which is
+# preferred on subsequent starts.
 [meta]
 project = "web_console_runtime"
 log_level = "warn"

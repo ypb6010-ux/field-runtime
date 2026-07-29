@@ -78,24 +78,33 @@ void Heartbeat::driveTick() {
     sched::RequestTag tag;
     tag.moduleId = m_id;
     tag.priority = m_priority;
+    auto const runGeneration =
+        m_runGeneration.load(std::memory_order_acquire);
 
     auto const submission = m_transport->scheduler().submitAsync(tag,
-        [this, batch](sched::AsyncDone done) {
+        [this, batch, runGeneration](sched::AsyncDone done) {
             m_transport->writeAsync(batch,
-                [this, done = std::move(done)](transport::WriteResult w) mutable {
-                    m_inFlight.store(false, std::memory_order_release);
+                [this, runGeneration,
+                 done = std::move(done)](transport::WriteResult w) mutable {
+                    if (m_runGeneration.load(std::memory_order_acquire)
+                        == runGeneration) {
+                        m_inFlight.store(false, std::memory_order_release);
+                    }
                     done(w.ok);
                 });
         });
 
     if (submission.kind == sched::ResultKind::Ok) {
         m_lastSentAt = now;
-    } else {
+    } else if (m_runGeneration.load(std::memory_order_acquire)
+               == runGeneration) {
         m_inFlight.store(false, std::memory_order_release);
     }
 }
 
 void Heartbeat::start() {
+    m_runGeneration.fetch_add(1, std::memory_order_acq_rel);
+    m_inFlight.store(false, std::memory_order_release);
     m_started    = true;
     // Anchor so the first onTick fires immediately if periodMs > 0 would
     // otherwise consider us "too soon": setting it back makes the first
@@ -103,8 +112,12 @@ void Heartbeat::start() {
     m_lastSentAt = clock_t::time_point{};
 }
 
-void Heartbeat::stop()   { m_started = false; }
-void Heartbeat::pause()  { m_started = false; }
+void Heartbeat::stop()   {
+    m_runGeneration.fetch_add(1, std::memory_order_acq_rel);
+    m_started = false;
+    m_inFlight.store(false, std::memory_order_release);
+}
+void Heartbeat::pause()  { stop(); }
 void Heartbeat::resume() { m_started = true; }
 
 } // namespace core::module

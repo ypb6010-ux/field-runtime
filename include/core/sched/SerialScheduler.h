@@ -32,6 +32,7 @@ public:
     SchedulerStats stats() const override;
 
     void stopAsync() override;
+    void startAsync() override;
 
     // Test hook — record a synthetic failure to drive the circuit-breaker.
     void recordFailureForTesting();

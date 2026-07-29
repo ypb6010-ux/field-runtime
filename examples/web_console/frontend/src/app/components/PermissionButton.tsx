@@ -25,6 +25,7 @@ interface PermissionButtonProps {
   children: ReactNode;
   size?: "default" | "sm" | "lg";
   className?: string;
+  disabled?: boolean;
 }
 
 /**
@@ -42,6 +43,7 @@ export function PermissionButton({
   children,
   size = "default",
   className,
+  disabled = false,
 }: PermissionButtonProps) {
   if (!allowed) {
     return (
@@ -64,7 +66,7 @@ export function PermissionButton({
     return (
       <AlertDialog>
         <AlertDialogTrigger asChild>
-          <Button variant="destructive" size={size} className={className}>
+          <Button variant="destructive" size={size} className={className} disabled={disabled}>
             {children}
           </Button>
         </AlertDialogTrigger>
@@ -77,6 +79,7 @@ export function PermissionButton({
             <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction
               onClick={onAction}
+              disabled={disabled}
               className="bg-destructive text-white hover:bg-destructive/90"
             >
               {confirm.confirmText ?? "确认执行"}
@@ -88,7 +91,7 @@ export function PermissionButton({
   }
 
   return (
-    <Button variant={danger ? "destructive" : "default"} size={size} className={className} onClick={onAction}>
+    <Button variant={danger ? "destructive" : "default"} size={size} className={className} onClick={onAction} disabled={disabled}>
       {children}
     </Button>
   );

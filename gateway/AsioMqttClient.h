@@ -66,8 +66,9 @@ private:
     void scheduleReconnect();
     void failAndReconnect();
     void flushPending();
-    void writePacket(std::vector<std::uint8_t> packet,
+    bool writePacket(std::vector<std::uint8_t> packet,
                      std::function<void(bool)> done = {});
+    void failWriteQueue();
     void startWrite();
     void closeSocket();
 
@@ -82,6 +83,7 @@ private:
     gateway_asio::ip::tcp::resolver m_resolver;
     std::unique_ptr<gateway_asio::steady_timer> m_pingTimer;
     std::unique_ptr<gateway_asio::steady_timer> m_reconnectTimer;
+    std::unique_ptr<gateway_asio::steady_timer> m_connectTimer;
     std::deque<PendingPublish> m_pending;
     std::deque<PacketWrite> m_writeQueue;
     std::map<std::uint16_t, std::function<void(bool)>> m_inflight;
@@ -89,8 +91,10 @@ private:
     bool m_started = false;
     bool m_connected = false;
     bool m_writing = false;
+    bool m_waitingPingResponse = false;
     int m_reconnectDelayMs = 500;
     std::uint16_t m_nextPacketId = 0;
+    std::uint64_t m_generation = 0;
 };
 
 } // namespace core::gateway

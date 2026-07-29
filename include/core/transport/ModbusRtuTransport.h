@@ -46,6 +46,7 @@ public:
     std::string           id()    const override;
     TransportKind         kind()  const override;
     ConnectionState       state() const override;
+    TransportStatus       status() const override;
 
     std::expected<void, std::string> connect()    override;
     void                             disconnect() override;

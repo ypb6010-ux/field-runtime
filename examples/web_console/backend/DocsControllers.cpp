@@ -6,7 +6,9 @@
 
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <utility>
 
 #include <drogon/drogon.h>
 
@@ -34,14 +36,20 @@ char const* kSwaggerHtml = R"HTML(<!doctype html>
 
 std::string readFile(std::string const& path) {
     std::ifstream f(path, std::ios::binary);
+    if (!f) {
+        throw std::runtime_error("cannot open OpenAPI document: " + path);
+    }
     std::ostringstream ss;
     ss << f.rdbuf();
+    if (!f.eof() && f.fail()) {
+        throw std::runtime_error("cannot read OpenAPI document: " + path);
+    }
     return ss.str();
 }
 
 } // namespace
 
-void registerDocs() {
+void registerDocs(std::string openapiPath) {
     app().registerHandler("/api/docs",
         [](HttpRequestPtr const&, std::function<void(HttpResponsePtr const&)>&& cb) {
             auto r = HttpResponse::newHttpResponse();
@@ -51,11 +59,21 @@ void registerDocs() {
         }, {Get});
 
     app().registerHandler("/api/docs/openapi.yaml",
-        [](HttpRequestPtr const&, std::function<void(HttpResponsePtr const&)>&& cb) {
-            auto r = HttpResponse::newHttpResponse();
-            r->setContentTypeString("application/yaml");
-            r->setBody(readFile(WEB_CONSOLE_OPENAPI));
-            cb(r);
+        [openapiPath = std::move(openapiPath)](
+            HttpRequestPtr const&,
+            std::function<void(HttpResponsePtr const&)>&& cb) {
+            try {
+                auto r = HttpResponse::newHttpResponse();
+                r->setContentTypeString("application/yaml");
+                r->setBody(readFile(openapiPath));
+                cb(r);
+            } catch (std::exception const& error) {
+                auto r = HttpResponse::newHttpResponse();
+                r->setStatusCode(k500InternalServerError);
+                r->setContentTypeCode(CT_TEXT_PLAIN);
+                r->setBody(error.what());
+                cb(r);
+            }
         }, {Get});
 }
 

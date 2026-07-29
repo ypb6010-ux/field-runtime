@@ -101,6 +101,7 @@ private:
     std::chrono::steady_clock::time_point m_lastFlushAt;
     mutable std::mutex                   m_mtx;
     std::atomic<bool>                    m_inFlight{false};
+    std::atomic<std::uint64_t>           m_runGeneration{0};
 };
 
 } // namespace core::module

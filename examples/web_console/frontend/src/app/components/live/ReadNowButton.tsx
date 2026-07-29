@@ -16,13 +16,11 @@ interface ReadNowState {
 /** 立即拉取按钮（行内小图标按钮，结果显示在 ReadNowResultPanel）*/
 export function ReadNowButton({
   datapointId,
-  canControl,
   wsDisconnected,
   variant = "icon",
   onResult,
 }: {
   datapointId: string;
-  canControl: boolean;
   wsDisconnected?: boolean;
   variant?: "icon" | "full";
   onResult?: (r: ReadResult) => void;
@@ -34,23 +32,6 @@ export function ReadNowButton({
     const r = await readDatapoint(datapointId);
     setLoading(false);
     onResult?.(r);
-  }
-
-  if (!canControl) {
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex">
-            <Button variant="ghost" size={variant === "icon" ? "icon" : "sm"} disabled
-              className={cn(variant === "icon" && "size-7", "opacity-50 cursor-not-allowed")}>
-              <Zap className="size-3.5" />
-              {variant === "full" && " 立即拉取"}
-            </Button>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent>无控制权限，请联系管理员</TooltipContent>
-      </Tooltip>
-    );
   }
 
   return (
@@ -66,11 +47,11 @@ export function ReadNowButton({
           {loading
             ? <Loader2 className="size-3.5 animate-spin" />
             : <Zap className="size-3.5" />}
-          {variant === "full" && (loading ? "拉取中…" : "立即拉取")}
+          {variant === "full" && (loading ? "刷新中…" : "刷新快照")}
         </Button>
       </TooltipTrigger>
       <TooltipContent>
-        {wsDisconnected ? "WS 已断开，将通过 HTTP 接口拉取" : "立即拉取最新值"}
+        {wsDisconnected ? "WS 已断开，通过 HTTP 刷新缓存快照" : "刷新运行时缓存快照"}
       </TooltipContent>
     </Tooltip>
   );
@@ -78,9 +59,8 @@ export function ReadNowButton({
 
 /** ReadNowResultPanel — 展示在 DatapointDetailDrawer 中的拉取结果 */
 export function ReadNowResultPanel({
-  canControl, datapointId,
+  datapointId,
 }: {
-  canControl: boolean;
   datapointId: string;
 }) {
   const [state, setState] = useState<ReadNowState>({ status: "idle" });
@@ -94,44 +74,30 @@ export function ReadNowResultPanel({
   return (
     <div className="space-y-2">
       {/* 拉取按钮 */}
-      {canControl ? (
-        <Button
-          variant="outline"
-          size="sm"
-          className="gap-1.5"
-          disabled={state.status === "loading"}
-          onClick={handleRead}
-        >
-          {state.status === "loading"
-            ? <Loader2 className="size-3.5 animate-spin" />
-            : <Zap className="size-3.5" />}
-          {state.status === "loading" ? "拉取中…" : "立即拉取"}
-        </Button>
-      ) : (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex">
-              <Button variant="outline" size="sm" disabled className="gap-1.5 cursor-not-allowed">
-                <Zap className="size-3.5" />
-                立即拉取
-              </Button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent>无控制权限，请联系管理员</TooltipContent>
-        </Tooltip>
-      )}
+      <Button
+        variant="outline"
+        size="sm"
+        className="gap-1.5"
+        disabled={state.status === "loading"}
+        onClick={handleRead}
+      >
+        {state.status === "loading"
+          ? <Loader2 className="size-3.5 animate-spin" />
+          : <Zap className="size-3.5" />}
+        {state.status === "loading" ? "刷新中…" : "刷新快照"}
+      </Button>
 
       {/* 结果展示 */}
       {state.status === "idle" && (
         <div className="rounded-md border border-dashed border-border bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground">
-          点击"立即拉取"通过 POST /data/read 获取最新值
+          通过 <code>GET /data/points/{"{id}"}</code> 刷新运行时缓存快照
         </div>
       )}
 
       {state.status === "loading" && (
         <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground">
           <Loader2 className="size-3.5 animate-spin text-primary" />
-          正在读取…
+          正在刷新…
         </div>
       )}
 
@@ -139,7 +105,7 @@ export function ReadNowResultPanel({
         <div className="space-y-2 rounded-md border border-status-success-border bg-status-success-bg px-3 py-2.5">
           <div className="flex items-center gap-1.5 text-xs text-status-success">
             <CheckCircle2 className="size-3.5" />
-            读取成功
+            快照刷新成功
           </div>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
             <dt className="text-muted-foreground">value</dt>
@@ -159,7 +125,7 @@ export function ReadNowResultPanel({
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 text-xs text-status-error">
               <XCircle className="size-3.5" />
-              读取失败
+              快照刷新失败
             </div>
             {state.result.errorType && (
               <span className="rounded border border-status-error-border bg-card/60 px-1.5 py-0.5 font-mono text-[10px] text-status-error">

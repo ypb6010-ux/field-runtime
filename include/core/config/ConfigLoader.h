@@ -3,7 +3,9 @@
 #pragma once
 
 #include <expected>
+#include <span>
 #include <string>
+#include <string_view>
 
 #include "core/core_global.h"
 #include "core/config/ConfigSchema.h"
@@ -16,7 +18,9 @@ public:
     // Parse a TOML file and run the full schema validation. On failure
     // returns the full list of validation errors.
     std::expected<ConfigSchema, ValidationErrors>
-        loadFromToml(std::string const& path);
+        loadFromToml(
+            std::string const& path,
+            std::span<std::string_view const> allowedRootExtensions = {});
 
     std::expected<void, ValidationErrors>
         validate(ConfigSchema const& schema);

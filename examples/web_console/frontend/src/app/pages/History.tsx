@@ -42,33 +42,49 @@ export function History() {
   const [tableRows, setTableRows] = useState<{ ts: number; id: string; value: string; quality: string }[]>([]);
 
   useEffect(() => {
-    apiGet<DpRow[]>("/datapoints")
+    apiGet<DpRow[]>("/data/catalog")
       .then((dps) => { setPoints(dps); setSelected(dps.slice(0, 2).map((d) => d.id)); })
       .catch(() => toast.error("加载采集点失败"));
   }, []);
 
   async function runQuery() {
     if (selected.length === 0) { toast.error("请先选择至少一个点位"); return; }
+    const fromMs = new Date(from).getTime();
+    const toMs = new Date(to).getTime();
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs > toMs) {
+      toast.error("请输入有效且升序的时间范围");
+      return;
+    }
     setLoading(true);
     try {
-      const fromMs = new Date(from).getTime();
-      const toMs = new Date(to).getTime();
-      const results = await Promise.all(
-        selected.map((id) => apiGet<HistResp>(`/data/history?id=${encodeURIComponent(id)}&from=${fromMs}&to=${toMs}&size=500`)
-          .then((r) => ({ id, rows: r.rows })).catch(() => ({ id, rows: [] as HistRow[] }))),
+      const settled = await Promise.allSettled(
+        selected.map((id) => apiGet<HistResp>(
+          `/data/history?id=${encodeURIComponent(id)}&from=${fromMs}&to=${toMs}&size=500`,
+        ).then((response) => ({ id, rows: response.rows }))),
       );
+      const results = settled.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      const failures = settled.length - results.length;
+      if (failures === settled.length) {
+        throw new Error("所有点位的历史查询均失败");
+      }
+      if (failures > 0) {
+        toast.warning(`${failures} 个点位查询失败，已显示其余结果`);
+      }
       // 合并图表（ts 对齐）
       const byTs = new Map<number, Record<string, number | string>>();
       const flat: { ts: number; id: string; value: string; quality: string }[] = [];
       for (const { id, rows } of results) {
         for (const r of rows) {
           if (!byTs.has(r.ts)) byTs.set(r.ts, { ts: r.ts, time: hhmmss(r.ts) });
-          byTs.get(r.ts)![id] = r.value_num ?? (Number(r.value_text) || 0);
+          const numeric = r.value_num ?? Number(r.value_text);
+          if (Number.isFinite(numeric)) byTs.get(r.ts)![id] = numeric;
           flat.push({ ts: r.ts, id, value: r.value_text || String(r.value_num ?? "-"), quality: r.quality });
         }
       }
       setChart([...byTs.values()].sort((a, b) => (a.ts as number) - (b.ts as number)));
-      setTableRows(flat.sort((a, b) => b.ts - a.ts).slice(0, 200));
+      setTableRows(flat.sort((a, b) => b.ts - a.ts));
       setQueried(true);
       const n = results.reduce((s, r) => s + r.rows.length, 0);
       if (n === 0) toast.message("该时间范围暂无历史样本（后端采样每 2s 写入）");
@@ -78,13 +94,38 @@ export function History() {
   }
 
   function toggle(id: string) {
-    setSelected((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+    setSelected((current) => {
+      if (current.includes(id)) return current.filter((item) => item !== id);
+      if (current.length >= 5) {
+        toast.error("趋势对比最多选择 5 个点位");
+        return current;
+      }
+      return [...current, id];
+    });
   }
 
   const csv = useMemo(() => () => {
-    const lines = ["time,id,value,quality", ...tableRows.map((r) => `${hhmmss(r.ts)},${r.id},${r.value},${r.quality}`)];
-    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
-    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "history.csv"; a.click();
+    const cell = (value: string) => `"${value.replace(/"/g, "\"\"")}"`;
+    const lines = [
+      "timestamp,time,id,value,quality",
+      ...tableRows.map((row) =>
+        [
+          row.ts,
+          cell(new Date(row.ts).toLocaleString()),
+          cell(row.id),
+          cell(row.value),
+          cell(row.quality),
+        ].join(","),
+      ),
+    ];
+    const href = URL.createObjectURL(
+      new Blob(["\uFEFF", lines.join("\r\n")], { type: "text/csv;charset=utf-8" }),
+    );
+    const link = document.createElement("a");
+    link.href = href;
+    link.download = "history.csv";
+    link.click();
+    URL.revokeObjectURL(href);
   }, [tableRows]);
 
   return (
@@ -152,8 +193,8 @@ export function History() {
                   <TableRow><TableHead>时间</TableHead><TableHead>点位</TableHead><TableHead>值</TableHead><TableHead>质量</TableHead></TableRow>
                 </TableHeader>
                 <TableBody>
-                  {tableRows.map((r, i) => (
-                    <TableRow key={i}>
+                  {tableRows.slice(0, 200).map((r) => (
+                    <TableRow key={`${r.id}-${r.ts}`}>
                       <TableCell className="font-mono text-xs">{hhmmss(r.ts)}</TableCell>
                       <TableCell className="font-medium">{r.id}</TableCell>
                       <TableCell>{r.value}</TableCell>
@@ -163,6 +204,11 @@ export function History() {
                   {tableRows.length === 0 && <TableRow><TableCell colSpan={4} className="h-24 text-center text-muted-foreground">该范围无样本</TableCell></TableRow>}
                 </TableBody>
               </Table>
+              {tableRows.length > 200 && (
+                <div className="border-t px-4 py-2 text-xs text-muted-foreground">
+                  表格仅展示最新 200 条；导出文件包含本次查询返回的全部 {tableRows.length} 条。
+                </div>
+              )}
             </div>
           </>
         )}

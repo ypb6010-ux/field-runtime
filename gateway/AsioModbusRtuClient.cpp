@@ -140,6 +140,7 @@ std::expected<void, std::string> AsioModbusRtuClient::applySerialOptions() {
 }
 
 std::expected<void, std::string> AsioModbusRtuClient::connect() {
+    if (m_scheduler) m_scheduler->startAsync();
     std::lock_guard lk(m_portMtx);
     m_state.store(transport::ConnectionState::Connecting, std::memory_order_release);
 
@@ -179,7 +180,8 @@ transport::ReadResult AsioModbusRtuClient::read(transport::ReadRequest const& re
         out.errorMessage = "Modbus RTU port is not connected";
         return out;
     }
-    if (req.count <= 0 || req.count > 125 || req.startAddress < 0) {
+    if (req.count <= 0 || req.count > 125 || req.startAddress < 0
+        || std::int64_t(req.startAddress) + req.count > 65536) {
         out.errorMessage = "invalid Modbus read range";
         return out;
     }
@@ -224,7 +226,9 @@ transport::WriteResult AsioModbusRtuClient::writeBatch(transport::WriteBatch con
     if (batch.table != core::RegisterTable::HoldingRegister) {
         return {false, "unsupported Modbus write table"};
     }
-    if (batch.startAddress < 0 || batch.values.empty() || batch.values.size() > 123) {
+    if (batch.startAddress < 0 || batch.values.empty()
+        || batch.values.size() > 123
+        || std::int64_t(batch.startAddress) + batch.values.size() > 65536) {
         return {false, "invalid Modbus write range"};
     }
 
@@ -258,7 +262,8 @@ void AsioModbusRtuClient::readAsync(transport::ReadRequest const& req, ReadDone 
         done(std::move(out));
         return;
     }
-    if (req.count <= 0 || req.count > 125 || req.startAddress < 0) {
+    if (req.count <= 0 || req.count > 125 || req.startAddress < 0
+        || std::int64_t(req.startAddress) + req.count > 65536) {
         out.errorMessage = "invalid Modbus read range";
         done(std::move(out));
         return;
@@ -311,7 +316,9 @@ void AsioModbusRtuClient::writeAsync(transport::WriteBatch const& batch, WriteDo
         done({false, "unsupported Modbus write table"});
         return;
     }
-    if (batch.startAddress < 0 || batch.values.empty() || batch.values.size() > 123) {
+    if (batch.startAddress < 0 || batch.values.empty()
+        || batch.values.size() > 123
+        || std::int64_t(batch.startAddress) + batch.values.size() > 65536) {
         done({false, "invalid Modbus write range"});
         return;
     }

@@ -93,6 +93,20 @@ bool parseTable(std::string const& text, core::RegisterTable& table) {
     return false;
 }
 
+bool constantTimeEqual(std::string const& lhs, std::string const& rhs) {
+    std::size_t const size = std::max(lhs.size(), rhs.size());
+    unsigned difference =
+        static_cast<unsigned>(lhs.size() ^ rhs.size());
+    for (std::size_t i = 0; i < size; ++i) {
+        unsigned char const left =
+            i < lhs.size() ? static_cast<unsigned char>(lhs[i]) : 0;
+        unsigned char const right =
+            i < rhs.size() ? static_cast<unsigned char>(rhs[i]) : 0;
+        difference |= static_cast<unsigned>(left ^ right);
+    }
+    return difference == 0;
+}
+
 std::string transportKindText(transport::TransportKind kind) {
     switch (kind) {
         case transport::TransportKind::ModbusTcpClient: return "ModbusTcpClient";
@@ -197,6 +211,14 @@ void ControlSocket::stop() {
         m_acceptor->close(ignored);
     }
     m_acceptor.reset();
+    for (auto const& socket : m_clients) {
+        if (!socket) continue;
+        socket->cancel(ignored);
+        socket->shutdown(
+            gateway_asio::ip::tcp::socket::shutdown_both, ignored);
+        socket->close(ignored);
+    }
+    m_clients.clear();
 }
 
 void ControlSocket::startAccept() {
@@ -210,7 +232,10 @@ void ControlSocket::startAccept() {
 }
 
 void ControlSocket::handleClient(std::shared_ptr<TcpSocket> socket) {
-    auto buffer = std::make_shared<gateway_asio::streambuf>();
+    static constexpr std::size_t kMaxCommandBytes = 64 * 1024;
+    m_clients.insert(socket);
+    auto buffer =
+        std::make_shared<gateway_asio::streambuf>(kMaxCommandBytes);
     auto authenticated = std::make_shared<bool>(false);
     readCommand(std::move(socket), std::move(buffer), std::move(authenticated));
 }
@@ -220,7 +245,10 @@ void ControlSocket::readCommand(std::shared_ptr<TcpSocket> socket,
                                 std::shared_ptr<bool> authenticated) {
     gateway_asio::async_read_until(*socket, *buffer, '\n',
         [this, socket, buffer, authenticated](gateway_error_code const& ec, std::size_t) {
-            if (ec) return;
+            if (ec) {
+                m_clients.erase(socket);
+                return;
+            }
             std::istream is(buffer.get());
             std::string line;
             std::getline(is, line);
@@ -240,7 +268,10 @@ void ControlSocket::writeResponse(std::shared_ptr<TcpSocket> socket,
     gateway_asio::async_write(*socket, gateway_asio::buffer(*shared),
         [this, socket, buffer, authenticated, shared](gateway_error_code const& ec,
                                                       std::size_t) {
-            if (ec) return;
+            if (ec) {
+                m_clients.erase(socket);
+                return;
+            }
             readCommand(socket, buffer, authenticated);
         });
 }
@@ -282,7 +313,7 @@ std::string ControlSocket::handleAuth(std::vector<std::string> const& parts,
                                       bool& authenticated) const {
     if (m_config.authToken.empty()) return errorJson("auth disabled");
     if (parts.size() != 2) return errorJson("usage: auth <token>");
-    if (parts[1] != m_config.authToken) {
+    if (!constantTimeEqual(parts[1], m_config.authToken)) {
         authenticated = false;
         return errorJson("invalid token");
     }
@@ -349,7 +380,7 @@ void ControlSocket::handleWrite(std::vector<std::string> const& parts,
     }
 
     int address = 0;
-    if (!parseInt(parts[3], address) || address < 0) {
+    if (!parseInt(parts[3], address) || address < 0 || address > 65535) {
         done(errorJson("invalid address"));
         return;
     }
@@ -363,6 +394,11 @@ void ControlSocket::handleWrite(std::vector<std::string> const& parts,
             return;
         }
         values.push_back(value);
+    }
+    if (values.size() > 123
+        || std::uint64_t(address) + values.size() > 65536u) {
+        done(errorJson("write range exceeds protocol limits"));
+        return;
     }
 
     transport::WriteBatch batch;

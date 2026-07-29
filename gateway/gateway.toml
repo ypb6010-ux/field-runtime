@@ -139,4 +139,4 @@ write_start = 10
 write_count = 1
 mirror_start = 0
 mirror_count = 4
-mirror_period_ms = 100
+mirror_policy = "AfterPoll"

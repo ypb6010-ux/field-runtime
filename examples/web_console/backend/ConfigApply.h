@@ -7,8 +7,7 @@
 namespace wc {
 class RuntimeHost;
 
-// W6 hot-reload endpoints: builds a gateway TOML from the DB config and reloads
-// the RuntimeHost on apply. `runtimeTomlPath` is where the generated config is
-// written (the same file the RuntimeHost loads).
+// Builds gateway TOML from the database draft and transactionally reloads the
+// RuntimeHost. `runtimeTomlPath` is the durable generated configuration.
 void registerConfigApply(RuntimeHost& runtime, std::string runtimeTomlPath);
 }

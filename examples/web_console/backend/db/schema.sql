@@ -8,8 +8,8 @@
 CREATE TABLE IF NOT EXISTS transports (
     id            TEXT PRIMARY KEY,
     name          TEXT NOT NULL DEFAULT '',
-    kind          TEXT NOT NULL,            -- modbus_tcp_client / opc_ua_client / mqtt_client / s7_client
-    enabled       INTEGER NOT NULL DEFAULT 1,
+    kind          TEXT NOT NULL CHECK(kind IN ('modbus_tcp_client','opc_ua_client','s7_client')),
+    enabled       INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
     params_json   TEXT NOT NULL DEFAULT '{}',
     scheduler_json TEXT NOT NULL DEFAULT '{}',
     created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
@@ -33,7 +33,10 @@ CREATE TABLE IF NOT EXISTS datapoints (
     scale         REAL NOT NULL DEFAULT 1.0,
     codec_id      TEXT REFERENCES codecs(id) ON DELETE SET NULL,
     kind          TEXT NOT NULL DEFAULT 'Status',
-    enabled       INTEGER NOT NULL DEFAULT 1
+    enabled       INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+    CHECK(addr BETWEEN 0 AND 65535),
+    CHECK(scale != 0),
+    CHECK(kind = 'Status')
 );
 CREATE INDEX IF NOT EXISTS ix_datapoints_transport ON datapoints(transport_id);
 
@@ -44,14 +47,18 @@ CREATE TABLE IF NOT EXISTS poll_ranges (
     start         INTEGER NOT NULL DEFAULT 0,
     count         INTEGER NOT NULL DEFAULT 1,
     period_ms     INTEGER NOT NULL DEFAULT 1000,
-    enabled       INTEGER NOT NULL DEFAULT 1
+    enabled       INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+    CHECK(start BETWEEN 0 AND 65535),
+    CHECK(count BETWEEN 1 AND 125),
+    CHECK(start + count <= 65536),
+    CHECK(period_ms > 0)
 );
 CREATE INDEX IF NOT EXISTS ix_polls_transport ON poll_ranges(transport_id);
 
 CREATE TABLE IF NOT EXISTS conversion_rules (
     id            TEXT PRIMARY KEY,
     name          TEXT NOT NULL DEFAULT '',
-    enabled       INTEGER NOT NULL DEFAULT 1,
+    enabled       INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
     source_json   TEXT NOT NULL DEFAULT '{}',
     dest_json     TEXT NOT NULL DEFAULT '{}',
     transform_json TEXT NOT NULL DEFAULT '{}',
@@ -97,7 +104,7 @@ CREATE TABLE IF NOT EXISTS settings (
     value_json    TEXT NOT NULL
 );
 
--- ── Auth + RBAC (filled in W7.6) ────────────────────────────────────────────
+-- ── Auth + RBAC ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS roles (
     id            TEXT PRIMARY KEY,
     description   TEXT NOT NULL DEFAULT ''
@@ -112,7 +119,7 @@ CREATE TABLE IF NOT EXISTS users (
     username      TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL DEFAULT '',
     role_id       TEXT NOT NULL REFERENCES roles(id),
-    enabled       INTEGER NOT NULL DEFAULT 1,
+    enabled       INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
     created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
     last_login_at INTEGER
 );
@@ -129,10 +136,7 @@ CREATE INDEX IF NOT EXISTS ix_audit_ts ON audit_log(ts);
 
 -- ── Seed defaults ───────────────────────────────────────────────────────────
 INSERT OR IGNORE INTO settings(key, value_json) VALUES
-    ('sample_retention_days', '30'),
-    ('cleanup_cron', '"0 3 * * *"'),
-    ('ws_heartbeat_ms', '15000'),
-    ('log_level', '"info"');
+    ('sample_retention_days', '30');
 
 INSERT OR IGNORE INTO roles(id, description) VALUES
     ('viewer',   'Read-only monitoring'),

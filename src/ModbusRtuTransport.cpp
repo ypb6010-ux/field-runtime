@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <utility>
 
@@ -22,6 +23,8 @@
 #include "core/sched/SerialScheduler.h"
 
 #include "ModbusReplyAsync.h"
+#include "QtThreadInvoke.h"
+#include "TransportStatusTracker.h"
 
 namespace core::transport {
 
@@ -50,6 +53,16 @@ QString qs(std::string const& s) {
     return QString::fromStdString(s);
 }
 
+struct PendingRead {
+    QSemaphore done{0};
+    ReadResult result;
+};
+
+struct PendingWrite {
+    QSemaphore done{0};
+    WriteResult result;
+};
+
 } // namespace
 
 class ModbusRtuTransport::Impl {
@@ -57,6 +70,8 @@ public:
     Impl(Config c, bus::EventBus* b)
         : cfg(std::move(c))
         , busPtr(b)
+        , statusTracker(cfg.id, TransportKind::ModbusRtu, b,
+                        EndpointInfo{cfg.portName, 0}, {})
         , scheduler(std::make_unique<sched::SerialScheduler>(cfg.scheduler))
         , thread(new QThread)
         , client(new QModbusRtuSerialClient) {
@@ -79,16 +94,25 @@ public:
         QObject::connect(client, &QModbusDevice::stateChanged,
                          client, [this](QModbusDevice::State s) {
             auto const cur  = stateFromQt(s);
-            auto const prev = state.exchange(cur, std::memory_order_acq_rel);
+            if (cur == ConnectionState::Connected) setLastError({});
+            auto const error = getLastError();
+            auto const effective =
+                cur == ConnectionState::Disconnected && !error.empty()
+                ? ConnectionState::Error : cur;
+            auto const prev =
+                state.exchange(effective, std::memory_order_acq_rel);
+            statusTracker.update(
+                effective,
+                effective == ConnectionState::Error ? error : std::string{});
             if (!busPtr) return;
-            if (cur == ConnectionState::Connected
+            if (effective == ConnectionState::Connected
                 && prev != ConnectionState::Connected) {
                 busPtr->publish(bus::TransportEvent{
                     cfg.id, bus::TransportEventKind::Connected, {}});
-            } else if (cur == ConnectionState::Disconnected
+            } else if (effective != ConnectionState::Connected
                        && prev == ConnectionState::Connected) {
                 busPtr->publish(bus::TransportEvent{
-                    cfg.id, bus::TransportEventKind::Disconnected, {}});
+                    cfg.id, bus::TransportEventKind::Disconnected, error});
             }
         });
         QObject::connect(client, &QModbusDevice::errorOccurred,
@@ -96,10 +120,12 @@ public:
             if (e == QModbusDevice::NoError) return;
             auto const prev = state.exchange(ConnectionState::Error,
                                               std::memory_order_acq_rel);
-            lastError = client->errorString();
+            auto const message = client->errorString().toStdString();
+            setLastError(message);
+            statusTracker.update(ConnectionState::Error, message);
             if (busPtr && prev == ConnectionState::Connected) {
                 busPtr->publish(bus::TransportEvent{
-                    cfg.id, bus::TransportEventKind::Disconnected, lastError.toStdString()});
+                    cfg.id, bus::TransportEventKind::Disconnected, message});
             }
         });
     }
@@ -108,18 +134,18 @@ public:
         autoReconnect.store(false, std::memory_order_release);
         if (scheduler) scheduler->stopAsync();   // no async pump into a dying transport
         if (reconnectTimer) {
-            QMetaObject::invokeMethod(reconnectTimer, [this] {
+            detail::invokeBlocking(reconnectTimer, [this] {
                 reconnectTimer->stop();
                 delete reconnectTimer;
                 reconnectTimer = nullptr;
-            }, Qt::BlockingQueuedConnection);
+            });
         }
         if (client) {
-            QMetaObject::invokeMethod(client, [this] {
+            detail::invokeBlocking(client, [this] {
                 client->disconnectDevice();
                 delete client;
                 client = nullptr;
-            }, Qt::BlockingQueuedConnection);
+            });
         }
         thread->quit();
         thread->wait();
@@ -137,15 +163,27 @@ public:
         client->setNumberOfRetries(0);
     }
 
+    void setLastError(std::string message) {
+        std::lock_guard lock(errorMutex);
+        lastError = std::move(message);
+    }
+
+    std::string getLastError() const {
+        std::lock_guard lock(errorMutex);
+        return lastError;
+    }
+
     Config                                            cfg;
     bus::EventBus*                                    busPtr = nullptr;
+    detail::TransportStatusTracker                    statusTracker;
     std::unique_ptr<sched::SerialScheduler>            scheduler;
     QThread*                                           thread = nullptr;
     QModbusRtuSerialClient*                            client = nullptr;
     QTimer*                                            reconnectTimer = nullptr;
     std::atomic<bool>                                  autoReconnect{false};
     std::atomic<ConnectionState>                       state{ConnectionState::Disconnected};
-    QString                                            lastError;
+    mutable std::mutex                                 errorMutex;
+    std::string                                        lastError;
 };
 
 ModbusRtuTransport::ModbusRtuTransport(Config cfg, bus::EventBus* bus)
@@ -156,25 +194,45 @@ ModbusRtuTransport::~ModbusRtuTransport() = default;
 std::string           ModbusRtuTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         ModbusRtuTransport::kind()  const { return TransportKind::ModbusRtu; }
 ConnectionState       ModbusRtuTransport::state() const { return m_impl->state.load(std::memory_order_acquire); }
+TransportStatus       ModbusRtuTransport::status() const {
+    return m_impl->statusTracker.snapshot();
+}
 
 sched::RequestScheduler& ModbusRtuTransport::scheduler() { return *m_impl->scheduler; }
 
 std::expected<void, std::string>
 ModbusRtuTransport::connect() {
+    if (QThread::currentThread() == m_impl->client->thread()) {
+        return std::unexpected(
+            std::string("connect() cannot block the Modbus RTU worker thread"));
+    }
     if (state() == ConnectionState::Connected) {
         armReconnectIfConfigured();
         return {};
     }
+    m_impl->setLastError({});
+    m_impl->state.store(ConnectionState::Connecting,
+                        std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Connecting);
     bool kicked = false;
-    QMetaObject::invokeMethod(m_impl->client, [this, &kicked] {
+    detail::invokeBlocking(m_impl->client, [this, &kicked] {
         m_impl->applyConnectionParams();
         kicked = m_impl->client->connectDevice();
-    }, Qt::BlockingQueuedConnection);
+        if (!kicked) {
+            m_impl->setLastError(
+                m_impl->client->errorString().toStdString());
+        }
+    });
     if (!kicked) {
         armReconnectIfConfigured();
-        return std::unexpected(m_impl->lastError.isEmpty()
+        auto const error = m_impl->getLastError();
+        auto const message = error.empty()
             ? std::string("connectDevice() returned false")
-            : m_impl->lastError.toStdString());
+            : error;
+        m_impl->state.store(ConnectionState::Error,
+                            std::memory_order_release);
+        m_impl->statusTracker.update(ConnectionState::Error, message);
+        return std::unexpected(message);
     }
     auto const deadline = std::chrono::steady_clock::now()
                         + std::chrono::milliseconds(m_impl->cfg.connectTimeoutMs);
@@ -183,20 +241,29 @@ ModbusRtuTransport::connect() {
         if (s == ConnectionState::Connected) { armReconnectIfConfigured(); return {}; }
         if (s == ConnectionState::Error) {
             armReconnectIfConfigured();
-            return std::unexpected(m_impl->lastError.toStdString());
+            return std::unexpected(m_impl->getLastError());
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     armReconnectIfConfigured();
-    return std::unexpected(std::string("connect timeout"));
+    auto const error = m_impl->getLastError();
+    auto const message =
+        error.empty() ? std::string("connect timeout") : error;
+    m_impl->state.store(ConnectionState::Error, std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Error, message);
+    return std::unexpected(message);
 }
 
 void ModbusRtuTransport::disconnect() {
     m_impl->autoReconnect.store(false, std::memory_order_release);
-    QMetaObject::invokeMethod(m_impl->client, [this] {
+    m_impl->setLastError({});
+    detail::invokeBlocking(m_impl->client, [this] {
         if (m_impl->reconnectTimer) m_impl->reconnectTimer->stop();
         m_impl->client->disconnectDevice();
-    }, Qt::BlockingQueuedConnection);
+    });
+    m_impl->state.store(ConnectionState::Disconnected,
+                        std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Disconnected);
 }
 
 void ModbusRtuTransport::armReconnectIfConfigured() {
@@ -206,8 +273,13 @@ void ModbusRtuTransport::armReconnectIfConfigured() {
 
     auto* impl = m_impl.get();
     int const intervalMs = m_impl->cfg.reconnectIntervalMs;
-    QMetaObject::invokeMethod(m_impl->client, [impl, intervalMs] {
-        if (impl->reconnectTimer) return;
+    detail::invokeBlocking(m_impl->client, [impl, intervalMs] {
+        if (impl->reconnectTimer) {
+            if (!impl->reconnectTimer->isActive()) {
+                impl->reconnectTimer->start();
+            }
+            return;
+        }
         impl->reconnectTimer = new QTimer(impl->client);
         impl->reconnectTimer->setInterval(intervalMs);
         impl->reconnectTimer->setSingleShot(false);
@@ -222,96 +294,123 @@ void ModbusRtuTransport::armReconnectIfConfigured() {
                 impl->client->connectDevice();
             });
         impl->reconnectTimer->start();
-    }, Qt::BlockingQueuedConnection);
+    });
 }
 
 ReadResult ModbusRtuTransport::read(ReadRequest const& req) {
     ReadResult result;
     result.startAddress = req.startAddress;
+    if (QThread::currentThread() == m_impl->client->thread()) {
+        result.errorMessage =
+            "synchronous read cannot run on the Modbus RTU worker thread";
+        return result;
+    }
     if (state() != ConnectionState::Connected) {
         result.errorMessage = "not connected";
         return result;
     }
-    QSemaphore done(0);
-    QMetaObject::invokeMethod(m_impl->client, [this, req, &result, &done] {
+    auto pending = std::make_shared<PendingRead>();
+    pending->result.startAddress = req.startAddress;
+    detail::invokeBlocking(m_impl->client, [this, req, pending] {
         QModbusDataUnit unit(core::toQModbus(req.table), req.startAddress, req.count);
         auto* reply = m_impl->client->sendReadRequest(unit, m_impl->cfg.slaveId);
         if (!reply) {
-            result.errorMessage = m_impl->client->errorString().toStdString();
-            done.release();
+            pending->result.errorMessage =
+                m_impl->client->errorString().toStdString();
+            pending->done.release();
             return;
         }
         if (reply->isFinished()) {
             if (reply->error() != QModbusDevice::NoError) {
-                result.errorMessage = reply->errorString().toStdString();
+                pending->result.errorMessage =
+                    reply->errorString().toStdString();
             } else {
-                result.ok = true;
-                result.values = core::fromQtWords(reply->result().values());
+                pending->result.ok = true;
+                pending->result.values =
+                    core::fromQtWords(reply->result().values());
             }
             reply->deleteLater();
-            done.release();
+            pending->done.release();
             return;
         }
         QObject::connect(reply, &QModbusReply::finished, m_impl->client,
-            [reply, &result, &done] {
+            [reply, pending] {
                 if (reply->error() != QModbusDevice::NoError) {
-                    result.errorMessage = reply->errorString().toStdString();
+                    pending->result.errorMessage =
+                        reply->errorString().toStdString();
                 } else {
-                    result.ok = true;
-                    result.values = core::fromQtWords(reply->result().values());
+                    pending->result.ok = true;
+                    pending->result.values =
+                        core::fromQtWords(reply->result().values());
                 }
                 reply->deleteLater();
-                done.release();
+                pending->done.release();
             });
-    }, Qt::BlockingQueuedConnection);
-    if (!done.tryAcquire(1, m_impl->cfg.requestTimeoutMs * 2 + 500)) {
+    });
+    if (!pending->done.tryAcquire(
+            1, m_impl->cfg.requestTimeoutMs * 2 + 500)) {
         result.ok = false;
         result.errorMessage = "read timeout";
+        return result;
     }
-    return result;
+    return std::move(pending->result);
 }
 
 WriteResult ModbusRtuTransport::writeBatch(WriteBatch const& batch) {
     WriteResult result;
+    if (QThread::currentThread() == m_impl->client->thread()) {
+        result.errorMessage =
+            "synchronous write cannot run on the Modbus RTU worker thread";
+        return result;
+    }
     if (state() != ConnectionState::Connected) {
         result.errorMessage = "not connected";
         return result;
     }
     if (batch.values.empty()) { result.ok = true; return result; }
 
-    QSemaphore done(0);
-    QMetaObject::invokeMethod(m_impl->client, [this, batch, &result, &done] {
+    auto pending = std::make_shared<PendingWrite>();
+    detail::invokeBlocking(m_impl->client, [this, batch, pending] {
         int const valueCount = int(batch.values.size());
         QModbusDataUnit unit(core::toQModbus(batch.table), batch.startAddress, quint16(valueCount));
         for (int i = 0; i < valueCount; ++i) unit.setValue(i, batch.values.at(i));
         auto* reply = m_impl->client->sendWriteRequest(unit, m_impl->cfg.slaveId);
         if (!reply) {
-            result.errorMessage = m_impl->client->errorString().toStdString();
-            done.release();
+            pending->result.errorMessage =
+                m_impl->client->errorString().toStdString();
+            pending->done.release();
             return;
         }
         if (reply->isFinished()) {
             if (reply->error() != QModbusDevice::NoError) {
-                result.errorMessage = reply->errorString().toStdString();
-            } else { result.ok = true; }
+                pending->result.errorMessage =
+                    reply->errorString().toStdString();
+            } else {
+                pending->result.ok = true;
+            }
             reply->deleteLater();
-            done.release();
+            pending->done.release();
             return;
         }
         QObject::connect(reply, &QModbusReply::finished, m_impl->client,
-            [reply, &result, &done] {
+            [reply, pending] {
                 if (reply->error() != QModbusDevice::NoError) {
-                    result.errorMessage = reply->errorString().toStdString();
-                } else { result.ok = true; }
+                    pending->result.errorMessage =
+                        reply->errorString().toStdString();
+                } else {
+                    pending->result.ok = true;
+                }
                 reply->deleteLater();
-                done.release();
+                pending->done.release();
             });
-    }, Qt::BlockingQueuedConnection);
-    if (!done.tryAcquire(1, m_impl->cfg.requestTimeoutMs * 2 + 500)) {
+    });
+    if (!pending->done.tryAcquire(
+            1, m_impl->cfg.requestTimeoutMs * 2 + 500)) {
         result.ok = false;
         result.errorMessage = "write timeout";
+        return result;
     }
-    return result;
+    return std::move(pending->result);
 }
 
 // Async I/O — non-blocking; shares the QModbusReply helper with the TCP client.

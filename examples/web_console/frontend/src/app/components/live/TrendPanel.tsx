@@ -7,23 +7,24 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip as RTooltip,
-  ReferenceLine,
 } from "recharts";
 import { X, RefreshCw, WifiOff } from "lucide-react";
 import type { Datapoint, TrendPoint, WsState } from "../../live";
-import { makeTrendHistory } from "../../live";
-import { Button } from "../ui/button";
-import { Badge } from "../ui/badge";
 import { cn } from "../ui/utils";
 
 type Range = "5m" | "15m" | "1h";
-const RANGE_POINTS: Record<Range, number> = { "5m": 30, "15m": 90, "1h": 360 };
+const RANGE_MS: Record<Range, number> = {
+  "5m": 5 * 60_000,
+  "15m": 15 * 60_000,
+  "1h": 60 * 60_000,
+};
 
 const COLORS = [
   "var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)",
 ];
 
 function stats(data: TrendPoint[]) {
+  if (data.length === 0) return { min: 0, max: 0, avg: 0 };
   const vals = data.map((d) => d.value);
   const min = Math.min(...vals);
   const max = Math.max(...vals);
@@ -35,18 +36,17 @@ interface TrendPanelProps {
   points: Datapoint[];
   wsState: WsState;
   onRemove: (id: string) => void;
+  history: Record<string, TrendPoint[]>;
 }
 
-export function TrendPanel({ points, wsState, onRemove }: TrendPanelProps) {
+export function TrendPanel({ points, wsState, onRemove, history }: TrendPanelProps) {
   const [range, setRange] = useState<Range>("15m");
+  const cutoff = Date.now() - RANGE_MS[range];
 
   const series = points.slice(0, 5).map((dp, i) => ({
     dp,
     color: COLORS[i % COLORS.length],
-    data: makeTrendHistory(
-      typeof dp.value === "number" ? dp.value : 100,
-      RANGE_POINTS[range],
-    ),
+    data: (history[dp.id] ?? []).filter((point) => point.ts >= cutoff),
   }));
 
   const paused = wsState !== "connected";
@@ -146,7 +146,7 @@ export function TrendPanel({ points, wsState, onRemove }: TrendPanelProps) {
                   dataKey="t"
                   data={series[0].data}
                   tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
-                  interval={Math.floor(RANGE_POINTS[range] / 6)}
+                  interval="preserveStartEnd"
                   axisLine={false}
                   tickLine={false}
                 />

@@ -11,7 +11,7 @@ find_package(open62541 CONFIG REQUIRED)
 find_package(snap7 CONFIG REQUIRED)
 find_package(asio CONFIG REQUIRED)
 
-# ── W0: data simulation service (Modbus + S7 + OPC UA faces) ────────────────
+# ── Data simulation service (Modbus + S7 + OPC UA faces) ────────────────────
 add_executable(field_console_dataservice
     dataservice/main.cpp
     dataservice/SimEngine.cpp
@@ -37,9 +37,10 @@ endif()
 
 install(TARGETS field_console_dataservice RUNTIME DESTINATION bin)
 
-# ── W1: Drogon backend skeleton (HTTP + SQLite + static SPA) ────────────────
+# ── Drogon backend (HTTP/WebSocket + SQLite + embedded runtime) ─────────────
 find_package(Drogon CONFIG REQUIRED)
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 add_executable(web_console_backend
     backend/main.cpp
@@ -60,18 +61,24 @@ target_compile_definitions(web_console_backend PRIVATE
     WEB_CONSOLE_WWW="${CMAKE_CURRENT_SOURCE_DIR}/www"
     WEB_CONSOLE_RUNTIME_TOML="${CMAKE_CURRENT_SOURCE_DIR}/backend/runtime.toml"
     WEB_CONSOLE_OPENAPI="${CMAKE_CURRENT_SOURCE_DIR}/docs/openapi.yaml"
+    WEB_CONSOLE_VERSION="${PROJECT_VERSION}"
 )
 target_link_libraries(web_console_backend PRIVATE
     Drogon::Drogon
+    OpenSSL::Crypto
     unofficial::sqlite3::sqlite3
     field_gateway_core
 )
 if(MSVC)
     # htonll is provided by backend/Platform.h before any drogon header, so no
     # /Zc:twoPhase- needed (that flag breaks asio's executor templates).
-    target_compile_options(web_console_backend PRIVATE /utf-8 /EHsc)
+    target_compile_options(web_console_backend PRIVATE /W4 /permissive- /utf-8 /EHsc)
 endif()
 
 install(TARGETS web_console_backend RUNTIME DESTINATION bin)
 install(DIRECTORY www/ DESTINATION share/web_console/www)
-install(FILES backend/db/schema.sql DESTINATION share/web_console)
+install(FILES
+    backend/db/schema.sql
+    backend/runtime.toml
+    docs/openapi.yaml
+    DESTINATION share/web_console)

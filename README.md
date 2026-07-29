@@ -407,7 +407,7 @@ range     = [100, 4]      # [起始, 大小]
 debounce_ms  = 20         # 暂存后多久 flush
 keepalive_ms = 100        # >0 则周期重写(在线保活;断线重连自动 forceFlush)
 coalesce     = true       # 合并写
-max_retries  = 2
+max_retries  = 0          # 当前仅支持 0；失败窗口保持 dirty，并在下一 tick 重试
 ```
 
 ### 其余节(简）
@@ -436,15 +436,18 @@ write_start = 0           # 转发区:server 写 [write_start, write_start+write
 write_count = 50
 mirror_start = 50         # 镜像区:PLC 读 [mirror_start, mirror_start+mirror_count) → server 寄存器
 mirror_count = 300
-mirror_period_ms = 100    # 镜像刷新周期(默认 100)
+mirror_policy = "AfterPoll" # 成功轮询后立即镜像同一轮原始寄存器
+# mirror_policy = "Periodic"
+# mirror_period_ms = 100    # 仅 Periodic 使用
 ```
 
 - **转发**(写区):操作箱写 server 触发 `ServerWriteEvent` → 命中写区的子段 `stageRegister`
   到 PLC 侧一个**自动创建的 SinkWindow**(`bridge.fwd.<server>`,High 优先级,带重试/coalesce)
   → 由 TickDriver 刷到 PLC。地址按 `plc = server - offset` 映射。
-- **镜像**(读区):每 `mirror_period_ms` 把 PLC 读区的 datapoint 值整段 `writeBatch` 回 server
-  transport **自己的寄存器表**,操作箱即可读到 PLC 状态。镜像区必须有来自 `plc` 的 HR datapoint
-  覆盖(否则镜像恒为 0,加载时校验会报错)。
+- **镜像**(读区):`AfterPoll` 在一个覆盖完整镜像区的 PollRange 成功后，把该轮未经
+  解码的原始寄存器整段 `writeBatch` 回 server transport 自己的寄存器表；
+  `Periodic` 则按 `mirror_period_ms` 使用最近一次成功轮询的原始快照。失败轮询不会
+  覆盖最后一次有效值，两种策略互斥。
 - 写区/读区**不重叠**:写区保留操作箱写入(不被镜像覆盖),读区回显 PLC。
 
 **运行时转发开关(业务可干预):** 转发链路(route + bridge 写区)默认开启,可按 server 透传 id

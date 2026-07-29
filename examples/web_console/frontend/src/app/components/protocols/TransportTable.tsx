@@ -15,6 +15,15 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
+function formatTime(value: string | null): string {
+  if (!value) return "—";
+  const numeric = Number(value);
+  const date = Number.isFinite(numeric)
+    ? new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric)
+    : new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
+}
+
 function IconAction({
   label,
   icon,
@@ -80,10 +89,8 @@ export function TransportTable({
             <TableHead className="min-w-48">Endpoint</TableHead>
             <TableHead>状态</TableHead>
             <TableHead>启用</TableHead>
-            <TableHead className="min-w-40">最近连接</TableHead>
-            <TableHead className="min-w-48">最近错误</TableHead>
             <TableHead className="text-right">点位</TableHead>
-            <TableHead>更新人</TableHead>
+            <TableHead className="min-w-40">配置更新时间</TableHead>
             <TableHead className="text-right">操作</TableHead>
           </TableRow>
         </TableHeader>
@@ -93,15 +100,7 @@ export function TransportTable({
               <TableCell>
                 <div className="flex flex-col">
                   <span>{t.name}</span>
-                  {t.tags.length > 0 && (
-                    <span className="flex flex-wrap gap-1 pt-0.5">
-                      {t.tags.map((tag) => (
-                        <span key={tag} className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                          {tag}
-                        </span>
-                      ))}
-                    </span>
-                  )}
+                  <span className="font-mono text-[11px] text-muted-foreground">{t.id}</span>
                 </div>
               </TableCell>
               <TableCell>
@@ -118,21 +117,8 @@ export function TransportTable({
                   <span className="text-xs text-status-disabled">停用</span>
                 )}
               </TableCell>
-              <TableCell className="text-xs text-muted-foreground">{t.lastConnectedAt ?? "—"}</TableCell>
-              <TableCell className="max-w-56">
-                {t.lastError ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="block truncate text-xs text-status-error">{t.lastError}</span>
-                    </TooltipTrigger>
-                    <TooltipContent className="max-w-xs">{t.lastError}</TooltipContent>
-                  </Tooltip>
-                ) : (
-                  <span className="text-xs text-muted-foreground">—</span>
-                )}
-              </TableCell>
               <TableCell className="text-right tabular-nums">{t.pointCount}</TableCell>
-              <TableCell className="text-xs text-muted-foreground">{t.updatedBy}</TableCell>
+              <TableCell className="text-xs text-muted-foreground">{formatTime(t.updatedAt)}</TableCell>
               <TableCell>
                 <div className="flex items-center justify-end gap-0.5">
                   <IconAction label="编辑" icon={<Pencil className="size-3.5" />} disabled={!canWrite} onClick={() => onEdit(t)} />

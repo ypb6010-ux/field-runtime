@@ -4,9 +4,14 @@
 
 #include <QtGlobal>   // quint16 — no longer transitively via the now Qt-free EventBus.h
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <iterator>
+#include <mutex>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include "core/bus/BusEvents.h"
 #include "core/bus/EventBus.h"
@@ -58,12 +63,108 @@ TEST_CASE("ModbusTcpServerTransport listens and exposes the configured table",
     REQUIRE(srv.id()    == "server.test");
     REQUIRE(srv.kind()  == transport::TransportKind::ModbusTcpServer);
     REQUIRE(srv.state() == transport::ConnectionState::Disconnected);
+    auto const initial = srv.status();
+    REQUIRE(initial.localEndpoint.address == "127.0.0.1");
+    REQUIRE(initial.localEndpoint.port == port);
 
     auto opened = srv.connect();
     REQUIRE(opened.has_value());
     REQUIRE(srv.state() == transport::ConnectionState::Connected);
+    REQUIRE(srv.status().revision > initial.revision);
 
     srv.disconnect();
+    auto const closed = srv.status();
+    srv.disconnect();
+    REQUIRE(srv.status().revision == closed.revision);
+    REQUIRE(srv.status().changedAt == closed.changedAt);
+}
+
+TEST_CASE("An occupied listen port produces a revisioned error snapshot",
+          "[server][listen][error]") {
+    auto port = nextServerPort();
+    bus::EventBus bus;
+    transport::ModbusTcpServerTransport owner(serverCfg(port), bus);
+    REQUIRE(owner.connect().has_value());
+
+    auto contenderConfig = serverCfg(port);
+    contenderConfig.id = "server.contender";
+    transport::ModbusTcpServerTransport contender(contenderConfig, bus);
+    std::vector<bus::TransportStateChanged> events;
+    std::mutex eventMutex;
+    auto sub = bus.subscribe<bus::TransportStateChanged>(
+        [&](bus::TransportStateChanged const& event) {
+            if (event.after.transportId != contenderConfig.id) return;
+            std::lock_guard lock(eventMutex);
+            events.push_back(event);
+        });
+
+    auto opened = contender.connect();
+    REQUIRE_FALSE(opened.has_value());
+    auto const status = contender.status();
+    REQUIRE(status.state == transport::ConnectionState::Error);
+    REQUIRE_FALSE(status.errorMessage.empty());
+    REQUIRE(status.revision >= 2);
+    std::lock_guard lock(eventMutex);
+    REQUIRE_FALSE(events.empty());
+    REQUIRE(events.back().after == status);
+}
+
+TEST_CASE("Server tracks independent peer sessions and disconnects peers first",
+          "[server][peer][lifecycle]") {
+    auto port = nextServerPort();
+    bus::EventBus bus;
+    auto config = serverCfg(port);
+    config.maxClients = 2;
+    transport::ModbusTcpServerTransport srv(config, bus);
+    std::vector<std::string> order;
+    std::mutex orderMutex;
+    auto peerSub = bus.subscribe<bus::PeerSessionChanged>(
+        [&](bus::PeerSessionChanged const& event) {
+            std::lock_guard lock(orderMutex);
+            order.push_back(
+                event.kind == bus::PeerSessionChangeKind::Connected
+                ? "peer-up" : "peer-down");
+        });
+    auto stateSub = bus.subscribe<bus::TransportStateChanged>(
+        [&](bus::TransportStateChanged const& event) {
+            if (event.after.transportId != "server.test") return;
+            std::lock_guard lock(orderMutex);
+            order.push_back(
+                event.after.state == transport::ConnectionState::Connected
+                ? "listen-up" : "listen-down");
+        });
+    REQUIRE(srv.connect().has_value());
+
+    auto cfg1 = clientCfg(port);
+    cfg1.id = "client.one";
+    auto cfg2 = clientCfg(port);
+    cfg2.id = "client.two";
+    transport::ModbusTcpClientTransport first(cfg1);
+    transport::ModbusTcpClientTransport second(cfg2);
+    REQUIRE(first.connect().has_value());
+    REQUIRE(second.connect().has_value());
+
+    auto deadline = std::chrono::steady_clock::now() + 1s;
+    while (srv.peerSessions().size() != 2
+           && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(5ms);
+    }
+    auto const sessions = srv.peerSessions();
+    REQUIRE(sessions.size() == 2);
+    REQUIRE(sessions[0].sessionId != sessions[1].sessionId);
+    REQUIRE_FALSE(sessions[0].remoteEndpoint.address.empty());
+
+    srv.disconnect();
+    REQUIRE(srv.peerSessions().empty());
+    std::lock_guard lock(orderMutex);
+    auto const peerDown =
+        std::find(order.rbegin(), order.rend(), "peer-down");
+    auto const listenDown =
+        std::find(order.rbegin(), order.rend(), "listen-down");
+    REQUIRE(peerDown != order.rend());
+    REQUIRE(listenDown != order.rend());
+    REQUIRE(std::distance(order.rbegin(), peerDown)
+            > std::distance(order.rbegin(), listenDown));
 }
 
 TEST_CASE("Server writeBatch updates the table observable by clients",

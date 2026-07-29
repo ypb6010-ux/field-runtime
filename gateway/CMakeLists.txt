@@ -90,7 +90,6 @@ set(_gw_core_sources
     GatewayJson.cpp
     Persistence.cpp
     SqliteLogSink.cpp
-    StubTransport.cpp
 )
 if(GATEWAY_ENABLE_OPCUA)
     list(APPEND _gw_core_sources AsioOpcUaClient.cpp)

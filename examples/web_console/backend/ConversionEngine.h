@@ -5,9 +5,8 @@
 namespace wc {
 class RuntimeHost;
 
-// W7 protocol conversion: CRUD for conversion_rules + a periodic engine that
-// reads a source datapoint, applies a transform, and writes the result to a
-// destination transport register via the RuntimeHost.
+// Conversion-rule CRUD and the engine that transforms a source datapoint into
+// destination transport register writes.
 void registerConversionControllers();
 void startConversionEngine(RuntimeHost& runtime);
 }

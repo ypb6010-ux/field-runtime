@@ -30,6 +30,7 @@ Persistence::~Persistence() {
 }
 
 bool Persistence::open(PersistenceConfig config, std::string& error) {
+    error.clear();
     close();
     m_config = std::move(config);
     if (!m_config.enable) return true;
@@ -47,8 +48,14 @@ bool Persistence::open(PersistenceConfig config, std::string& error) {
     // out its brief commit lock instead of failing telemetry writes with BUSY.
     sqlite3_busy_timeout(m_db, 2000);
 
-    if (!exec("PRAGMA journal_mode=WAL;", error)) return false;
-    if (!exec("PRAGMA synchronous=NORMAL;", error)) return false;
+    if (!exec("PRAGMA journal_mode=WAL;", error)) {
+        close();
+        return false;
+    }
+    if (!exec("PRAGMA synchronous=NORMAL;", error)) {
+        close();
+        return false;
+    }
     if (!exec(
             "CREATE TABLE IF NOT EXISTS telemetry("
             "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -58,11 +65,17 @@ bool Persistence::open(PersistenceConfig config, std::string& error) {
             "ts INTEGER NOT NULL,"
             "published INTEGER NOT NULL DEFAULT 0"
             ");",
-            error)) return false;
+            error)) {
+        close();
+        return false;
+    }
     if (!exec(
             "CREATE INDEX IF NOT EXISTS idx_telemetry_published_id "
             "ON telemetry(published,id);",
-            error)) return false;
+            error)) {
+        close();
+        return false;
+    }
     if (!exec(
             "CREATE TABLE IF NOT EXISTS logs("
             "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -72,7 +85,10 @@ bool Persistence::open(PersistenceConfig config, std::string& error) {
             "msg TEXT,"
             "ts INTEGER NOT NULL"
             ");",
-            error)) return false;
+            error)) {
+        close();
+        return false;
+    }
     return true;
 }
 
@@ -96,6 +112,7 @@ std::optional<std::int64_t> Persistence::insertTelemetry(std::string const& dpId
                                                          dp::DpState state,
                                                          dp::Timestamp timestamp,
                                                          std::string& error) {
+    error.clear();
     if (!enabled()) return std::nullopt;
     sqlite3_stmt* stmt = nullptr;
     char const* sql =
@@ -120,6 +137,7 @@ std::optional<std::int64_t> Persistence::insertTelemetry(std::string const& dpId
 }
 
 bool Persistence::markPublished(std::int64_t rowId, std::string& error) {
+    error.clear();
     if (!enabled()) return true;
     sqlite3_stmt* stmt = nullptr;
     char const* sql = "UPDATE telemetry SET published=1 WHERE id=?;";
@@ -135,6 +153,7 @@ bool Persistence::markPublished(std::int64_t rowId, std::string& error) {
 }
 
 std::vector<TelemetryRow> Persistence::pendingTelemetry(int limit, std::string& error) {
+    error.clear();
     std::vector<TelemetryRow> rows;
     if (!enabled()) return rows;
     if (limit <= 0) limit = m_config.backfillBatch;
@@ -148,7 +167,8 @@ std::vector<TelemetryRow> Persistence::pendingTelemetry(int limit, std::string& 
         return rows;
     }
     sqlite3_bind_int(stmt, 1, limit);
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
+    int stepResult = SQLITE_ROW;
+    while ((stepResult = sqlite3_step(stmt)) == SQLITE_ROW) {
         TelemetryRow row;
         row.rowId = sqlite3_column_int64(stmt, 0);
         if (auto const* s = sqlite3_column_text(stmt, 1)) {
@@ -163,11 +183,16 @@ std::vector<TelemetryRow> Persistence::pendingTelemetry(int limit, std::string& 
         row.ts = sqlite3_column_int64(stmt, 4);
         rows.push_back(std::move(row));
     }
+    if (stepResult != SQLITE_DONE) {
+        error = sqliteError(m_db);
+        rows.clear();
+    }
     sqlite3_finalize(stmt);
     return rows;
 }
 
 bool Persistence::prune(std::string& error) {
+    error.clear();
     if (!enabled()) return true;
     if (m_config.maxRows <= 0) return true;
 
@@ -189,6 +214,7 @@ bool Persistence::prune(std::string& error) {
 }
 
 int Persistence::pendingCount(std::string& error) const {
+    error.clear();
     if (!enabled()) return 0;
     sqlite3_stmt* stmt = nullptr;
     char const* sql = "SELECT count(*) FROM telemetry WHERE published=0;";
@@ -197,12 +223,18 @@ int Persistence::pendingCount(std::string& error) const {
         return 0;
     }
     int count = 0;
-    if (sqlite3_step(stmt) == SQLITE_ROW) count = sqlite3_column_int(stmt, 0);
+    int const result = sqlite3_step(stmt);
+    if (result == SQLITE_ROW) {
+        count = sqlite3_column_int(stmt, 0);
+    } else if (result != SQLITE_DONE) {
+        error = sqliteError(m_db);
+    }
     sqlite3_finalize(stmt);
     return count;
 }
 
 bool Persistence::exec(char const* sql, std::string& error) {
+    error.clear();
     char* err = nullptr;
     if (sqlite3_exec(m_db, sql, nullptr, nullptr, &err) != SQLITE_OK) {
         error = err ? std::string(err) : sqliteError(m_db);

@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
+#include <string>
+
 namespace wc {
-// W8: serves Swagger UI at /api/docs and the spec at /api/docs/openapi.yaml.
-void registerDocs();
+// Serves Swagger UI at /api/docs and the selected spec at
+// /api/docs/openapi.yaml.
+void registerDocs(std::string openapiPath);
 }

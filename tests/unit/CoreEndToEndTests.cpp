@@ -6,7 +6,9 @@
 #include <QTemporaryFile>
 
 #include <chrono>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include "core/ICore.h"
 #include "core/bus/BusEvents.h"
@@ -161,6 +163,221 @@ source = { port="nope", table="HR", addr=0 }
     auto loaded = core->loadConfig(path.toStdString());
     REQUIRE_FALSE(loaded.has_value());
     REQUIRE_FALSE(loaded.error().empty());
+}
+
+TEST_CASE("ICore rejects a second configuration load instead of mixing graphs",
+          "[core][config][lifecycle]") {
+    QTemporaryFile cfg;
+    auto path = writeToml(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+)toml", cfg);
+
+    auto core = ICore::create();
+    REQUIRE(core->loadConfig(path.toStdString()).has_value());
+
+    auto second = core->loadConfig(path.toStdString());
+    REQUIRE_FALSE(second.has_value());
+    REQUIRE_FALSE(second.error().empty());
+    REQUIRE(second.error().front().section == "core");
+    REQUIRE(second.error().front().message.find("already loaded")
+            != std::string::npos);
+    REQUIRE(core->transportIds() == std::vector<std::string>{"tcp1"});
+}
+
+TEST_CASE("ICore invalid reload leaves the running graph untouched",
+          "[core][config][reload][rollback]") {
+    auto const port = nextE2EPort();
+    QTemporaryFile active;
+    auto activePath = writeToml(QString(R"toml(
+[[transport]]
+id = "server.old"
+kind = "modbus_tcp_server"
+listen_address = "127.0.0.1"
+listen_port = %1
+[[transport.listen_ranges]]
+table = "HR"
+range = [0, 4]
+
+[[datapoint]]
+id = "old.dp"
+kind = "Status"
+type = "U16"
+source = { port="server.old", table="HR", addr=0 }
+)toml").arg(port), active);
+    QTemporaryFile invalid;
+    auto invalidPath = writeToml(R"toml(
+[[transport]]
+id = "broken"
+kind = "modbus_tcp_client"
+port = 70000
+)toml", invalid);
+
+    auto core = ICore::create();
+    REQUIRE(core->loadConfig(activePath.toStdString()).has_value());
+    core->start();
+    REQUIRE(waitConnected(*core, "server.old"));
+    auto* const oldTransport = core->transport("server.old");
+    std::atomic<int> failedEvents{0};
+    auto sub = core->bus().subscribe<bus::ConfigReloadFailed>(
+        [&](bus::ConfigReloadFailed const&) {
+            failedEvents.fetch_add(1);
+        });
+
+    auto reloaded = core->reloadConfig(invalidPath.toStdString());
+    REQUIRE_FALSE(reloaded.has_value());
+    REQUIRE(core->transport("server.old") == oldTransport);
+    REQUIRE(core->datapoints().find("old.dp") != nullptr);
+    REQUIRE(core->serverForwardEnabled("server.old"));
+    REQUIRE(core->transportStatus("server.old").state
+            == transport::ConnectionState::Connected);
+    REQUIRE(failedEvents.load() == 1);
+    core->stop();
+}
+
+TEST_CASE("ICore valid reload replaces the graph and announces model rebuild",
+          "[core][config][reload][model]") {
+    auto const oldPort = nextE2EPort();
+    auto const newPort = nextE2EPort();
+    QTemporaryFile oldConfig;
+    QTemporaryFile newConfig;
+    auto oldPath = writeToml(QString(R"toml(
+[[transport]]
+id = "server.old"
+kind = "modbus_tcp_server"
+listen_address = "127.0.0.1"
+listen_port = %1
+[[transport.listen_ranges]]
+table = "HR"
+range = [0, 4]
+[[datapoint]]
+id = "old.dp"
+kind = "Status"
+type = "U16"
+source = { port="server.old", table="HR", addr=0 }
+)toml").arg(oldPort), oldConfig);
+    auto newPath = writeToml(QString(R"toml(
+[[transport]]
+id = "server.new"
+kind = "modbus_tcp_server"
+listen_address = "127.0.0.1"
+listen_port = %1
+[[transport.listen_ranges]]
+table = "HR"
+range = [10, 4]
+[[datapoint]]
+id = "new.dp"
+kind = "Status"
+type = "U16"
+source = { port="server.new", table="HR", addr=10 }
+)toml").arg(newPort), newConfig);
+
+    auto core = ICore::create();
+    REQUIRE(core->loadConfig(oldPath.toStdString()).has_value());
+    core->start();
+    REQUIRE(waitConnected(*core, "server.old"));
+    std::atomic<int> succeeded{0};
+    std::atomic<int> rebuilt{0};
+    std::atomic<int> reentrantRejected{0};
+    auto startedSub = core->bus().subscribe<bus::ConfigReloadStarted>(
+        [&](bus::ConfigReloadStarted const&) {
+            auto nested = core->reloadConfig(newPath.toStdString());
+            if (!nested.has_value()
+                && !nested.error().empty()
+                && nested.error().front().message.find("already in progress")
+                    != std::string::npos) {
+                reentrantRejected.fetch_add(1);
+            }
+        });
+    auto successSub = core->bus().subscribe<bus::ConfigReloadSucceeded>(
+        [&](bus::ConfigReloadSucceeded const&) {
+            succeeded.fetch_add(1);
+        });
+    auto rebuildSub = core->bus().subscribe<bus::DatapointModelRebuilt>(
+        [&](bus::DatapointModelRebuilt const& event) {
+            if (event.generation > 0) rebuilt.fetch_add(1);
+        });
+
+    REQUIRE(core->reloadConfig(newPath.toStdString()).has_value());
+    REQUIRE(waitConnected(*core, "server.new"));
+    REQUIRE(core->transport("server.old") == nullptr);
+    REQUIRE(core->transport("server.new") != nullptr);
+    REQUIRE(core->datapoints().find("old.dp") == nullptr);
+    REQUIRE(core->datapoints().find("new.dp") != nullptr);
+    REQUIRE_FALSE(core->serverForwardEnabled("server.new"));
+    REQUIRE(succeeded.load() == 1);
+    REQUIRE(rebuilt.load() == 1);
+    REQUIRE(reentrantRejected.load() == 1);
+
+    REQUIRE(core->reloadConfig(oldPath.toStdString()).has_value());
+    REQUIRE(waitConnected(*core, "server.old"));
+    REQUIRE_FALSE(core->serverForwardEnabled("server.old"));
+    REQUIRE(succeeded.load() == 2);
+    REQUIRE(rebuilt.load() == 2);
+    REQUIRE(reentrantRejected.load() == 2);
+    core->stop();
+}
+
+TEST_CASE("ICore rejects configuration loading after start",
+          "[core][config][lifecycle]") {
+    QTemporaryFile cfg;
+    auto path = writeToml(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+)toml", cfg);
+
+    auto core = ICore::create();
+    core->start();
+    auto loaded = core->loadConfig(path.toStdString());
+    REQUIRE_FALSE(loaded.has_value());
+    REQUIRE_FALSE(loaded.error().empty());
+    REQUIRE(loaded.error().front().message.find("while Core is running")
+            != std::string::npos);
+    core->stop();
+}
+
+TEST_CASE("ICore reports an explicit codec load failure without fallback",
+          "[core][config][codec]") {
+    QTemporaryFile cfg;
+    auto path = writeToml(R"toml(
+[[codec]]
+id     = "site_codec"
+kind   = "lua"
+script = "definitely-missing-codec.lua"
+)toml", cfg);
+
+    auto core = ICore::create();
+    auto loaded = core->loadConfig(path.toStdString());
+    REQUIRE_FALSE(loaded.has_value());
+    REQUIRE_FALSE(loaded.error().empty());
+    REQUIRE(loaded.error().front().section == "codec[0]");
+    REQUIRE(core->codecs().find("site_codec") == nullptr);
+}
+
+TEST_CASE("ICore treats a declared plugin load failure as a config error",
+          "[core][config][plugin]") {
+    QTemporaryFile cfg;
+    auto path = writeToml(R"toml(
+[[transport]]
+id   = "would_be_partial"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[[plugin]]
+name = "missing"
+dll  = "definitely-missing-plugin.dll"
+)toml", cfg);
+
+    auto core = ICore::create();
+    auto loaded = core->loadConfig(path.toStdString());
+    REQUIRE_FALSE(loaded.has_value());
+    REQUIRE_FALSE(loaded.error().empty());
+    REQUIRE(loaded.error().front().section == "plugin[0]");
+    REQUIRE(core->transportIds().empty());
 }
 
 TEST_CASE("ICore registers builtin codecs at construction",

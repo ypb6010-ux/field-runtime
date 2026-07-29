@@ -13,18 +13,11 @@
 </head>
 <body>
   <h1>FieldRuntime Console <small id="state" class="bad">connecting…</small></h1>
-  <p>W1 骨架占位页 —— 正式前端将由 Figma 设计后填充。后端健康检查:</p>
+  <p>后端已启动，但当前静态目录是轻量状态页。完整管理界面请先在
+    <code>frontend</code> 执行 <code>npm run build</code>，再将生成的
+    <code>dist</code> 目录作为后端第三个启动参数。</p>
+  <p>后端健康检查：</p>
   <pre id="health">loading /api/v1/system/health …</pre>
-  <script>
-    fetch('/api/v1/system/health')
-      .then(r => r.json())
-      .then(j => {
-        document.getElementById('health').textContent = JSON.stringify(j, null, 2);
-        const s = document.getElementById('state');
-        s.textContent = (j.code === 0 ? 'online' : 'error');
-        s.className = (j.code === 0 ? 'ok' : 'bad');
-      })
-      .catch(e => { document.getElementById('health').textContent = String(e); });
-  </script>
+  <script src="/status.js"></script>
 </body>
 </html>

@@ -5,6 +5,7 @@
 #include <expected>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "core/core_global.h"
 #include "core/transport/TransportTypes.h"
@@ -33,6 +34,14 @@ public:
     virtual std::string      id()    const = 0;
     virtual TransportKind    kind()  const = 0;
     virtual ConnectionState  state() const = 0;
+    virtual TransportStatus status() const {
+        TransportStatus snapshot;
+        snapshot.transportId = id();
+        snapshot.kind = kind();
+        snapshot.state = state();
+        return snapshot;
+    }
+    virtual std::vector<PeerSession> peerSessions() const { return {}; }
 
     virtual std::expected<void, std::string> connect()    = 0;
     virtual void                             disconnect() = 0;

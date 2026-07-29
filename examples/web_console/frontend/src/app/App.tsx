@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { AuthUser, PageKey, StatusTone } from "./types";
 import { canAccess, defaultPage } from "./nav";
-import { hasPermission } from "./auth";
-import { clearToken } from "./api";
+import { currentUser, hasPermission } from "./auth";
+import { apiGet, apiPost, clearToken, connectStream, getToken } from "./api";
 import { AppShell } from "./components/AppShell";
 import { Toaster } from "./components/ui/sonner";
 import { Login } from "./pages/Login";
@@ -19,14 +19,9 @@ import { Polling } from "./pages/Polling";
 import { Conversion } from "./pages/Conversion";
 import { Logs } from "./pages/Logs";
 import { Settings } from "./pages/Settings";
-import { Placeholder } from "./pages/Placeholder";
-import { RoleNavigation } from "./pages/RoleNavigation";
-import { ButtonStates } from "./pages/ButtonStates";
-import { GlobalStates } from "./pages/GlobalStates";
-import { StatePlayground } from "./pages/StatePlayground";
 
 /** 受 config 权限影响、且当前存在未生效草稿的页面（侧栏小红点） */
-const DRAFT_SCOPED: PageKey[] = ["conversion", "config"];
+const DRAFT_SCOPED: PageKey[] = ["protocols", "datapoints", "polling", "config"];
 
 function renderPage(
   page: PageKey,
@@ -46,9 +41,9 @@ function renderPage(
     case "live":
       return <Live role={ctx.role} />;
     case "config":
-      return <ConfigApply />;
+      return <ConfigApply onChanged={ctx.onDraftIncrement} />;
     case "datapoints":
-      return <Datapoints canWrite={ctx.role === "admin"} onDraftIncrement={ctx.onDraftIncrement} />;
+      return <Datapoints canWrite={ctx.canWriteProtocol} onDraftIncrement={ctx.onDraftIncrement} />;
     case "history":
       return <History />;
     case "users":
@@ -56,51 +51,124 @@ function renderPage(
     case "apidocs":
       return <ApiDocs />;
     case "polling":
-      return <Polling canWrite={ctx.role === "admin"} onDraftIncrement={ctx.onDraftIncrement} />;
+      return <Polling canWrite={ctx.canWriteProtocol} onDraftIncrement={ctx.onDraftIncrement} />;
     case "conversion":
-      return <Conversion canWrite={ctx.role !== "viewer"} onDraftIncrement={ctx.onDraftIncrement} />;
+      return <Conversion canWrite={ctx.role !== "viewer"} />;
     case "logs":
       return <Logs />;
     case "settings":
       return <Settings canWrite={ctx.role === "admin"} />;
-    case "spec-roles":
-      return <RoleNavigation />;
-    case "spec-buttons":
-      return <ButtonStates />;
-    case "spec-states":
-      return <GlobalStates />;
-    case "spec-live-playground":
-      return <StatePlayground />;
     default:
-      return <Placeholder page={page} />;
+      return null;
   }
 }
 
 export default function App() {
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [restoring, setRestoring] = useState(true);
   const [page, setPage] = useState<PageKey>("dashboard");
   const [collapsed, setCollapsed] = useState(false);
 
-  // 模拟运行态
-  const [draftCount, setDraftCount] = useState(3);
-  const [systemStatus, setSystemStatus] = useState<StatusTone>("info"); // 登录后先“检查中”
+  const [draftCount, setDraftCount] = useState(0);
+  const [systemStatus, setSystemStatus] = useState<StatusTone>("info");
   const [wsStatus, setWsStatus] = useState<StatusTone>("info");
 
-  // 登录后：系统由“检查中”过渡到“在线”，WS 偶发重连
+  async function refreshDraftStatus() {
+    if (!user || !hasPermission(user, "config:read")) {
+      setDraftCount(0);
+      return;
+    }
+    try {
+      const status = await apiGet<{ draftDirty: boolean }>("/config/status");
+      setDraftCount(status.draftDirty ? 1 : 0);
+    } catch {
+      // The header status is advisory; the Config page shows the full error.
+    }
+  }
+
+  // Restore an existing bearer session and react immediately to global 401s.
+  useEffect(() => {
+    let active = true;
+    const unauthorized = () => {
+      clearToken();
+      setUser(null);
+      setRestoring(false);
+    };
+    window.addEventListener("field-console:unauthorized", unauthorized);
+    if (!getToken()) {
+      setRestoring(false);
+    } else {
+      currentUser()
+        .then((restored) => {
+          if (active) setUser(restored);
+        })
+        .catch(() => {
+          clearToken();
+        })
+        .finally(() => {
+          if (active) setRestoring(false);
+        });
+    }
+    return () => {
+      active = false;
+      window.removeEventListener("field-console:unauthorized", unauthorized);
+    };
+  }, []);
+
+  // Live system and WebSocket status; no simulated state transitions.
   useEffect(() => {
     if (!user) return;
-    const t = setTimeout(() => {
-      setSystemStatus("success");
-      setWsStatus("success");
-    }, 1200);
-    const id = setInterval(() => {
-      setWsStatus((prev) => (prev === "success" ? "warning" : "success"));
-    }, 6000);
-    return () => {
-      clearTimeout(t);
-      clearInterval(id);
+    let active = true;
+    const checkHealth = async () => {
+      try {
+        const health = await apiGet<{ status: string }>("/system/health");
+        if (!active) return;
+        setSystemStatus(
+          health.status === "ok"
+            ? "success"
+            : health.status === "degraded"
+              ? "warning"
+              : "error",
+        );
+      } catch {
+        if (active) setSystemStatus("error");
+      }
     };
-  }, [user]);
+    checkHealth();
+    refreshDraftStatus();
+    const healthTimer = window.setInterval(checkHealth, 10_000);
+    const stream = connectStream({
+      topics: ["transport/*"],
+      onSnapshot: () => {},
+      onState: (state) => {
+        if (!active) return;
+        setWsStatus(
+          state === "connected"
+            ? "success"
+            : state === "disconnected"
+              ? "error"
+              : state === "reconnecting"
+                ? "warning"
+                : "info",
+        );
+      },
+    });
+    return () => {
+      active = false;
+      window.clearInterval(healthTimer);
+      stream.close();
+    };
+    // Recreate monitors only when the authenticated identity changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.name]);
+
+  if (restoring) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">
+        正在恢复会话…
+      </div>
+    );
+  }
 
   if (!user) {
     return (
@@ -124,7 +192,13 @@ export default function App() {
   const canWriteProtocol = hasPermission(user, "protocol:write");
 
   const systemLabel =
-    systemStatus === "success" ? "在线" : systemStatus === "error" ? "异常" : "检查中";
+    systemStatus === "success"
+      ? "在线"
+      : systemStatus === "warning"
+        ? "降级"
+        : systemStatus === "error"
+          ? "异常"
+          : "检查中";
   const wsLabel =
     wsStatus === "success"
       ? "正常"
@@ -151,11 +225,17 @@ export default function App() {
         draftScopedKeys={canSeeConfig ? DRAFT_SCOPED : []}
         onToggleSidebar={() => setCollapsed((c) => !c)}
         onNavigate={setPage}
-        onOpenProfile={() => toast.message(`${user.name} · 个人信息（演示）`)}
-        onLogout={() => {
-          clearToken();
-          setUser(null);
-          setPage("dashboard");
+        onOpenProfile={() => toast.message(`${user.name} · ${user.role}`)}
+        onLogout={async () => {
+          try {
+            await apiPost("/auth/logout");
+          } catch {
+            // Local logout must still succeed if the server is unavailable.
+          } finally {
+            clearToken();
+            setUser(null);
+            setPage("dashboard");
+          }
         }}
       >
         {renderPage(safePage, {
@@ -163,7 +243,7 @@ export default function App() {
           draftCount,
           canWriteProtocol,
           onNavigate: setPage,
-          onDraftIncrement: () => setDraftCount((c) => c + 1),
+          onDraftIncrement: refreshDraftStatus,
         })}
       </AppShell>
       <Toaster position="top-center" richColors />

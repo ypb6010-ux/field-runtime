@@ -55,6 +55,7 @@ public:
     std::string           id()    const override;
     TransportKind         kind()  const override;
     ConnectionState       state() const override;
+    TransportStatus       status() const override;
 
     std::expected<void, std::string> connect()    override;
     void                             disconnect() override;
@@ -69,6 +70,8 @@ public:
     void writeAsync(WriteBatch const& batch, WriteDone done) override;
 
 private:
+    void armReconnectIfConfigured();
+
     class Impl;
     std::unique_ptr<Impl> m_impl;
 };

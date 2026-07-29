@@ -445,6 +445,9 @@ SubmitResult SerialScheduler::submit(RequestTag tag,
 SubmitResult SerialScheduler::submitAsync(RequestTag tag, AsyncWork work) {
     {
         std::lock_guard lk(m_impl->mtx);
+        if (m_impl->stopped) {
+            return {ResultKind::Cancelled, "scheduler stopped", 0};
+        }
         if (m_impl->mode == Impl::Mode::Sync) {
             return {ResultKind::Error,
                     "scheduler is in sync mode", 0};
@@ -480,6 +483,24 @@ void SerialScheduler::setDelayFn(DelayFn fn) {
 void SerialScheduler::stopAsync() {
     std::lock_guard lk(m_impl->mtx);
     m_impl->stopped = true;
+    for (auto& lane : m_impl->lanes) {
+        for (auto& entry : lane) {
+            if (entry->state == PendingState::Queued) {
+                entry->state = PendingState::Cancelled;
+                ++m_impl->totalCancelled;
+            }
+        }
+        lane.clear();
+    }
+    m_impl->delayScheduled = false;
+}
+
+void SerialScheduler::startAsync() {
+    {
+        std::lock_guard lk(m_impl->mtx);
+        m_impl->stopped = false;
+    }
+    m_impl->pump(false);
 }
 
 int SerialScheduler::cancelModule(std::string const& moduleId) {

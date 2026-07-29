@@ -3,16 +3,20 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "core/core_global.h"
+#include "core/dp/PortRef.h"
 #include "core/module/FunctionalModule.h"
 #include "core/sched/RequestScheduler.h"   // SubmitResult lives here
 #include "core/transport/TransportTypes.h"
 
 namespace core::codec    { class Codec; }
+namespace core::bus      { class EventBus; }
 namespace core::dp       { class Datapoint; }
 namespace core::transport { class Transport; }
 
@@ -31,7 +35,8 @@ public:
               transport::Transport&       transport,
               transport::ReadRequest      request,
               int                         periodMs,
-              sched::Priority             priority = sched::Priority::Normal);
+              sched::Priority             priority = sched::Priority::Normal,
+              bus::EventBus*              bus = nullptr);
     ~PollRange() override;
 
     CORE_DISABLE_COPY_MOVE(PollRange)
@@ -69,7 +74,9 @@ private:
     struct Binding {
         std::shared_ptr<dp::Datapoint> dp;
         std::shared_ptr<codec::Codec>  codec;
+        std::optional<dp::PortRef>     source;
         int                             offset;
+        int                             registerCount;
     };
 
     // Decode a successful read into the bound datapoints, or mark them
@@ -79,9 +86,12 @@ private:
     transport::Transport*       m_transport;
     transport::ReadRequest      m_req;
     int                         m_periodMs;
+    bus::EventBus*              m_bus = nullptr;
     std::vector<Binding>        m_bindings;
     std::atomic<bool>           m_paused{false};   // read on tick thread, set on stop/pause
     std::atomic<bool>           m_inFlight{false};
+    // Invalidates late async completions after stop/pause/restart.
+    std::atomic<std::uint64_t>  m_runGeneration{0};
 };
 
 } // namespace core::module

@@ -95,7 +95,7 @@ struct SinkWindowFlushConfig {
     int  debounceMs       = 20;
     int  keepaliveMs      = 0;
     bool coalesceWrites   = true;
-    int  maxRetries       = 2;
+    int  maxRetries       = 0;
 };
 
 struct SinkWindowConfig {
@@ -198,10 +198,15 @@ struct PluginConfig {
     std::string config;
 };
 
+enum class BridgeMirrorPolicy {
+    AfterPoll,
+    Periodic,
+};
+
 // 整段桥接(替代旧 ModbusServer 中继):把操作箱连的 server transport 与 PLC client
 // transport 双向桥接 —— 写区 [write_start, write_start+write_count) 的 server 写转发到
-// PLC;读区 [mirror_start, mirror_start+mirror_count) 的 PLC 数据周期镜像回 server 寄存器
-// 供操作箱读取。server 地址 = PLC 地址 + offset。
+// PLC;读区 [mirror_start, mirror_start+mirror_count) 的 PLC 原始轮询快照按指定策略
+// 镜像回 server 寄存器供操作箱读取。server 地址 = PLC 地址 + offset。
 struct BridgeConfig {
     std::string server;
     std::string plc;
@@ -210,7 +215,8 @@ struct BridgeConfig {
     int     writeCount     = 0;
     int     mirrorStart    = 0;
     int     mirrorCount    = 0;
-    int     mirrorPeriodMs = 100;
+    BridgeMirrorPolicy mirrorPolicy = BridgeMirrorPolicy::AfterPoll;
+    int     mirrorPeriodMs = 0;   // required only for Periodic
 };
 
 struct ConfigSchema {

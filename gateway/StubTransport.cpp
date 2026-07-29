@@ -39,6 +39,7 @@ transport::ConnectionState StubTransport::state() const {
 }
 
 std::expected<void, std::string> StubTransport::connect() {
+    if (m_scheduler) m_scheduler->startAsync();
     m_state.store(transport::ConnectionState::Connected, std::memory_order_release);
     return {};
 }

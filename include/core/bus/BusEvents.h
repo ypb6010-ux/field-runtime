@@ -9,6 +9,7 @@
 #include "core/dp/State.h"     // dp::Timestamp
 #include "core/dp/Value.h"     // dp::Value
 #include "core/sched/SchedulerTypes.h"
+#include "core/transport/TransportTypes.h"
 
 namespace core::bus {
 
@@ -25,6 +26,60 @@ struct DpChanged {
     std::string    id;
     dp::Value      value;
     dp::Timestamp  timestamp;
+};
+
+// A successful PollRange publishes the untouched register image only after
+// datapoint application is complete. Bridge consumers can mirror this image
+// without re-encoding scaled/bitfield presentation values.
+struct PollRangeCompleted {
+    std::string          moduleId;
+    std::string          transportId;
+    core::RegisterTable  table = core::RegisterTable::HoldingRegister;
+    int                  startAddress = 0;
+    int                  count = 0;
+    core::RegisterWords  values;
+    dp::Timestamp        completedAt;
+};
+
+struct TransportStateChanged {
+    transport::TransportStatus before;
+    transport::TransportStatus after;
+};
+
+enum class PeerSessionChangeKind {
+    Connected,
+    Disconnected,
+};
+
+struct PeerSessionChanged {
+    PeerSessionChangeKind   kind = PeerSessionChangeKind::Connected;
+    transport::PeerSession  session;
+    std::string             reason;
+    dp::Timestamp           changedAt;
+};
+
+struct SchedulerCircuitChanged {
+    std::string          transportId;
+    sched::CircuitState  before = sched::CircuitState::Closed;
+    sched::CircuitState  after = sched::CircuitState::Closed;
+    dp::Timestamp        changedAt;
+};
+
+struct ConfigReloadStarted {
+    std::string path;
+};
+
+struct ConfigReloadSucceeded {
+    std::string path;
+};
+
+struct ConfigReloadFailed {
+    std::string path;
+    std::string reason;
+};
+
+struct DatapointModelRebuilt {
+    std::uint64_t generation = 0;
 };
 
 enum class TransportEventKind {

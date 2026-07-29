@@ -3,7 +3,6 @@
 #pragma once
 
 namespace wc {
-// W7.x: /system/events, /audit, /system/settings, /users, /roles
-// (backs the Logs / Settings / Users & Roles frontend pages).
+// Administrative events, audit, settings, maintenance, users, and roles.
 void registerAdminControllers();
 }

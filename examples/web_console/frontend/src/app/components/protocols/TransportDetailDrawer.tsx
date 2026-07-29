@@ -36,13 +36,16 @@ export function TransportDetailDrawer({
   if (!transport) return null;
   const schema = getKindSchema(transport.kind);
 
-  const logs = [
-    { t: transport.lastConnectedAt ?? "—", tone: "text-status-success", msg: "连接握手成功" },
-    { t: "2026-06-18 10:30:11", tone: "text-muted-foreground", msg: "轮询读取 128 个寄存器，耗时 22ms" },
-    ...(transport.lastError
-      ? [{ t: "2026-06-18 09:58:30", tone: "text-status-error", msg: transport.lastError }]
-      : []),
-  ];
+  const numericUpdatedAt = Number(transport.updatedAt);
+  const updatedAt = transport.updatedAt
+    ? new Date(
+        Number.isFinite(numericUpdatedAt)
+          ? numericUpdatedAt < 10_000_000_000
+            ? numericUpdatedAt * 1000
+            : numericUpdatedAt
+          : transport.updatedAt,
+      ).toLocaleString()
+    : "—";
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -80,36 +83,19 @@ export function TransportDetailDrawer({
 
             <Section title="基本信息">
               <dl className="grid grid-cols-3 gap-y-2 text-sm">
-                <dt className="text-muted-foreground">最近连接</dt>
-                <dd className="col-span-2">{transport.lastConnectedAt ?? "—"}</dd>
+                <dt className="text-muted-foreground">配置更新时间</dt>
+                <dd className="col-span-2">{updatedAt}</dd>
                 <dt className="text-muted-foreground">关联点位</dt>
                 <dd className="col-span-2 tabular-nums">{transport.pointCount}</dd>
-                <dt className="text-muted-foreground">更新人</dt>
-                <dd className="col-span-2">{transport.updatedBy}</dd>
-                <dt className="text-muted-foreground">标签</dt>
-                <dd className="col-span-2 flex flex-wrap gap-1">
-                  {transport.tags.length
-                    ? transport.tags.map((t) => (
-                        <Badge key={t} variant="secondary">
-                          {t}
-                        </Badge>
-                      ))
-                    : "—"}
-                </dd>
               </dl>
             </Section>
 
             <Separator />
 
-            <Section title="最近连接日志">
-              <ul className="space-y-1.5">
-                {logs.map((l, i) => (
-                  <li key={i} className="flex gap-2 text-xs">
-                    <span className="shrink-0 font-mono text-muted-foreground">{l.t}</span>
-                    <span className={l.tone}>{l.msg}</span>
-                  </li>
-                ))}
-              </ul>
+            <Section title="连接说明">
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                当前状态来自运行时快照。历史连接事件请在“事件日志”中按协议 ID 检索。
+              </p>
             </Section>
 
             <Separator />

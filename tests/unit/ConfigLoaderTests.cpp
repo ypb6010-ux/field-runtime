@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: MPL-2.0
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
+#include <string_view>
+
 #include <QFile>
 #include <QTemporaryFile>
 
@@ -24,6 +27,62 @@ std::string writeTomlFile(QString const& contents, QTemporaryFile& f) {
 }
 
 } // namespace
+
+TEST_CASE("ConfigLoader rejects misspelled fields instead of using defaults",
+          "[config][usability]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[meta]
+project = "typo"
+
+[[transport]]
+id = "plc"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+port = 502
+reconnect_intervl_ms = 1000
+)toml", temp);
+
+    ConfigLoader loader;
+    auto schema = loader.loadFromToml(path);
+    REQUIRE_FALSE(schema.has_value());
+    bool found = false;
+    for (auto const& error : schema.error()) {
+        found |= error.section == "transport[0]"
+              && error.field == "reconnect_intervl_ms"
+              && error.message.find("unknown") != std::string::npos;
+    }
+    REQUIRE(found);
+}
+
+TEST_CASE("ConfigLoader rejects wrong field types instead of using defaults",
+          "[config][usability][types]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id = "plc"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+port = "502"
+clean_session = 1
+)toml", temp);
+
+    ConfigLoader loader;
+    auto schema = loader.loadFromToml(path);
+    REQUIRE_FALSE(schema.has_value());
+    bool badPort = false;
+    bool badBool = false;
+    for (auto const& error : schema.error()) {
+        badPort |= error.section == "transport[0]"
+                && error.field == "port"
+                && error.message.find("integer") != std::string::npos;
+        badBool |= error.section == "transport[0]"
+                && error.field == "clean_session"
+                && error.message.find("boolean") != std::string::npos;
+    }
+    REQUIRE(badPort);
+    REQUIRE(badBool);
+}
 
 TEST_CASE("ConfigLoader parses a minimal transport + datapoint config",
           "[config][parse]") {
@@ -652,4 +711,58 @@ map  = { 0 = "Stopped", 1 = "Starting", 2 = "Running" }
     REQUIRE(c.map.size() == 3);
     REQUIRE(core::dp::toString(c.map.at("0")) == "Stopped");
     REQUIRE(core::dp::toString(c.map.at("2")) == "Running");
+}
+
+TEST_CASE("ConfigLoader admits only explicitly declared root extensions",
+          "[config][strict]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[control]
+listen_port = 15022
+)toml", temp);
+
+    ConfigLoader loader;
+    REQUIRE_FALSE(loader.loadFromToml(path).has_value());
+
+    static constexpr std::array<std::string_view, 1> extensions{"control"};
+    REQUIRE(loader.loadFromToml(path, extensions).has_value());
+}
+
+TEST_CASE("ConfigLoader rejects parsed fields without runtime semantics",
+          "[config][strict]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id   = "tcp1"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+
+[[sink_window]]
+module_id = "sw"
+transport = "tcp1"
+table = "HR"
+range = [0, 4]
+[sink_window.flush]
+max_retries = 2
+
+[[command]]
+module_id = "cmd"
+transport = "tcp1"
+trigger = "event.start"
+writes = [{ table="HR", address=42, value=1 }]
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE_FALSE(result.has_value());
+    bool retryRejected = false;
+    bool triggerRejected = false;
+    for (auto const& error : result.error()) {
+        retryRejected =
+            retryRejected || error.field == "max_retries";
+        triggerRejected =
+            triggerRejected || error.field == "trigger";
+    }
+    REQUIRE(retryRejected);
+    REQUIRE(triggerRejected);
 }

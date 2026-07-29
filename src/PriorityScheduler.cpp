@@ -30,6 +30,10 @@ void PriorityScheduler::stopAsync() {
     m_impl->stopAsync();
 }
 
+void PriorityScheduler::startAsync() {
+    m_impl->startAsync();
+}
+
 int PriorityScheduler::cancelModule(std::string const& moduleId) {
     return m_impl->cancelModule(moduleId);
 }

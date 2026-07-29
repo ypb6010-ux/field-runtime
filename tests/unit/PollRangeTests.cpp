@@ -5,6 +5,8 @@
 
 #include <memory>
 
+#include "core/bus/BusEvents.h"
+#include "core/bus/EventBus.h"
 #include "core/codec/BuiltinCodecs.h"
 #include "core/dp/Datapoint.h"
 #include "core/dp/PortRef.h"
@@ -218,6 +220,56 @@ TEST_CASE("PollRange supports no bindings (raw poll-only mode)",
     REQUIRE(poll.bindingCount() == 0);
 }
 
+TEST_CASE("PollRange publishes one untouched raw snapshot after a successful poll",
+          "[poll][event][raw]") {
+    test::MockTransport mock;
+    bus::EventBus eventBus;
+    module::PollRange poll("poll.raw", mock, readRange(50, 2), 100,
+                           sched::Priority::Normal, &eventBus);
+    auto spec = dpSpec("scaled", dp::ScalarType::U16, 50);
+    spec.source->scale = 0.1;
+    auto dpt = std::make_shared<dp::Datapoint>(spec);
+    poll.bind(dpt,
+              std::make_shared<codec::BuiltinScalarCodec>(
+                  dp::ScalarType::U16),
+              0);
+
+    int events = 0;
+    bus::PollRangeCompleted snapshot;
+    auto sub = eventBus.subscribe<bus::PollRangeCompleted>(
+        [&](bus::PollRangeCompleted const& event) {
+            ++events;
+            snapshot = event;
+        });
+
+    mock.enqueueReadValues({230, 0xA55A});
+    REQUIRE(poll.pollOnce().kind == sched::ResultKind::Ok);
+    REQUIRE_THAT(dp::toDouble(dpt->value()), WithinAbs(23.0, 1e-9));
+    REQUIRE(events == 1);
+    REQUIRE(snapshot.moduleId == "poll.raw");
+    REQUIRE(snapshot.transportId == "mock");
+    REQUIRE(snapshot.startAddress == 50);
+    REQUIRE(snapshot.count == 2);
+    REQUIRE(snapshot.values == core::RegisterWords{230, 0xA55A});
+}
+
+TEST_CASE("PollRange rejects incomplete reads without publishing a snapshot",
+          "[poll][event][safety]") {
+    test::MockTransport mock;
+    bus::EventBus eventBus;
+    module::PollRange poll("poll.short", mock, readRange(0, 2), 100,
+                           sched::Priority::Normal, &eventBus);
+    int events = 0;
+    auto sub = eventBus.subscribe<bus::PollRangeCompleted>(
+        [&](bus::PollRangeCompleted const&) { ++events; });
+
+    mock.enqueueReadValues({1});
+    auto const result = poll.pollOnce();
+    REQUIRE(result.kind == sched::ResultKind::Error);
+    REQUIRE(result.errorMessage == "incomplete read result");
+    REQUIRE(events == 0);
+}
+
 TEST_CASE("PollRange.driveTick dispatches decoded values via the async path",
           "[poll][async]") {
     test::MockTransport mock;
@@ -261,6 +313,32 @@ TEST_CASE("PollRange.driveTick coalesces while a read is still in flight",
     REQUIRE(mock.readCount() == 2);
     REQUIRE(mock.completeNextRead());
     REQUIRE(dp::toUInt64(dpt->value()) == 0x22);
+}
+
+TEST_CASE("PollRange ignores a late async completion after stop",
+          "[poll][async][lifecycle]") {
+    test::MockTransport mock;
+    mock.setDeferAsync(true);
+    module::PollRange poll("poll.stop", mock, readRange(0, 1), 100);
+    auto spec = dpSpec("a", dp::ScalarType::U16, 0);
+    auto dpt = std::make_shared<dp::Datapoint>(spec);
+    poll.bind(dpt,
+              std::make_shared<codec::BuiltinScalarCodec>(
+                  dp::ScalarType::U16),
+              0);
+
+    mock.enqueueReadValues({0x33});
+    poll.driveTick();
+    REQUIRE(mock.pendingReadCount() == 1);
+    poll.stop();
+    REQUIRE(mock.completeNextRead());
+    REQUIRE(dpt->state() == dp::DpState::Missing);
+
+    poll.start();
+    mock.enqueueReadValues({0x44});
+    poll.driveTick();
+    REQUIRE(mock.completeNextRead());
+    REQUIRE(dp::toUInt64(dpt->value()) == 0x44);
 }
 
 TEST_CASE("PollRange.driveTick marks Stale and frees the guard when rejected",

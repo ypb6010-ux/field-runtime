@@ -71,6 +71,7 @@ transport::ConnectionState AsioS7Client::state() const {
 }
 
 std::expected<void, std::string> AsioS7Client::connect() {
+    if (m_scheduler) m_scheduler->startAsync();
     m_state.store(transport::ConnectionState::Connecting, std::memory_order_release);
 
     auto result = std::make_shared<std::promise<std::expected<void, std::string>>>();

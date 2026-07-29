@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Loader2, PlugZap, Lock, AlertTriangle } from "lucide-react";
-import type { KindSchema, Transport } from "../../transports";
+import type { KindSchema, Transport, TransportPayload } from "../../transports";
 import { getKindSchema, testConnection } from "../../transports";
 import type { FieldValue } from "./schema-fields";
 import { KindSelector } from "./KindSelector";
@@ -10,15 +10,14 @@ import { TestConnectionPanel, type TestState } from "./TestConnectionPanel";
 import { DangerousConfirmModal } from "./DangerousConfirmModal";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "../ui/sheet";
 import { Input } from "../ui/input";
-import { Textarea } from "../ui/textarea";
 import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
 import { Button } from "../ui/button";
-import { Badge } from "../ui/badge";
 import { Separator } from "../ui/separator";
 import { ScrollArea } from "../ui/scroll-area";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { isValidResourceId } from "../../api";
 
 interface TransportDrawerProps {
   open: boolean;
@@ -29,7 +28,7 @@ interface TransportDrawerProps {
   kindsLoading: boolean;
   kindsError: string | null;
   onRetryKinds: () => void;
-  onSaved: (mode: "create" | "edit") => void;
+  onSave: (mode: "create" | "edit", payload: TransportPayload) => Promise<void>;
 }
 
 function buildDefaults(schema?: KindSchema): Record<string, FieldValue> {
@@ -53,33 +52,6 @@ function primaryEndpointOf(values: Record<string, FieldValue>): string {
   return f ? String(values[f]) : "—";
 }
 
-/** 编辑态：根据连接当前状态构造最近一次测试结果 */
-function seedTestResult(t: Transport): TestState {
-  if (t.status === "error" || t.lastError) {
-    return {
-      status: "error",
-      result: {
-        ok: false,
-        endpoint: t.endpoint,
-        at: t.lastConnectedAt ?? "—",
-        message: t.lastError ?? "上次测试失败",
-        errorType: "Timeout",
-        suggestions: [
-          "Host / Broker URL 是否正确",
-          "Port 是否开放",
-          "认证信息是否正确",
-          "网络是否可达",
-          "防火墙是否放行",
-        ],
-      },
-    };
-  }
-  return {
-    status: "success",
-    result: { ok: true, latencyMs: 24, endpoint: t.endpoint, at: t.lastConnectedAt ?? "—", message: "connection accepted" },
-  };
-}
-
 export function TransportDrawer({
   open,
   onOpenChange,
@@ -89,12 +61,10 @@ export function TransportDrawer({
   kindsLoading,
   kindsError,
   onRetryKinds,
-  onSaved,
+  onSave,
 }: TransportDrawerProps) {
+  const [id, setId] = useState("");
   const [name, setName] = useState("");
-  const [note, setNote] = useState("");
-  const [tags, setTags] = useState<string[]>([]);
-  const [tagInput, setTagInput] = useState("");
   const [enabled, setEnabled] = useState(true);
 
   const [kind, setKind] = useState("");
@@ -116,21 +86,19 @@ export function TransportDrawer({
     setTestState({ status: "idle" });
     if (mode === "edit" && initial) {
       const sc = getKindSchema(initial.kind);
+      setId(initial.id);
       setName(initial.name);
-      setNote("");
-      setTags(initial.tags);
       setEnabled(initial.enabled);
       setKind(initial.kind);
       setValues({ ...initial.config });
       // 编辑态：secret 字段脱敏，不回显
       setSavedSecrets(sc?.fields.filter((f) => f.type === "secret").map((f) => f.name) ?? []);
       setKindLocked(true);
-      setTestState(seedTestResult(initial)); // 显示最近一次测试结果
+      setTestState({ status: "idle" });
     } else {
       const first = kinds[0]?.kind ?? "";
+      setId("");
       setName("");
-      setNote("");
-      setTags([]);
       setEnabled(true);
       setKind(first);
       setValues(buildDefaults(getKindSchema(first)));
@@ -164,10 +132,19 @@ export function TransportDrawer({
 
   function validate(): boolean {
     const e: Record<string, string> = {};
+    if (!isValidResourceId(id)) {
+      e.__id = "ID 须为 1–128 字符，且不可含空白或 /\\?#%";
+    }
     if (name.trim() === "") e.__name = "请输入协议名称";
     schema?.fields.forEach((f) => {
       if (f.required && !isFilled(f.type, values[f.name], savedSecrets.includes(f.name))) {
         e[f.name] = `${f.title} 为必填项`;
+      }
+      if (f.type === "number" && typeof values[f.name] === "number") {
+        const value = values[f.name] as number;
+        if (!Number.isFinite(value)) e[f.name] = `${f.title} 必须是有效数字`;
+        else if (f.minimum !== undefined && value < f.minimum) e[f.name] = `${f.title} 不能小于 ${f.minimum}`;
+        else if (f.maximum !== undefined && value > f.maximum) e[f.name] = `${f.title} 不能大于 ${f.maximum}`;
       }
     });
     setErrors(e);
@@ -188,23 +165,54 @@ export function TransportDrawer({
       return;
     }
     setTestState({ status: "loading", endpoint: primaryEndpointOf(values) });
-    const result = await testConnection(kind, values);
-    setTestState({ status: result.ok ? "success" : "error", result });
+    try {
+      const result = await testConnection(kind, values);
+      setTestState({ status: result.ok ? "success" : "error", result });
+    } catch (error) {
+      setTestState({
+        status: "error",
+        result: {
+          ok: false,
+          endpoint: primaryEndpointOf(values),
+          at: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+          message: error instanceof Error ? error.message : "连接测试失败",
+        },
+      });
+    }
   }
 
   async function handleSave() {
     if (!validate()) return;
     setSaving(true);
-    await new Promise((r) => setTimeout(r, 600));
-    setSaving(false);
-    onSaved(mode);
-    onOpenChange(false);
-  }
-
-  function addTag() {
-    const t = tagInput.trim();
-    if (t && !tags.includes(t)) setTags((p) => [...p, t]);
-    setTagInput("");
+    try {
+      const params: Record<string, string | number | boolean> = {};
+      schema?.fields.forEach((field) => {
+        const value = values[field.name];
+        if (
+          typeof value === "string"
+          || typeof value === "number"
+          || typeof value === "boolean"
+        ) {
+          params[field.name] = value;
+        }
+      });
+      await onSave(mode, {
+        id: id.trim(),
+        name: name.trim(),
+        kind,
+        enabled,
+        params_json: params,
+        scheduler_json: mode === "edit" ? initial?.scheduler ?? {} : {},
+      });
+      onOpenChange(false);
+    } catch (error) {
+      setErrors((current) => ({
+        ...current,
+        __save: error instanceof Error ? error.message : "保存失败",
+      }));
+    } finally {
+      setSaving(false);
+    }
   }
 
   const canSave = !kindsError && !kindsLoading && !!schema;
@@ -244,6 +252,20 @@ export function TransportDrawer({
             <section className="space-y-4">
               <h3 className="text-sm text-muted-foreground">A · 基本信息</h3>
               <div className="space-y-1.5">
+                <Label htmlFor="t-id" className="flex items-center gap-1">
+                  连接 ID <span className="text-status-error">*</span>
+                </Label>
+                <Input
+                  id="t-id"
+                  value={id}
+                  disabled={mode === "edit"}
+                  onChange={(event) => setId(event.target.value)}
+                  placeholder="如 workshop-a-plc-01"
+                  aria-invalid={!!errors.__id}
+                />
+                {errors.__id && <p className="text-xs text-status-error">{errors.__id}</p>}
+              </div>
+              <div className="space-y-1.5">
                 <Label htmlFor="t-name" className="flex items-center gap-1">
                   协议名称 <span className="text-status-error">*</span>
                 </Label>
@@ -258,44 +280,6 @@ export function TransportDrawer({
                   aria-invalid={!!errors.__name}
                 />
                 {errors.__name && <p className="text-xs text-status-error">{errors.__name}</p>}
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="t-note">备注</Label>
-                <Textarea id="t-note" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="可选" />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="t-tags">标签</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="t-tags"
-                    value={tagInput}
-                    onChange={(e) => setTagInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        addTag();
-                      }
-                    }}
-                    placeholder="输入后回车添加"
-                  />
-                  <Button type="button" variant="outline" onClick={addTag}>
-                    添加
-                  </Button>
-                </div>
-                {tags.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {tags.map((t) => (
-                      <Badge
-                        key={t}
-                        variant="secondary"
-                        className="cursor-pointer"
-                        onClick={() => setTags((p) => p.filter((x) => x !== t))}
-                      >
-                        {t} ✕
-                      </Badge>
-                    ))}
-                  </div>
-                )}
               </div>
               <div className="flex items-center justify-between rounded-md border border-border px-3 py-2.5">
                 <Label htmlFor="t-enabled">启用连接</Label>
@@ -361,24 +345,8 @@ export function TransportDrawer({
                 <div className="rounded-md border border-border bg-muted/30 px-4 py-3">
                   <p className="mb-2 text-xs text-muted-foreground">最近状态（运行时记录）</p>
                   <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
-                    <dt className="text-muted-foreground">最近连接时间</dt>
-                    <dd className="tabular-nums">{initial.lastConnectedAt ?? "—"}</dd>
-                    <dt className="text-muted-foreground">最近测试时间</dt>
-                    <dd className="tabular-nums">{initial.lastConnectedAt ?? "—"}</dd>
-                    <dt className="text-muted-foreground">最近测试结果</dt>
-                    <dd>
-                      {initial.status === "error" || initial.lastError ? (
-                        <span className="text-status-error">失败</span>
-                      ) : (
-                        <span className="text-status-success">成功</span>
-                      )}
-                    </dd>
-                    {initial.lastError && (
-                      <>
-                        <dt className="text-muted-foreground">最近连接错误</dt>
-                        <dd className="break-all font-mono text-status-error">{initial.lastError}</dd>
-                      </>
-                    )}
+                    <dt className="text-muted-foreground">运行状态</dt>
+                    <dd className="tabular-nums">{initial.status}</dd>
                   </dl>
                 </div>
               )}
@@ -390,6 +358,9 @@ export function TransportDrawer({
 
         {/* 底部操作（固定，右对齐） */}
         <div className="flex items-center justify-end gap-2 border-t border-border px-6 py-3">
+          {errors.__save && (
+            <span className="mr-auto text-xs text-status-error">{errors.__save}</span>
+          )}
           {/* 测试连接：kindsError 时禁用并提示 */}
           <Tooltip>
             <TooltipTrigger asChild>

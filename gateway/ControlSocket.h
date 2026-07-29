@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,8 @@ private:
     GatewayAssembly* m_gateway = nullptr;
     ControlConfig m_config;
     std::unique_ptr<gateway_asio::ip::tcp::acceptor> m_acceptor;
+    std::set<std::shared_ptr<TcpSocket>,
+             std::owner_less<std::shared_ptr<TcpSocket>>> m_clients;
     bool m_started = false;
 };
 

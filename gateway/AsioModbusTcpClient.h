@@ -80,6 +80,7 @@ private:
     gateway_asio::ip::tcp::socket m_socket;
     std::unique_ptr<sched::RequestScheduler> m_scheduler;
     std::unique_ptr<gateway_asio::steady_timer> m_reconnectTimer;
+    std::unique_ptr<gateway_asio::steady_timer> m_connectTimer;
     bool m_reconnectPending = false;
     std::atomic<transport::ConnectionState> m_state{transport::ConnectionState::Disconnected};
     std::atomic<std::uint16_t> m_transactionId{1};

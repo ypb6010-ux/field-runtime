@@ -184,24 +184,34 @@ void SinkWindow::driveTick() {
     tag.moduleId = m_id;
     tag.priority = m_priority;
     tag.coalesce = m_cfg.coalesceWrites;
+    auto const runGeneration =
+        m_runGeneration.load(std::memory_order_acquire);
 
     auto const submission = m_transport->scheduler().submitAsync(tag,
-        [this, batch, gen](sched::AsyncDone done) {
+        [this, batch, gen, runGeneration](sched::AsyncDone done) {
             m_transport->writeAsync(batch,
-                [this, gen, done = std::move(done)](transport::WriteResult w) mutable {
-                    markFlushed(w.ok, gen);
-                    m_inFlight.store(false, std::memory_order_release);
+                [this, gen, runGeneration,
+                 done = std::move(done)](transport::WriteResult w) mutable {
+                    if (m_runGeneration.load(std::memory_order_acquire)
+                        == runGeneration) {
+                        markFlushed(w.ok, gen);
+                        m_inFlight.store(false, std::memory_order_release);
+                    }
                     done(w.ok);
                 });
         });
 
-    if (submission.kind != sched::ResultKind::Ok) {
+    if (submission.kind != sched::ResultKind::Ok
+        && m_runGeneration.load(std::memory_order_acquire)
+            == runGeneration) {
         m_inFlight.store(false, std::memory_order_release);
     }
 }
 
 void SinkWindow::start() {
     std::lock_guard lk(m_mtx);
+    m_runGeneration.fetch_add(1, std::memory_order_acq_rel);
+    m_inFlight.store(false, std::memory_order_release);
     m_started     = true;
     // Anchor lastFlushAt so the keep-alive period measures from start rather
     // than the epoch (which would trigger a spurious immediate flush).
@@ -210,7 +220,9 @@ void SinkWindow::start() {
 
 void SinkWindow::stop() {
     std::lock_guard lk(m_mtx);
+    m_runGeneration.fetch_add(1, std::memory_order_acq_rel);
     m_started = false;
+    m_inFlight.store(false, std::memory_order_release);
 }
 
 void SinkWindow::pause()  { stop(); }

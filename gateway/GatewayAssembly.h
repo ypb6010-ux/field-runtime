@@ -3,6 +3,8 @@
 #pragma once
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <functional>
 #include <map>
 #include <memory>
@@ -10,6 +12,7 @@
 #include <optional>
 #include <cstdint>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -85,6 +88,13 @@ private:
         module::SinkWindow* sink = nullptr;
         std::unique_ptr<gateway_asio::steady_timer> timer;
     };
+    struct BridgeMirrorState {
+        std::mutex                            mutex;
+        core::RegisterWords                   values;
+        std::uint64_t                         version = 0;
+        bool                                  inFlight = false;
+        std::chrono::steady_clock::time_point lastSubmittedAt;
+    };
 
     using DpById = std::map<std::string, std::shared_ptr<dp::Datapoint>>;
 
@@ -96,6 +106,7 @@ private:
     void buildSinkWindows(config::ConfigSchema const& schema);
     void buildBridges(config::ConfigSchema const& schema);
     void installEventWiring();
+    void onPollRangeCompleted(bus::PollRangeCompleted const& e);
     void forwardBridges(bus::ServerWriteEvent const& e);
     void publishMqttDatapoint(std::string const& id,
                               dp::Value const& value,
@@ -108,7 +119,8 @@ private:
     void startMqttSnapshotPump();
     void zeroBridgeForward(std::string const& serverTransportId);
     bool serverForwardEnabled(std::string const& serverTransportId) const;
-    void mirrorBridgesOnce();
+    void scheduleBridgeMirror(int index);
+    void mirrorBridgesPeriodically();
     void startMirrorPump();
     void wireBindings(module::PollRange& poll,
                       config::ConfigSchema const& schema,
@@ -129,8 +141,10 @@ private:
     std::vector<PollTimer> m_pollTimers;
     std::vector<SinkTimer> m_sinkTimers;
     std::vector<config::BridgeConfig> m_bridges;
+    std::vector<std::shared_ptr<BridgeMirrorState>> m_bridgeMirrorStates;
     std::vector<module::SinkWindow*> m_bridgeFwdSinks;
     std::unique_ptr<bus::Subscription> m_serverWriteSub;
+    std::unique_ptr<bus::Subscription> m_pollRangeCompletedSub;
     std::unique_ptr<bus::Subscription> m_mqttDpChangedSub;
     std::unique_ptr<gateway_asio::steady_timer> m_mirrorTimer;
     std::unique_ptr<gateway_asio::steady_timer> m_mqttSnapshotTimer;
@@ -146,7 +160,8 @@ private:
     std::optional<MqttNorthboundConfig> m_mqttConfig;
     std::optional<PersistenceConfig> m_persistenceConfig;
     std::string m_configDir;
-    bool m_started = false;
+    std::vector<std::thread> m_connectThreads;
+    std::atomic_bool m_started{false};
 };
 
 } // namespace core::gateway

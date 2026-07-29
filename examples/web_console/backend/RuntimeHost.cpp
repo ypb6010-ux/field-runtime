@@ -3,6 +3,8 @@
 #include "RuntimeHost.h"
 
 #include <chrono>
+#include <future>
+#include <iostream>
 #include <utility>
 
 #include "GatewayAssembly.h"
@@ -50,53 +52,232 @@ RuntimeHost::~RuntimeHost() {
 }
 
 bool RuntimeHost::start(std::string const& tomlPath) {
+    std::lock_guard lifecycleLock(m_lifecycleMtx);
     if (m_running.load()) return true;
-    if (m_thread.joinable()) m_thread.join();   // join a previous stopped thread
+    if (m_thread.joinable()) {
+        m_workGuard.reset();
+        m_io.stop();
+        m_thread.join();
+    }
+    // Drain cancellation completions while the old graph still exists. Reusing
+    // an io_context with abandoned handlers would otherwise run callbacks that
+    // capture already-destroyed transports after restart.
+    if (m_assembly || m_pumpTimer) {
+        if (m_assembly) m_assembly->stop();
+        m_io.restart();
+        while (m_io.poll_one() > 0) {
+        }
+        m_io.stop();
+        m_pumpTimer.reset();
+        m_assembly.reset();
+    }
     m_io.restart();                              // re-arm io_context for reuse
     m_workGuard.emplace(m_io.get_executor());
     m_assembly = std::make_unique<core::gateway::GatewayAssembly>(m_io);
-    if (!m_assembly->load(tomlPath)) {
+    try {
+        if (!m_assembly->load(tomlPath)) {
+            m_workGuard.reset();
+            m_assembly.reset();
+            return false;
+        }
+    } catch (std::exception const& exception) {
+        std::cerr << "RuntimeHost load failed: " << exception.what() << "\n";
+        m_workGuard.reset();
+        m_assembly.reset();
+        return false;
+    } catch (...) {
+        std::cerr << "RuntimeHost load failed: unknown error\n";
+        m_workGuard.reset();
         m_assembly.reset();
         return false;
     }
-    m_assembly->start();
+    try {
+        m_assembly->start();
+    } catch (std::exception const& exception) {
+        std::cerr << "RuntimeHost start failed: " << exception.what() << "\n";
+        m_assembly->stop();
+        m_workGuard.reset();
+        m_io.restart();
+        while (m_io.poll_one() > 0) {
+        }
+        m_io.stop();
+        m_assembly.reset();
+        return false;
+    } catch (...) {
+        std::cerr << "RuntimeHost start failed: unknown error\n";
+        m_assembly->stop();
+        m_workGuard.reset();
+        m_io.restart();
+        while (m_io.poll_one() > 0) {
+        }
+        m_io.stop();
+        m_assembly.reset();
+        return false;
+    }
     m_pumpTimer = std::make_unique<gateway_asio::steady_timer>(m_io);
     m_running.store(true, std::memory_order_release);
     schedulePump();
-    m_thread = std::thread([this] { m_io.run(); });
+    m_thread = std::thread([this] {
+        while (!m_io.stopped()) {
+            try {
+                m_io.run();
+                break;
+            } catch (std::exception const& exception) {
+                std::cerr << "RuntimeHost io handler failed: "
+                          << exception.what() << "\n";
+            } catch (...) {
+                std::cerr << "RuntimeHost io handler failed: unknown error\n";
+            }
+        }
+    });
     return true;
 }
 
 bool RuntimeHost::validate(std::string const& tomlPath, std::string& error) {
+    error.clear();
     gateway_asio::io_context tio;
-    auto tmp = std::make_unique<core::gateway::GatewayAssembly>(tio);
-    if (!tmp->load(tomlPath)) {
-        error = "config failed to load (see server log)";
+    try {
+        auto tmp = std::make_unique<core::gateway::GatewayAssembly>(tio);
+        if (!tmp->load(tomlPath)) {
+            error = "config failed to load (see server log)";
+            return false;
+        }
+    } catch (std::exception const& exception) {
+        error = exception.what();
+        return false;
+    } catch (...) {
+        error = "config validation failed with an unknown error";
         return false;
     }
-    return true;  // tmp destroyed here; never started
+    return true;
 }
 
 bool RuntimeHost::reload(std::string const& tomlPath) {
-    std::string err;
-    if (!validate(tomlPath, err)) return false;
-    stop();
-    return start(tomlPath);
+    std::lock_guard lifecycleLock(m_lifecycleMtx);
+    if (!m_running.load(std::memory_order_acquire) || !m_assembly) {
+        return false;
+    }
+
+    struct ReloadState {
+        std::unique_ptr<core::gateway::GatewayAssembly> candidate;
+        std::unique_ptr<core::gateway::GatewayAssembly> retired;
+        bool applied = false;
+    };
+    auto state = std::make_shared<ReloadState>();
+    state->candidate =
+        std::make_unique<core::gateway::GatewayAssembly>(m_io);
+    try {
+        if (!state->candidate->load(tomlPath)) return false;
+    } catch (std::exception const& exception) {
+        std::cerr << "RuntimeHost reload load failed: "
+                  << exception.what() << "\n";
+        return false;
+    } catch (...) {
+        std::cerr << "RuntimeHost reload load failed: unknown error\n";
+        return false;
+    }
+
+    bool const dispatched = runOnIoAndWait(
+        [this, state] {
+            auto previous = std::move(m_assembly);
+            previous->stop();
+            m_assembly = std::move(state->candidate);
+            try {
+                m_assembly->start();
+                state->applied = true;
+                state->retired = std::move(previous);
+            } catch (...) {
+                auto failed = std::move(m_assembly);
+                failed->stop();
+                m_assembly = std::move(previous);
+                try {
+                    m_assembly->start();
+                } catch (...) {
+                    m_running.store(false, std::memory_order_release);
+                }
+                state->retired = std::move(failed);
+            }
+        });
+    if (!dispatched) return false;
+
+    // stop() cancels the old graph's asio operations. Run one io barrier before
+    // destroying it so their cancellation handlers cannot dereference a
+    // transport after its owner has gone away.
+    if (!runOnIoAndWait([] {})) return false;
+    state->retired.reset();
+    if (!state->applied) return false;
+
+    {
+        std::lock_guard snapshotLock(m_mtx);
+        m_dps.clear();
+        m_tps.clear();
+    }
+    return true;
 }
 
 void RuntimeHost::stop() {
-    if (!m_running.exchange(false)) {
-        if (m_thread.joinable()) m_thread.join();
-        return;
+    std::lock_guard lifecycleLock(m_lifecycleMtx);
+    bool const wasRunning = m_running.exchange(false);
+    if (wasRunning) {
+        runOnIoAndWait([this] {
+            if (m_pumpTimer) {
+                try {
+                    m_pumpTimer->cancel();
+                } catch (...) {
+                }
+            }
+            if (m_assembly) m_assembly->stop();
+        });
+    } else if (m_assembly) {
+        m_assembly->stop();
     }
-    gateway_asio::post(m_io, [this] {
-        if (m_pumpTimer) { gateway_error_code ec; m_pumpTimer->cancel(ec); }
-        if (m_assembly) m_assembly->stop();
-    });
     m_workGuard.reset();
     m_io.stop();
     if (m_thread.joinable()) m_thread.join();
+    m_io.restart();
+    while (m_io.poll_one() > 0) {
+    }
+    m_io.stop();
+    m_pumpTimer.reset();
     m_assembly.reset();
+    {
+        std::lock_guard snapshotLock(m_mtx);
+        m_dps.clear();
+        m_tps.clear();
+    }
+}
+
+bool RuntimeHost::runOnIoAndWait(std::function<void()> operation) {
+    if (!operation) return true;
+    if (m_thread.joinable()
+        && std::this_thread::get_id() == m_thread.get_id()) {
+        operation();
+        return true;
+    }
+    if (!m_thread.joinable() || m_io.stopped()) return false;
+
+    auto completed = std::make_shared<std::promise<void>>();
+    auto future = completed->get_future();
+    try {
+        gateway_asio::post(
+            m_io,
+            [operation = std::move(operation), completed]() mutable {
+                try {
+                    operation();
+                    completed->set_value();
+                } catch (...) {
+                    completed->set_exception(std::current_exception());
+                }
+            });
+    } catch (...) {
+        return false;
+    }
+    try {
+        future.get();
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 void RuntimeHost::schedulePump() {
@@ -104,8 +285,21 @@ void RuntimeHost::schedulePump() {
     m_pumpTimer->expires_after(std::chrono::milliseconds(500));
     m_pumpTimer->async_wait([this](gateway_error_code const& ec) {
         if (ec || !m_running.load(std::memory_order_acquire) || !m_assembly) return;
-        auto dps = m_assembly->datapointSnapshots();
-        auto tps = m_assembly->transportSnapshots();
+        std::vector<core::gateway::GatewayDatapointSnapshot> dps;
+        std::vector<core::gateway::GatewayTransportSnapshot> tps;
+        try {
+            dps = m_assembly->datapointSnapshots();
+            tps = m_assembly->transportSnapshots();
+        } catch (std::exception const& exception) {
+            std::cerr << "RuntimeHost snapshot failed: "
+                      << exception.what() << "\n";
+            schedulePump();
+            return;
+        } catch (...) {
+            std::cerr << "RuntimeHost snapshot failed: unknown error\n";
+            schedulePump();
+            return;
+        }
         std::vector<DpSnap> ds;
         ds.reserve(dps.size());
         for (auto const& d : dps) {
@@ -137,19 +331,58 @@ std::vector<TpSnap> RuntimeHost::transports() const {
 bool RuntimeHost::write(std::string const& transportId, int startAddress,
                         std::vector<std::uint16_t> values,
                         std::function<void(bool, std::string)> done) {
+    if (!done) return false;
+    if (transportId.empty() || startAddress < 0 || startAddress > 65535
+        || values.empty() || values.size() > 123
+        || std::int64_t(startAddress) + std::int64_t(values.size()) > 65536) {
+        done(false, "invalid write range");
+        return false;
+    }
     if (!m_running.load()) { done(false, "runtime not running"); return false; }
-    gateway_asio::post(m_io,
-        [this, transportId, startAddress, values = std::move(values),
-         done = std::move(done)]() mutable {
-            core::transport::WriteBatch b;
-            b.table = core::RegisterTable::HoldingRegister;
-            b.startAddress = startAddress;
-            b.values = core::RegisterWords(values.begin(), values.end());
-            bool known = m_assembly->writeTransportAsync(
-                transportId, std::move(b),
-                [done](core::transport::WriteResult r) { done(r.ok, r.errorMessage); });
-            if (!known) done(false, "unknown transport");
-        });
+    auto completion = std::make_shared<
+        std::function<void(bool, std::string)>>(std::move(done));
+    try {
+        gateway_asio::post(
+            m_io,
+            [this, transportId, startAddress, values = std::move(values),
+             completion]() mutable {
+                if (!m_running.load(std::memory_order_acquire)
+                    || !m_assembly) {
+                    (*completion)(false, "runtime stopped");
+                    return;
+                }
+                try {
+                    core::transport::WriteBatch b;
+                    b.table = core::RegisterTable::HoldingRegister;
+                    b.startAddress = startAddress;
+                    b.values =
+                        core::RegisterWords(values.begin(), values.end());
+                    bool known = m_assembly->writeTransportAsync(
+                        transportId,
+                        std::move(b),
+                        [completion](core::transport::WriteResult result) {
+                            (*completion)(
+                                result.ok,
+                                std::move(result.errorMessage));
+                        });
+                    if (!known) {
+                        (*completion)(false, "unknown transport");
+                    }
+                } catch (std::exception const& exception) {
+                    (*completion)(false, exception.what());
+                } catch (...) {
+                    (*completion)(
+                        false,
+                        "write failed with an unknown error");
+                }
+            });
+    } catch (std::exception const& exception) {
+        (*completion)(false, exception.what());
+        return false;
+    } catch (...) {
+        (*completion)(false, "failed to schedule runtime write");
+        return false;
+    }
     return true;
 }
 

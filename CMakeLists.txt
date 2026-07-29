@@ -126,9 +126,13 @@ endif()
 # FieldRuntimeBase with no Qt anywhere. If a base header pulls QtCore back in,
 # this target stops building.
 if(CORE_BUILD_TESTS)
+    enable_testing()
     add_executable(fieldruntime_base_selftest tests/freestanding/qtfree_headers.cpp)
     set_target_properties(fieldruntime_base_selftest PROPERTIES AUTOMOC OFF)
     target_link_libraries(fieldruntime_base_selftest PRIVATE FieldRuntimeBase)
+    add_test(
+        NAME fieldruntime_base_selftest
+        COMMAND fieldruntime_base_selftest)
 endif()
 
 if(CORE_BUILD_GATEWAY)
@@ -241,7 +245,6 @@ add_subdirectory(src)
 # ---------------------------------------------------------------------------
 
 if(CORE_BUILD_TESTS)
-    enable_testing()
     add_subdirectory(tests)
 endif()
 

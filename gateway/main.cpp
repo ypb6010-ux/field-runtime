@@ -81,7 +81,14 @@ int main(int argc, char** argv) {
         }
     }
 
-    gateway.start();
+    try {
+        gateway.start();
+    } catch (std::exception const& error) {
+        std::cerr << "gateway start failed: " << error.what() << '\n';
+        if (control) control->stop();
+        gateway.stop();
+        return EXIT_FAILURE;
+    }
     io.run();
     if (control) control->stop();
     gateway.stop();

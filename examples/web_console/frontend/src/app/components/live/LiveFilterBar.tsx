@@ -1,6 +1,5 @@
 import { Search, RotateCcw } from "lucide-react";
 import type { DpStatus, DataType, Quality } from "../../live";
-import { LIVE_TRANSPORTS } from "../../live";
 import { Input } from "../ui/input";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
@@ -46,11 +45,12 @@ const QUALITIES: { value: Quality | "all"; label: string }[] = [
 ];
 
 export function LiveFilterBar({
-  filters, onChange, onReset,
+  filters, onChange, onReset, transports,
 }: {
   filters: LiveFilters;
   onChange: (f: LiveFilters) => void;
   onReset: () => void;
+  transports: { id: string; name: string }[];
 }) {
   const set = (patch: Partial<LiveFilters>) => onChange({ ...filters, ...patch });
 
@@ -73,7 +73,7 @@ export function LiveFilterBar({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">全部 Transport</SelectItem>
-          {LIVE_TRANSPORTS.map((t) => (
+          {transports.map((t) => (
             <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
           ))}
         </SelectContent>

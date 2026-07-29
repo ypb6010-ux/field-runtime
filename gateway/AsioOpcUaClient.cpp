@@ -120,6 +120,7 @@ transport::ConnectionState AsioOpcUaClient::state() const {
 }
 
 std::expected<void, std::string> AsioOpcUaClient::connect() {
+    if (m_scheduler) m_scheduler->startAsync();
     m_state.store(transport::ConnectionState::Connecting, std::memory_order_release);
 
     auto result = std::make_shared<std::promise<std::expected<void, std::string>>>();

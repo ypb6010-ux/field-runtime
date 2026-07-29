@@ -195,4 +195,17 @@ TEST_CASE("stopAsync halts pumping of queued work (teardown safety)",
     h.done[0](true);   // completes op0; the pump must NOT start op1
     REQUIRE(h.started == std::vector<int>{0});   // op1 never started after stop
     REQUIRE(h.sched->stats().inflight == 0);
+    REQUIRE(h.sched->stats().queueDepth == 0);
+    REQUIRE(h.sched->stats().totalCancelled == 1);
+
+    RequestTag stoppedTag;
+    stoppedTag.moduleId = "stopped";
+    auto rejected = h.sched->submitAsync(
+        stoppedTag, [](AsyncDone) { FAIL("must not run while stopped"); });
+    REQUIRE(rejected.kind == ResultKind::Cancelled);
+
+    static_cast<SerialScheduler*>(h.sched.get())->startAsync();
+    REQUIRE(h.submit(2).kind == ResultKind::Ok);
+    REQUIRE(h.started == std::vector<int>{0, 2});
+    h.done[2](true);
 }

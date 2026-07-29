@@ -42,6 +42,8 @@ export interface SchemaFieldDef {
   description?: string;
   placeholder?: string;
   unit?: string;
+  minimum?: number;
+  maximum?: number;
   options?: { label: string; value: string }[];
   advanced?: boolean;
   rawType?: string;
@@ -57,7 +59,16 @@ export interface KindSchema {
 interface KindApiRow {
   id: string;
   label: string;
-  params: Record<string, { type?: string; label?: string; default?: string | number | boolean }>;
+  params: Record<string, {
+    type?: string;
+    label?: string;
+    default?: string | number | boolean;
+    required?: boolean;
+    description?: string;
+    advanced?: boolean;
+    minimum?: number;
+    maximum?: number;
+  }>;
 }
 
 interface TransportRow {
@@ -70,6 +81,13 @@ interface TransportRow {
   created_at?: string | null;
   updated_at?: string | null;
 }
+interface RuntimeTransportRow {
+  id: string;
+  state: "connected" | "connecting" | "disconnected" | "error";
+}
+interface DatapointRow {
+  transport_id: string;
+}
 
 // ---- 协议连接记录 ----
 export interface Transport {
@@ -79,12 +97,10 @@ export interface Transport {
   endpoint: string;
   status: TransportStatus;
   enabled: boolean;
-  lastConnectedAt: string | null;
-  lastError: string | null;
   pointCount: number;
-  updatedBy: string;
-  tags: string[];
+  updatedAt: string | null;
   config: Record<string, string | number | boolean>;
+  scheduler: Record<string, unknown>;
 }
 
 export interface TransportPayload {
@@ -150,9 +166,13 @@ function mapKind(row: KindApiRow): KindSchema {
       title: f.label ?? name,
       type,
       default: f.default,
-      required: f.default === undefined,
+      required: f.required ?? (f.default === undefined),
+      description: f.description,
+      advanced: f.advanced,
+      minimum: f.minimum,
+      maximum: f.maximum,
       rawType: type === "unsupported" ? f.type : undefined,
-    } satisfies SchemaFieldDef;
+    } as SchemaFieldDef;
   });
   return { kind: row.id, label: row.label, version: "1", fields };
 }
@@ -174,12 +194,10 @@ function mapTransport(row: TransportRow): Transport {
     endpoint: primaryEndpoint(config),
     status: enabled ? "offline" : "disabled",
     enabled,
-    lastConnectedAt: row.updated_at ?? row.created_at ?? null,
-    lastError: null,
     pointCount: 0,
-    updatedBy: "后端配置",
-    tags: [],
+    updatedAt: row.updated_at ?? null,
     config,
+    scheduler: parseJsonObject(row.scheduler_json),
   };
 }
 
@@ -209,8 +227,30 @@ export function kindLabel(kind: string): string {
 }
 
 export async function fetchTransports(): Promise<Transport[]> {
-  const rows = await apiGet<TransportRow[]>("/transports");
-  return rows.map(mapTransport);
+  const [rows, runtime, datapoints] = await Promise.all([
+    apiGet<TransportRow[]>("/transports"),
+    apiGet<RuntimeTransportRow[]>("/runtime/transports").catch(() => []),
+    apiGet<DatapointRow[]>("/datapoints").catch(() => []),
+  ]);
+  const runtimeById = new Map(runtime.map((item) => [item.id, item.state]));
+  const pointCounts = new Map<string, number>();
+  datapoints.forEach((point) => {
+    pointCounts.set(
+      point.transport_id,
+      (pointCounts.get(point.transport_id) ?? 0) + 1,
+    );
+  });
+  return rows.map((row) => {
+    const transport = mapTransport(row);
+    const state = runtimeById.get(row.id);
+    transport.pointCount = pointCounts.get(row.id) ?? 0;
+    if (!transport.enabled) transport.status = "disabled";
+    else if (state === "connected") transport.status = "online";
+    else if (state === "connecting") transport.status = "reconnecting";
+    else if (state === "error") transport.status = "error";
+    else transport.status = "offline";
+    return transport;
+  });
 }
 
 export async function createTransport(payload: TransportPayload): Promise<void> {

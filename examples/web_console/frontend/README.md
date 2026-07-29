@@ -1,11 +1,27 @@
+# FieldRuntime Web Console Frontend
 
-  # 工业数据采集管理平台
+React 18 + TypeScript + Vite 的工业网关管理界面。页面只使用真实 REST/WebSocket 数据，不内置
+演示账号或随机业务数据。
 
-  This is a code bundle for 工业数据采集管理平台. The original project is available at https://www.figma.com/design/BP0LIBqumKSnFVsn4mVFaf/%E5%B7%A5%E4%B8%9A%E6%95%B0%E6%8D%AE%E9%87%87%E9%9B%86%E7%AE%A1%E7%90%86%E5%B9%B3%E5%8F%B0.
+## 开发
 
-  ## Running the code
+```powershell
+npm ci
+npm run dev
+```
 
-  Run `npm i` to install the dependencies.
+开发服务器默认将 `/api` 和 `/ws` 代理到 `127.0.0.1:8080`，可在 `vite.config.ts` 修改。
 
-  Run `npm run dev` to start the development server.
-  
+## 生产构建
+
+```powershell
+npm ci
+npm run build
+```
+
+产物位于 `dist`，可作为 `web_console_backend` 的第三个参数由 Drogon 直接托管。
+
+登录 token 仅存于当前标签页的 `sessionStorage`。首次管理员密码由后端
+`FIELD_CONSOLE_ADMIN_PASSWORD` 或启动日志决定，详见上级 [`README.md`](../README.md)。
+
+界面组件基于 shadcn/ui 与 Radix primitives，许可说明见 [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md)。

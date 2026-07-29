@@ -61,12 +61,12 @@ void Command::executeAsync() {
         tag.interruptable = m_cfg.interruptable;
 
         // Fire-and-forget: the scheduler serialises the writes in submission
-        // order. The completion callback intentionally captures only `done`
-        // (not `this`) so a write finishing after the Command is destroyed
-        // cannot touch freed module state.
+        // order. Capture the transport pointer by value; module teardown keeps
+        // transports alive until their scheduler callbacks have drained.
+        auto* transport = m_transport;
         m_transport->scheduler().submitAsync(tag,
-            [this, batch](sched::AsyncDone done) {
-                m_transport->writeAsync(batch,
+            [transport, batch](sched::AsyncDone done) {
+                transport->writeAsync(batch,
                     [done = std::move(done)](transport::WriteResult w) mutable {
                         done(w.ok);
                     });

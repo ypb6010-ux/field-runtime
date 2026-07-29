@@ -3,16 +3,19 @@
 #include "GatewayAssembly.h"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <sstream>
 #include <string_view>
+#include <array>
 #include <unordered_map>
 #include <utility>
 
@@ -27,7 +30,6 @@
 #endif
 #include "GatewayJson.h"
 #include "SqliteLogSink.h"
-#include "StubTransport.h"
 
 #include "core/bus/BusEvents.h"
 #include "core/codec/BuiltinCodecs.h"
@@ -117,12 +119,35 @@ std::string stripComment(std::string const& line) {
     return line;
 }
 
-std::string unquote(std::string value) {
-    value = trim(value);
-    if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
-        value = value.substr(1, value.size() - 2);
+bool parseQuoted(std::string const& raw, std::string& value) {
+    auto const text = trim(raw);
+    if (text.size() < 2 || text.front() != '"' || text.back() != '"') {
+        return false;
     }
-    return value;
+    value = text.substr(1, text.size() - 2);
+    return true;
+}
+
+bool parseInteger(std::string const& raw, int& value) {
+    auto const text = trim(raw);
+    if (text.empty()) return false;
+    auto const* begin = text.data();
+    auto const* end = begin + text.size();
+    auto const result = std::from_chars(begin, end, value, 10);
+    return result.ec == std::errc{} && result.ptr == end;
+}
+
+bool parseBoolean(std::string const& raw, bool& value) {
+    auto const text = trim(raw);
+    if (text == "true") {
+        value = true;
+        return true;
+    }
+    if (text == "false") {
+        value = false;
+        return true;
+    }
+    return false;
 }
 
 std::optional<ControlConfig> parseControlConfig(std::string const& path,
@@ -150,18 +175,25 @@ std::optional<ControlConfig> parseControlConfig(std::string const& path,
         auto const eq = trimmed.find('=');
         if (eq == std::string::npos) continue;
         auto const key = trim(std::string_view(trimmed).substr(0, eq));
-        auto const value = unquote(trimmed.substr(eq + 1));
+        auto const rawValue = trimmed.substr(eq + 1);
         if (key == "listen_address") {
-            cfg.listenAddress = value;
+            if (!parseQuoted(rawValue, cfg.listenAddress)) {
+                error = "control.listen_address must be a string";
+                return std::nullopt;
+            }
         } else if (key == "listen_port") {
-            try {
-                cfg.listenPort = std::stoi(value);
-            } catch (...) {
+            if (!parseInteger(rawValue, cfg.listenPort)) {
                 error = "control.listen_port must be an integer";
                 return std::nullopt;
             }
         } else if (key == "auth_token") {
-            cfg.authToken = value;
+            if (!parseQuoted(rawValue, cfg.authToken)) {
+                error = "control.auth_token must be a string";
+                return std::nullopt;
+            }
+        } else {
+            error = "control." + key + " is an unknown field";
+            return std::nullopt;
         }
     }
 
@@ -172,14 +204,6 @@ std::optional<ControlConfig> parseControlConfig(std::string const& path,
     }
     if (cfg.listenAddress.empty()) cfg.listenAddress = "127.0.0.1";
     return cfg;
-}
-
-bool parseBool(std::string value) {
-    value = trim(value);
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-        return char(std::tolower(c));
-    });
-    return value == "true" || value == "1" || value == "yes" || value == "on";
 }
 
 std::optional<MqttNorthboundConfig> parseMqttConfig(std::string const& path,
@@ -207,26 +231,29 @@ std::optional<MqttNorthboundConfig> parseMqttConfig(std::string const& path,
         auto const eq = trimmed.find('=');
         if (eq == std::string::npos) continue;
         auto const key = trim(std::string_view(trimmed).substr(0, eq));
-        auto const value = unquote(trimmed.substr(eq + 1));
-        try {
-            if (key == "enable") {
-                cfg.enable = parseBool(value);
-            } else if (key == "host") {
-                cfg.host = value;
-            } else if (key == "port") {
-                cfg.port = std::stoi(value);
-            } else if (key == "client_id") {
-                cfg.clientId = value;
-            } else if (key == "keepalive_s") {
-                cfg.keepaliveS = std::stoi(value);
-            } else if (key == "topic_prefix") {
-                cfg.topicPrefix = value;
-            } else if (key == "qos") {
-                cfg.qos = std::stoi(value);
-            } else if (key == "publish_interval_ms") {
-                cfg.publishIntervalMs = std::stoi(value);
-            }
-        } catch (...) {
+        auto const rawValue = trimmed.substr(eq + 1);
+        bool valid = true;
+        if (key == "enable") {
+            valid = parseBoolean(rawValue, cfg.enable);
+        } else if (key == "host") {
+            valid = parseQuoted(rawValue, cfg.host);
+        } else if (key == "port") {
+            valid = parseInteger(rawValue, cfg.port);
+        } else if (key == "client_id") {
+            valid = parseQuoted(rawValue, cfg.clientId);
+        } else if (key == "keepalive_s") {
+            valid = parseInteger(rawValue, cfg.keepaliveS);
+        } else if (key == "topic_prefix") {
+            valid = parseQuoted(rawValue, cfg.topicPrefix);
+        } else if (key == "qos") {
+            valid = parseInteger(rawValue, cfg.qos);
+        } else if (key == "publish_interval_ms") {
+            valid = parseInteger(rawValue, cfg.publishIntervalMs);
+        } else {
+            error = "northbound.mqtt." + key + " is an unknown field";
+            return std::nullopt;
+        }
+        if (!valid) {
             error = "northbound.mqtt." + key + " has invalid value";
             return std::nullopt;
         }
@@ -255,6 +282,10 @@ std::optional<MqttNorthboundConfig> parseMqttConfig(std::string const& path,
     }
     if (cfg.clientId.empty()) cfg.clientId = "field_gateway";
     if (cfg.topicPrefix.empty()) cfg.topicPrefix = "field";
+    if (cfg.clientId.size() > 65535 || cfg.topicPrefix.size() > 65500) {
+        error = "northbound.mqtt client_id/topic_prefix is too long";
+        return std::nullopt;
+    }
     return cfg;
 }
 
@@ -283,18 +314,21 @@ std::optional<PersistenceConfig> parsePersistenceConfig(std::string const& path,
         auto const eq = trimmed.find('=');
         if (eq == std::string::npos) continue;
         auto const key = trim(std::string_view(trimmed).substr(0, eq));
-        auto const value = unquote(trimmed.substr(eq + 1));
-        try {
-            if (key == "enable") {
-                cfg.enable = parseBool(value);
-            } else if (key == "path") {
-                cfg.path = value;
-            } else if (key == "max_rows") {
-                cfg.maxRows = std::stoi(value);
-            } else if (key == "backfill_batch") {
-                cfg.backfillBatch = std::stoi(value);
-            }
-        } catch (...) {
+        auto const rawValue = trimmed.substr(eq + 1);
+        bool valid = true;
+        if (key == "enable") {
+            valid = parseBoolean(rawValue, cfg.enable);
+        } else if (key == "path") {
+            valid = parseQuoted(rawValue, cfg.path);
+        } else if (key == "max_rows") {
+            valid = parseInteger(rawValue, cfg.maxRows);
+        } else if (key == "backfill_batch") {
+            valid = parseInteger(rawValue, cfg.backfillBatch);
+        } else {
+            error = "persistence." + key + " is an unknown field";
+            return std::nullopt;
+        }
+        if (!valid) {
             error = "persistence." + key + " has invalid value";
             return std::nullopt;
         }
@@ -333,7 +367,9 @@ log::Logger& GatewayAssembly::logger() {
 
 bool GatewayAssembly::load(std::string const& tomlPath) {
     config::ConfigLoader loader;
-    auto loaded = loader.loadFromToml(tomlPath);
+    static constexpr std::array<std::string_view, 3> rootExtensions{
+        "control", "northbound", "persistence"};
+    auto loaded = loader.loadFromToml(tomlPath, rootExtensions);
     if (!loaded.has_value()) {
         for (auto const& err : loaded.error()) {
             std::cerr << err.section << "." << err.field << ": "
@@ -341,6 +377,61 @@ bool GatewayAssembly::load(std::string const& tomlPath) {
             m_logger.logf(log::LogLevel::Error, "config", tomlPath, err.message);
         }
         return false;
+    }
+    for (auto const& transportConfig : loaded->transports) {
+        bool supported = false;
+        switch (transportConfig.kind) {
+            case transport::TransportKind::ModbusTcpClient:
+            case transport::TransportKind::ModbusTcpServer:
+            case transport::TransportKind::ModbusRtu:
+                supported = true;
+                break;
+#ifdef FIELDRUNTIME_GATEWAY_HAS_OPCUA
+            case transport::TransportKind::OpcUaClient:
+                supported = true;
+                break;
+#endif
+#ifdef FIELDRUNTIME_GATEWAY_HAS_S7
+            case transport::TransportKind::S7Client:
+                supported = true;
+                break;
+#endif
+            default:
+                break;
+        }
+        if (!supported) {
+            auto const message =
+                "transport kind is unavailable in this gateway build";
+            m_logger.logf(
+                log::LogLevel::Error,
+                "config",
+                transportConfig.id,
+                message);
+            std::cerr << "transport '" << transportConfig.id
+                      << "': " << message << '\n';
+            return false;
+        }
+        if (transportConfig.kind
+            != transport::TransportKind::ModbusTcpServer) {
+            continue;
+        }
+        for (auto const& range : transportConfig.listenRanges) {
+            if (range.table == core::RegisterTable::HoldingRegister
+                || range.table == core::RegisterTable::InputRegister) {
+                continue;
+            }
+            auto const message =
+                "gateway Modbus server currently supports only HR and IR "
+                "listen ranges";
+            m_logger.logf(
+                log::LogLevel::Error,
+                "config",
+                transportConfig.id,
+                message);
+            std::cerr << "transport '" << transportConfig.id
+                      << "': " << message << '\n';
+            return false;
+        }
     }
 
     if (!loaded->meta.logLevel.empty()) {
@@ -384,6 +475,15 @@ bool GatewayAssembly::load(std::string const& tomlPath) {
         });
     }
     if (m_persistenceConfig) {
+        auto persistencePath =
+            std::filesystem::path(m_persistenceConfig->path);
+        if (persistencePath.is_relative()) {
+            persistencePath =
+                std::filesystem::path(m_configDir) / persistencePath;
+            m_persistenceConfig->path =
+                std::filesystem::absolute(persistencePath).lexically_normal()
+                    .string();
+        }
         m_persistence = std::make_unique<Persistence>();
         std::string persistenceError;
         if (!m_persistence->open(*m_persistenceConfig, persistenceError)) {
@@ -421,14 +521,57 @@ void GatewayAssembly::start() {
                           + std::to_string(m_mqttConfig->port));
     }
 
+    m_connectThreads.clear();
     for (auto& [id, transport] : m_transports) {
-        auto connected = transport->connect();
-        if (connected.has_value()) {
-            m_bus.publish(bus::TransportEvent{id, bus::TransportEventKind::Connected, {}});
-            m_logger.logf(log::LogLevel::Info, "transport", id, "connected");
-        } else {
-            m_logger.logf(log::LogLevel::Error, "transport", id, connected.error());
+        auto const kind = transport->kind();
+        if (kind == transport::TransportKind::ModbusTcpClient) {
+            // The Asio TCP client owns a fully asynchronous resolver/connect
+            // path. Use it for startup too, otherwise the synchronous
+            // connect() can park daemon startup on an unreachable endpoint.
+            transport->requestReconnect();
+            m_logger.logf(
+                log::LogLevel::Info, "transport", id, "connecting");
+            continue;
         }
+        if (kind != transport::TransportKind::OpcUaClient
+            && kind != transport::TransportKind::S7Client) {
+            auto connected = transport->connect();
+            if (!connected.has_value()) {
+                m_logger.logf(
+                    log::LogLevel::Error,
+                    "transport",
+                    id,
+                    connected.error());
+                if (kind == transport::TransportKind::ModbusTcpServer) {
+                    throw std::runtime_error(
+                        "server transport '" + id
+                        + "' failed to start: " + connected.error());
+                }
+            } else {
+                m_bus.publish(bus::TransportEvent{
+                    id, bus::TransportEventKind::Connected, {}});
+                m_logger.logf(
+                    log::LogLevel::Info, "transport", id, "connected");
+            }
+            continue;
+        }
+        auto* transportPtr = transport.get();
+        m_connectThreads.emplace_back([this, id, transportPtr] {
+            auto connected = transportPtr->connect();
+            if (!m_started.load(std::memory_order_acquire)) return;
+            if (connected.has_value()) {
+                m_bus.publish(bus::TransportEvent{
+                    id, bus::TransportEventKind::Connected, {}});
+                m_logger.logf(
+                    log::LogLevel::Info, "transport", id, "connected");
+            } else {
+                m_logger.logf(
+                    log::LogLevel::Error,
+                    "transport",
+                    id,
+                    connected.error());
+            }
+        });
     }
 
     for (auto& poll : m_pollRanges) poll->start();
@@ -456,11 +599,16 @@ void GatewayAssembly::stop() {
     if (m_backfillTimer) m_backfillTimer->cancel();
     for (auto& poll : m_pollRanges) poll->stop();
     for (auto& sink : m_sinkWindows) sink->stop();
+    for (auto& thread : m_connectThreads) {
+        if (thread.joinable()) thread.join();
+    }
+    m_connectThreads.clear();
     for (auto& [id, transport] : m_transports) {
         transport->disconnect();
         m_bus.publish(bus::TransportEvent{id, bus::TransportEventKind::Disconnected, {}});
     }
     m_serverWriteSub.reset();
+    m_pollRangeCompletedSub.reset();
     m_mqttDpChangedSub.reset();
     if (m_mqtt) m_mqtt->stop();
     if (m_persistence) m_persistence->close();
@@ -660,7 +808,8 @@ void GatewayAssembly::buildTransports(config::ConfigSchema const& schema) {
             transport = std::make_unique<AsioS7Client>(tc, *m_io);
 #endif
         } else {
-            transport = std::make_unique<StubTransport>(tc, *m_io);
+            throw std::logic_error(
+                "unsupported gateway transport reached assembly: " + tc.id);
         }
         m_transports.emplace(tc.id, std::move(transport));
     }
@@ -742,7 +891,7 @@ void GatewayAssembly::buildPollRanges(config::ConfigSchema const& schema,
         req.count = pc.count;
 
         auto poll = std::make_unique<module::PollRange>(
-            pc.moduleId, *it->second, req, pc.periodMs, pc.priority);
+            pc.moduleId, *it->second, req, pc.periodMs, pc.priority, &m_bus);
         wireBindings(*poll, schema, byId, pc.transport, req);
 
         m_pollTimers.push_back(PollTimer{
@@ -780,6 +929,12 @@ void GatewayAssembly::buildSinkWindows(config::ConfigSchema const& schema) {
 
 void GatewayAssembly::buildBridges(config::ConfigSchema const& schema) {
     m_bridges = schema.bridges;
+    m_bridgeMirrorStates.clear();
+    m_bridgeMirrorStates.reserve(m_bridges.size());
+    for (size_t i = 0; i < m_bridges.size(); ++i) {
+        m_bridgeMirrorStates.push_back(
+            std::make_shared<BridgeMirrorState>());
+    }
     m_bridgeFwdSinks.assign(m_bridges.size(), nullptr);
 
     for (int i = 0; i < int(m_bridges.size()); i++) {
@@ -810,6 +965,11 @@ void GatewayAssembly::buildBridges(config::ConfigSchema const& schema) {
 
 void GatewayAssembly::installEventWiring() {
     if (m_serverWriteSub) return;
+    m_pollRangeCompletedSub = std::make_unique<bus::Subscription>(
+        m_bus.subscribe<bus::PollRangeCompleted>(
+            [this](bus::PollRangeCompleted const& e) {
+                onPollRangeCompleted(e);
+            }));
     m_serverWriteSub = std::make_unique<bus::Subscription>(
         m_bus.subscribe<bus::ServerWriteEvent>(
             [this](bus::ServerWriteEvent const& e) {
@@ -999,46 +1159,127 @@ void GatewayAssembly::zeroBridgeForward(std::string const& serverTransportId) {
              address++) {
             sink->stageRegister(address - bridge.offset, 0);
         }
+        sink->forceFlush();
     }
 }
 
-void GatewayAssembly::mirrorBridgesOnce() {
+void GatewayAssembly::onPollRangeCompleted(
+    bus::PollRangeCompleted const& event) {
+    if (event.table != core::RegisterTable::HoldingRegister) return;
     for (int i = 0; i < int(m_bridges.size()); i++) {
         auto const& bridge = m_bridges[size_t(i)];
-        if (bridge.mirrorCount <= 0) continue;
-        auto it = m_transports.find(bridge.server);
-        if (it == m_transports.end()) continue;
-        auto* server = it->second.get();
+        if (bridge.mirrorCount <= 0
+            || bridge.plc != event.transportId) {
+            continue;
+        }
+        int const offset = bridge.mirrorStart - event.startAddress;
+        if (offset < 0
+            || offset + bridge.mirrorCount > int(event.values.size())) {
+            continue;
+        }
+        auto const state = m_bridgeMirrorStates[size_t(i)];
+        {
+            std::lock_guard lock(state->mutex);
+            state->values.assign(event.values.begin() + offset,
+                                 event.values.begin() + offset
+                                     + bridge.mirrorCount);
+            ++state->version;
+        }
+        if (bridge.mirrorPolicy == config::BridgeMirrorPolicy::AfterPoll) {
+            scheduleBridgeMirror(i);
+        }
+    }
+}
 
-        // Mirror the RAW holding-register words the PLC last returned — NOT the
-        // decoded engineering value. Decoding would corrupt the mirror: a
-        // scale=0.1 point reading raw 230 decodes to 23, and a U32 would lose
-        // its high word. The operator box reads these as raw registers.
-        core::RegisterWords values(size_t(bridge.mirrorCount), 0);
-        auto plcIt = m_transports.find(bridge.plc);
-        if (plcIt != m_transports.end()) {
-            // Any transport that caches raw polled registers (Modbus TCP/RTU,
-            // future S7/...) exposes them via RegisterSnapshotSource.
-            if (auto* src = dynamic_cast<RegisterSnapshotSource*>(plcIt->second.get())) {
-                values = src->snapshotHoldingRegisters(bridge.mirrorStart,
-                                                       bridge.mirrorCount);
+void GatewayAssembly::scheduleBridgeMirror(int index) {
+    if (index < 0 || index >= int(m_bridges.size())) return;
+    auto const& bridge = m_bridges[size_t(index)];
+    if (bridge.mirrorCount <= 0) return;
+    auto it = m_transports.find(bridge.server);
+    if (it == m_transports.end()) return;
+    auto* server = it->second.get();
+    auto const state = m_bridgeMirrorStates[size_t(index)];
+
+    core::RegisterWords values;
+    std::uint64_t version = 0;
+    {
+        std::lock_guard lock(state->mutex);
+        if (state->inFlight
+            || int(state->values.size()) != bridge.mirrorCount) {
+            return;
+        }
+        state->inFlight = true;
+        values = state->values;
+        version = state->version;
+    }
+
+    transport::WriteBatch batch;
+    batch.table = core::RegisterTable::HoldingRegister;
+    batch.startAddress = bridge.mirrorStart + bridge.offset;
+    batch.values = std::move(values);
+
+    sched::RequestTag tag;
+    tag.moduleId = "bridge.mirror." + bridge.server + "."
+                 + std::to_string(index);
+    tag.priority = sched::Priority::Low;
+    auto const submitted = server->scheduler().submitAsync(
+        tag,
+        [this, index, server, batch = std::move(batch), state, version](
+            sched::AsyncDone done) mutable {
+            try {
+                server->writeAsync(
+                    batch,
+                    [this, index, state, version,
+                     done = std::move(done)](
+                        transport::WriteResult result) mutable {
+                        bool repeat = false;
+                        {
+                            std::lock_guard lock(state->mutex);
+                            state->inFlight = false;
+                            repeat = state->version > version;
+                        }
+                        done(result.ok);
+                        if (repeat && m_started
+                            && index < int(m_bridges.size())
+                            && m_bridges[size_t(index)].mirrorPolicy
+                                == config::BridgeMirrorPolicy::AfterPoll) {
+                            scheduleBridgeMirror(index);
+                        }
+                    });
+            } catch (...) {
+                std::lock_guard lock(state->mutex);
+                state->inFlight = false;
+                throw;
+            }
+        });
+    if (submitted.kind == sched::ResultKind::Ok) {
+        std::lock_guard lock(state->mutex);
+        state->lastSubmittedAt = std::chrono::steady_clock::now();
+    } else {
+        std::lock_guard lock(state->mutex);
+        state->inFlight = false;
+    }
+}
+
+void GatewayAssembly::mirrorBridgesPeriodically() {
+    auto const now = std::chrono::steady_clock::now();
+    for (int i = 0; i < int(m_bridges.size()); i++) {
+        auto const& bridge = m_bridges[size_t(i)];
+        if (bridge.mirrorCount <= 0
+            || bridge.mirrorPolicy
+                != config::BridgeMirrorPolicy::Periodic) {
+            continue;
+        }
+        auto const state = m_bridgeMirrorStates[size_t(i)];
+        {
+            std::lock_guard lock(state->mutex);
+            if (state->lastSubmittedAt.time_since_epoch().count() > 0
+                && now - state->lastSubmittedAt
+                    < std::chrono::milliseconds(bridge.mirrorPeriodMs)) {
+                continue;
             }
         }
-
-        transport::WriteBatch batch;
-        batch.table = core::RegisterTable::HoldingRegister;
-        batch.startAddress = bridge.mirrorStart + bridge.offset;
-        batch.values = std::move(values);
-
-        sched::RequestTag tag;
-        tag.moduleId = "bridge.mirror." + bridge.server;
-        tag.priority = sched::Priority::Low;
-        tag.coalesce = true;
-        server->scheduler().submitAsync(tag, [server, batch](sched::AsyncDone done) {
-            server->writeAsync(batch, [done](transport::WriteResult result) mutable {
-                done(result.ok);
-            });
-        });
+        scheduleBridgeMirror(i);
     }
 }
 
@@ -1079,10 +1320,14 @@ void GatewayAssembly::schedulePoll(PollTimer& pollTimer) {
 }
 
 void GatewayAssembly::startMirrorPump() {
-    int period = 100;
+    int period = std::numeric_limits<int>::max();
     bool any = false;
     for (auto const& bridge : m_bridges) {
-        if (bridge.mirrorCount <= 0) continue;
+        if (bridge.mirrorCount <= 0
+            || bridge.mirrorPolicy
+                != config::BridgeMirrorPolicy::Periodic) {
+            continue;
+        }
         any = true;
         period = std::min(period, std::max(20, bridge.mirrorPeriodMs));
     }
@@ -1093,7 +1338,7 @@ void GatewayAssembly::startMirrorPump() {
     m_mirrorTimer->expires_after(std::chrono::milliseconds(period));
     m_mirrorTimer->async_wait([this, period](auto const& ec) {
         if (ec || !m_started || !m_mirrorTimer) return;
-        mirrorBridgesOnce();
+        mirrorBridgesPeriodically();
         startMirrorPump();
     });
 }

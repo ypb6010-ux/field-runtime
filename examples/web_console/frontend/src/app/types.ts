@@ -22,12 +22,7 @@ export type PageKey =
   | "settings"
   | "apidocs"
   | "logs"
-  | "users"
-  // 设计说明区（骨架阶段的设计交付，非业务页面）
-  | "spec-roles"
-  | "spec-buttons"
-  | "spec-states"
-  | "spec-live-playground";
+  | "users";
 
 /** 连接 / WebSocket 等运行态状态。info=检查中/中性蓝 */
 export type StatusTone = "success" | "warning" | "error" | "draft" | "disabled" | "info";

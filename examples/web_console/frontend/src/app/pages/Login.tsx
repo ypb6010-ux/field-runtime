@@ -13,7 +13,10 @@ interface LoginProps {
   onAuthenticated: (user: AuthUser) => void;
 }
 
-type FormError = { code: "empty" | "invalid" | "unreachable"; message: string };
+type FormError = {
+  code: "empty" | "invalid" | "unreachable" | "server_error" | "rate_limited";
+  message: string;
+};
 
 export function Login({ onAuthenticated }: LoginProps) {
   const [account, setAccount] = useState("");
@@ -41,10 +44,16 @@ export function Login({ onAuthenticated }: LoginProps) {
       const user = await login(account, password);
       onAuthenticated(user); // 登录成功 → 由 /auth/me 决定角色与权限
     } catch (err) {
-      if (err instanceof AuthError && err.code === "unreachable") {
-        setError({ code: "unreachable", message: err.message });
+      if (
+        err instanceof AuthError
+        && (err.code === "unreachable" || err.code === "server_error")
+      ) {
+        setError({ code: err.code, message: err.message });
       } else if (err instanceof AuthError) {
-        setError({ code: "invalid", message: err.message });
+        setError({
+          code: err.code === "rate_limited" ? "rate_limited" : "invalid",
+          message: err.message,
+        });
       } else {
         setError({ code: "unreachable", message: "发生未知错误，请稍后重试。" });
       }
@@ -75,8 +84,8 @@ export function Login({ onAuthenticated }: LoginProps) {
             </p>
           </div>
           <div className="flex items-center gap-3 text-xs text-sidebar-foreground/60">
-            <StatusLight tone="success" label="网关在线" />
-            <StatusLight tone="success" label="WS 通道正常" />
+            <StatusLight tone="info" label="会话鉴权" />
+            <StatusLight tone="info" label="角色权限隔离" />
           </div>
         </div>
 
@@ -91,12 +100,20 @@ export function Login({ onAuthenticated }: LoginProps) {
               variant="destructive"
               className="mt-4 border-status-error-border bg-status-error-bg text-status-error"
             >
-              {error.code === "unreachable" ? (
+              {error.code === "unreachable" || error.code === "server_error" ? (
                 <ServerCrash className="size-4" />
               ) : (
                 <AlertCircle className="size-4" />
               )}
-              <AlertTitle>{error.code === "unreachable" ? "后端不可达" : "登录失败"}</AlertTitle>
+              <AlertTitle>
+                {error.code === "unreachable"
+                  ? "后端不可达"
+                  : error.code === "server_error"
+                    ? "服务器错误"
+                  : error.code === "rate_limited"
+                    ? "登录暂时受限"
+                    : "登录失败"}
+              </AlertTitle>
               <AlertDescription className="text-status-error/80">{error.message}</AlertDescription>
             </Alert>
           )}
@@ -119,6 +136,7 @@ export function Login({ onAuthenticated }: LoginProps) {
               <Input
                 id="pwd"
                 type="password"
+                maxLength={256}
                 value={password}
                 disabled={submitting}
                 aria-invalid={passwordEmpty}
@@ -142,9 +160,9 @@ export function Login({ onAuthenticated }: LoginProps) {
           </form>
 
           <p className="mt-4 rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-            演示账号：<span className="font-mono">admin</span> / <span className="font-mono">operator</span> /
-            <span className="font-mono"> viewer</span>，密码 <span className="font-mono">demo</span>。
-            账号填 <span className="font-mono">offline</span> 可模拟后端不可达。角色由后端返回，登录页不可选择。
+            首次启动时，管理员初始密码由后端控制台输出；也可通过
+            <span className="mx-1 font-mono">FIELD_CONSOLE_ADMIN_PASSWORD</span>
+            环境变量预设。角色与权限以服务端返回结果为准。
           </p>
         </div>
       </Card>

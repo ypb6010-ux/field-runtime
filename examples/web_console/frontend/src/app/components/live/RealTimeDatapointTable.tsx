@@ -10,7 +10,6 @@ import { cn } from "../ui/utils";
 
 interface RealTimeDatapointTableProps {
   rows: Datapoint[];
-  canControl: boolean;
   wsState: WsState;
   /** 订阅失败的点位 ID 集合，显示订阅失败 Tag */
   failedSubIds?: Set<string>;
@@ -21,7 +20,7 @@ interface RealTimeDatapointTableProps {
 }
 
 export function RealTimeDatapointTable({
-  rows, canControl, wsState, failedSubIds, selectedId, onRowClick, onTrend, onReadNow,
+  rows, wsState, failedSubIds, selectedId, onRowClick, onTrend, onReadNow,
 }: RealTimeDatapointTableProps) {
   const wsDisconnected = wsState === "disconnected";
   return (
@@ -107,7 +106,6 @@ export function RealTimeDatapointTable({
 
                     <ReadNowButton
                       datapointId={dp.id}
-                      canControl={canControl}
                       wsDisconnected={wsDisconnected}
                       onResult={(r) => onReadNow(dp, r)}
                     />

@@ -185,6 +185,8 @@ export function SchemaField({
             <Input
               id={id}
               type="number"
+              min={field.minimum}
+              max={field.maximum}
               value={value === undefined ? "" : (value as number)}
               placeholder={field.default !== undefined ? String(field.default) : field.placeholder}
               onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}

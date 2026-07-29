@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-// Registers the W2 configuration CRUD endpoints (transports / datapoints /
-// codecs / poll_ranges) plus GET /api/v1/transports/kinds.
+// Registers transport/datapoint/codec/poll-range draft CRUD and the dynamic
+// transport-kind schema.
 namespace wc {
 void registerConfigControllers();
 }

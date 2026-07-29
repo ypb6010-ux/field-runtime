@@ -15,7 +15,6 @@ export interface Filters {
   keyword: string;
   kind: string; // "all" | kind
   status: string; // "all" | TransportStatus
-  tag: string; // "all" | tag
 }
 
 const STATUSES = Object.keys(STATUS_META) as TransportStatus[];
@@ -23,13 +22,11 @@ const STATUSES = Object.keys(STATUS_META) as TransportStatus[];
 export function ProtocolFilterBar({
   filters,
   kinds,
-  tags,
   onChange,
   onReset,
 }: {
   filters: Filters;
   kinds: KindSchema[];
-  tags: string[];
   onChange: (next: Filters) => void;
   onReset: () => void;
 }) {
@@ -42,7 +39,7 @@ export function ProtocolFilterBar({
         <Input
           value={filters.keyword}
           onChange={(e) => set({ keyword: e.target.value })}
-          placeholder="搜索名称、Endpoint、备注"
+          placeholder="搜索名称、ID 或 Endpoint"
           className="pl-8"
         />
       </div>
@@ -70,20 +67,6 @@ export function ProtocolFilterBar({
           {STATUSES.map((s) => (
             <SelectItem key={s} value={s}>
               {STATUS_META[s].label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-
-      <Select value={filters.tag} onValueChange={(v) => set({ tag: v })}>
-        <SelectTrigger className="w-32">
-          <SelectValue placeholder="标签" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">全部标签</SelectItem>
-          {tags.map((t) => (
-            <SelectItem key={t} value={t}>
-              {t}
             </SelectItem>
           ))}
         </SelectContent>

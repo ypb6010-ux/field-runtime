@@ -11,9 +11,6 @@ import {
   BookText,
   ScrollText,
   Users,
-  Columns3,
-  MousePointerClick,
-  Component,
 } from "lucide-react";
 import type { NavGroup, Role, NavItem, PageKey } from "./types";
 
@@ -58,7 +55,7 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "协议管理",
         en: "Protocols",
         icon: Network,
-        roles: ["admin"],
+        roles: ["operator", "admin"],
         configScoped: true,
       },
       {
@@ -66,7 +63,7 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "采集点",
         en: "Datapoints",
         icon: Radar,
-        roles: ["admin"],
+        roles: ["operator", "admin"],
         configScoped: true,
       },
       {
@@ -74,7 +71,7 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "轮询任务",
         en: "Polling",
         icon: Timer,
-        roles: ["admin"],
+        roles: ["operator", "admin"],
         configScoped: true,
       },
       {
@@ -135,40 +132,6 @@ export const NAV_GROUPS: NavGroup[] = [
       },
     ],
   },
-  {
-    id: "spec",
-    title: "设计说明 Design Spec",
-    items: [
-      {
-        key: "spec-roles",
-        label: "角色导航对比",
-        en: "Role Navigation",
-        icon: Columns3,
-        roles: ["viewer", "operator", "admin"],
-      },
-      {
-        key: "spec-buttons",
-        label: "按钮权限状态",
-        en: "Button States",
-        icon: MousePointerClick,
-        roles: ["viewer", "operator", "admin"],
-      },
-      {
-        key: "spec-states",
-        label: "全局状态组件",
-        en: "Global States",
-        icon: Component,
-        roles: ["viewer", "operator", "admin"],
-      },
-      {
-        key: "spec-live-playground",
-        label: "Live 状态演示",
-        en: "State Playground",
-        icon: Activity,
-        roles: ["viewer", "operator", "admin"],
-      },
-    ],
-  },
 ];
 
 /** 扁平化的所有导航项，便于按 key 查找 */
@@ -193,7 +156,7 @@ export function canAccess(role: Role, key: PageKey): boolean {
 
 /** 是否拥有 config 权限（决定“未生效项”徽标可见性） */
 export function hasConfigAccess(role: Role): boolean {
-  return canAccess(role, "config");
+  return role !== "viewer";
 }
 
 /** 角色登录后的默认落地页（由后端/产品策略约定） */

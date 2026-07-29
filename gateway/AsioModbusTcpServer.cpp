@@ -47,8 +47,6 @@ AsioModbusTcpServer::AsioModbusTcpServer(config::TransportConfig cfg,
     for (auto const& r : m_cfg.listenRanges) {
         ensureRangeLocked(r.table, r.startAddress, r.size);
     }
-    ensureRangeLocked(core::RegisterTable::HoldingRegister, 0, 128);
-    ensureRangeLocked(core::RegisterTable::InputRegister, 0, 128);
 }
 
 AsioModbusTcpServer::~AsioModbusTcpServer() {
@@ -68,6 +66,7 @@ transport::ConnectionState AsioModbusTcpServer::state() const {
 }
 
 std::expected<void, std::string> AsioModbusTcpServer::connect() {
+    if (m_scheduler) m_scheduler->startAsync();
     std::lock_guard lk(m_mtx);
     gateway_error_code ec;
     auto const address = m_cfg.listenAddress.empty()
@@ -140,9 +139,20 @@ void AsioModbusTcpServer::startAccept() {
     m_acceptor->async_accept(*socket, [this, socket](gateway_error_code const& ec) {
         if (state() != transport::ConnectionState::Connected) return;
         if (!ec) {
-            std::lock_guard lk(m_mtx);
-            m_client = socket;
-            startReadHeader(socket);
+            bool accepted = false;
+            {
+                std::lock_guard lk(m_mtx);
+                if (int(m_clients.size()) < std::max(1, m_cfg.maxClients)) {
+                    m_clients.insert(socket);
+                    accepted = true;
+                }
+            }
+            if (accepted) {
+                startReadHeader(socket);
+            } else {
+                gateway_error_code ignored;
+                socket->close(ignored);
+            }
         }
         startAccept();
     });
@@ -152,9 +162,15 @@ void AsioModbusTcpServer::startReadHeader(std::shared_ptr<TcpSocket> socket) {
     auto header = std::make_shared<std::array<std::uint8_t, 7>>();
     gateway_asio::async_read(*socket, gateway_asio::buffer(*header),
         [this, socket, header](gateway_error_code const& ec, std::size_t) {
-            if (ec || state() != transport::ConnectionState::Connected) return;
+            if (ec || state() != transport::ConnectionState::Connected) {
+                removeClient(socket);
+                return;
+            }
             auto const length = getU16(*header, 4);
-            if (length < 2 || length > 260) return;
+            if (length < 2 || length > 260) {
+                removeClient(socket);
+                return;
+            }
             startReadBody(socket, header, length);
         });
 }
@@ -167,7 +183,10 @@ void AsioModbusTcpServer::startReadBody(
     adu->resize(6 + length);
     gateway_asio::async_read(*socket, gateway_asio::buffer(adu->data() + 7, length - 1),
         [this, socket, adu](gateway_error_code const& ec, std::size_t) {
-            if (ec || state() != transport::ConnectionState::Connected) return;
+            if (ec || state() != transport::ConnectionState::Connected) {
+                removeClient(socket);
+                return;
+            }
             auto response = std::make_shared<std::vector<std::uint8_t>>(handleRequest(*adu));
             if (response->empty()) {
                 startReadHeader(socket);
@@ -175,7 +194,11 @@ void AsioModbusTcpServer::startReadBody(
             }
             gateway_asio::async_write(*socket, gateway_asio::buffer(*response),
                 [this, socket, response](gateway_error_code const& writeEc, std::size_t) {
-                    if (!writeEc) startReadHeader(socket);
+                    if (!writeEc) {
+                        startReadHeader(socket);
+                    } else {
+                        removeClient(socket);
+                    }
                 });
         });
 }
@@ -195,6 +218,10 @@ std::vector<std::uint8_t> AsioModbusTcpServer::handleRequest(
         }
         auto const start = getU16(pdu, 1);
         auto const count = getU16(pdu, 3);
+        if (count == 0 || count > 125) {
+            return nmbs::buildExceptionResponse(
+                header.transactionId, header.unitId, function, 0x03);
+        }
         auto values = readLocal(tableForReadFunction(function), start, count);
         if (values.size() != count) {
             return nmbs::buildExceptionResponse(header.transactionId, header.unitId, function, 0x02);
@@ -228,7 +255,9 @@ std::vector<std::uint8_t> AsioModbusTcpServer::handleRequest(
         auto const start = getU16(pdu, 1);
         auto const count = getU16(pdu, 3);
         auto const byteCount = pdu[5];
-        if (count == 0 || byteCount != count * 2 || pdu.size() != std::size_t(6 + byteCount)) {
+        if (count == 0 || count > 123
+            || byteCount != count * 2
+            || pdu.size() != std::size_t(6 + byteCount)) {
             return nmbs::buildExceptionResponse(header.transactionId, header.unitId, function, 0x03);
         }
 
@@ -248,6 +277,7 @@ std::vector<std::uint8_t> AsioModbusTcpServer::handleRequest(
 }
 
 core::RegisterWords AsioModbusTcpServer::readLocal(core::RegisterTable table, int start, int count) {
+    if (!rangeAllowed(table, start, count)) return {};
     std::lock_guard lk(m_mtx);
     auto it = m_tables.find(table);
     if (it == m_tables.end() || start < 0 || count < 0
@@ -261,17 +291,51 @@ bool AsioModbusTcpServer::writeLocal(core::RegisterTable table,
                                      int start,
                                      core::RegisterWords const& values,
                                      bool publishEvent) {
+    if (!rangeAllowed(table, start, int(values.size()))) return false;
     {
         std::lock_guard lk(m_mtx);
-        ensureRangeLocked(table, start, int(values.size()));
-        auto& target = m_tables[table];
-        if (start < 0 || start + int(values.size()) > int(target.size())) return false;
+        auto it = m_tables.find(table);
+        if (it == m_tables.end()
+            || start < 0
+            || start + int(values.size()) > int(it->second.size())) {
+            return false;
+        }
+        auto& target = it->second;
         std::copy(values.begin(), values.end(), target.begin() + start);
     }
     if (publishEvent && m_bus) {
         m_bus->publish(bus::ServerWriteEvent{id(), table, start, values});
     }
     return true;
+}
+
+bool AsioModbusTcpServer::rangeAllowed(
+    core::RegisterTable table, int start, int count) const {
+    if (start < 0 || count <= 0
+        || std::int64_t(start) + count > 65536) {
+        return false;
+    }
+    for (auto const& range : m_cfg.listenRanges) {
+        if (range.table != table) continue;
+        if (start >= range.startAddress
+            && std::int64_t(start) + count
+                <= std::int64_t(range.startAddress) + range.size) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void AsioModbusTcpServer::removeClient(
+    std::shared_ptr<TcpSocket> const& socket) {
+    gateway_error_code ignored;
+    if (socket && socket->is_open()) {
+        socket->shutdown(
+            gateway_asio::ip::tcp::socket::shutdown_both, ignored);
+        socket->close(ignored);
+    }
+    std::lock_guard lk(m_mtx);
+    m_clients.erase(socket);
 }
 
 void AsioModbusTcpServer::ensureRangeLocked(core::RegisterTable table, int start, int count) {
@@ -283,11 +347,13 @@ void AsioModbusTcpServer::ensureRangeLocked(core::RegisterTable table, int start
 
 void AsioModbusTcpServer::closeAllLocked() {
     gateway_error_code ignored;
-    if (m_client && m_client->is_open()) {
-        m_client->shutdown(gateway_asio::ip::tcp::socket::shutdown_both, ignored);
-        m_client->close(ignored);
+    for (auto const& client : m_clients) {
+        if (!client || !client->is_open()) continue;
+        client->shutdown(
+            gateway_asio::ip::tcp::socket::shutdown_both, ignored);
+        client->close(ignored);
     }
-    m_client.reset();
+    m_clients.clear();
     if (m_acceptor && m_acceptor->is_open()) {
         m_acceptor->cancel(ignored);
         m_acceptor->close(ignored);

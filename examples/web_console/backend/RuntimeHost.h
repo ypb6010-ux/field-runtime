@@ -49,8 +49,9 @@ public:
     // Validate a config (load into a throwaway assembly, no start). Static so it
     // never touches the running runtime.
     static bool validate(std::string const& tomlPath, std::string& error);
-    // Hot reload: validate -> stop current -> start new. Returns false (and keeps
-    // the old runtime stopped) only if the NEW config fails to start.
+    // Transactional hot reload: build the candidate without touching the live
+    // graph, then swap on the io thread. A failed candidate leaves the current
+    // runtime running; a start exception rolls back to the previous graph.
     bool reload(std::string const& tomlPath);
 
     std::vector<DpSnap> datapoints() const;
@@ -64,6 +65,7 @@ public:
 
 private:
     void schedulePump();
+    bool runOnIoAndWait(std::function<void()> operation);
 
     gateway_asio::io_context m_io;
     std::optional<gateway_asio::executor_work_guard<gateway_asio::io_context::executor_type>> m_workGuard;
@@ -71,6 +73,7 @@ private:
     std::unique_ptr<gateway_asio::steady_timer> m_pumpTimer;
     std::thread m_thread;
     std::atomic<bool> m_running{false};
+    mutable std::mutex m_lifecycleMtx;
 
     mutable std::mutex m_mtx;
     std::vector<DpSnap> m_dps;

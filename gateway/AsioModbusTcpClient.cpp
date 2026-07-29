@@ -34,7 +34,8 @@ AsioModbusTcpClient::AsioModbusTcpClient(config::TransportConfig cfg,
     , m_io(&io)
     , m_socket(io)
     , m_scheduler(sched::makeScheduler(m_cfg.scheduler))
-    , m_reconnectTimer(std::make_unique<gateway_asio::steady_timer>(io)) {
+    , m_reconnectTimer(std::make_unique<gateway_asio::steady_timer>(io))
+    , m_connectTimer(std::make_unique<gateway_asio::steady_timer>(io)) {
     m_scheduler->setDelayFn([this](int ms, std::function<void()> fn) {
         auto timer = std::make_shared<gateway_asio::steady_timer>(*m_io);
         timer->expires_after(std::chrono::milliseconds(ms));
@@ -61,6 +62,7 @@ transport::ConnectionState AsioModbusTcpClient::state() const {
 }
 
 std::expected<void, std::string> AsioModbusTcpClient::connect() {
+    if (m_scheduler) m_scheduler->startAsync();
     std::lock_guard lk(m_socketMtx);
     m_state.store(transport::ConnectionState::Connecting, std::memory_order_release);
 
@@ -94,6 +96,10 @@ void AsioModbusTcpClient::disconnect() {
         gateway_error_code ignored;
         m_reconnectTimer->cancel(ignored);
     }
+    if (m_connectTimer) {
+        gateway_error_code ignored;
+        m_connectTimer->cancel(ignored);
+    }
     m_reconnectPending = false;
     std::lock_guard lk(m_socketMtx);
     if (m_scheduler) m_scheduler->stopAsync();
@@ -114,7 +120,8 @@ transport::ReadResult AsioModbusTcpClient::read(transport::ReadRequest const& re
         out.errorMessage = "Modbus TCP client is not connected";
         return out;
     }
-    if (req.count <= 0 || req.count > 125 || req.startAddress < 0) {
+    if (req.count <= 0 || req.count > 125 || req.startAddress < 0
+        || std::int64_t(req.startAddress) + req.count > 65536) {
         out.errorMessage = "invalid Modbus read range";
         return out;
     }
@@ -156,7 +163,9 @@ transport::WriteResult AsioModbusTcpClient::writeBatch(transport::WriteBatch con
     if (batch.table != core::RegisterTable::HoldingRegister) {
         return {false, "unsupported Modbus write table"};
     }
-    if (batch.startAddress < 0 || batch.values.empty() || batch.values.size() > 123) {
+    if (batch.startAddress < 0 || batch.values.empty()
+        || batch.values.size() > 123
+        || std::int64_t(batch.startAddress) + batch.values.size() > 65536) {
         return {false, "invalid Modbus write range"};
     }
 
@@ -240,7 +249,8 @@ void AsioModbusTcpClient::readAsync(transport::ReadRequest const& req, ReadDone 
         done(std::move(out));
         return;
     }
-    if (req.count <= 0 || req.count > 125 || req.startAddress < 0) {
+    if (req.count <= 0 || req.count > 125 || req.startAddress < 0
+        || std::int64_t(req.startAddress) + req.count > 65536) {
         out.errorMessage = "invalid Modbus read range";
         done(std::move(out));
         return;
@@ -297,7 +307,9 @@ void AsioModbusTcpClient::writeAsync(transport::WriteBatch const& batch, WriteDo
         done({false, "unsupported Modbus write table"});
         return;
     }
-    if (batch.startAddress < 0 || batch.values.empty() || batch.values.size() > 123) {
+    if (batch.startAddress < 0 || batch.values.empty()
+        || batch.values.size() > 123
+        || std::int64_t(batch.startAddress) + batch.values.size() > 65536) {
         done({false, "invalid Modbus write range"});
         return;
     }
@@ -425,6 +437,7 @@ void AsioModbusTcpClient::failSocketAsync(std::string const&) {
 
 void AsioModbusTcpClient::requestReconnect() {
     if (!m_io) return;
+    if (m_scheduler) m_scheduler->startAsync();
     // Hop onto the io thread; never block the caller (control socket handler).
     // Unlike disconnect() this leaves the scheduler running, then attempts an
     // immediate async reconnect (falling back to the interval loop on failure).
@@ -437,6 +450,10 @@ void AsioModbusTcpClient::requestReconnect() {
         if (m_reconnectTimer) {
             gateway_error_code ignored;
             m_reconnectTimer->cancel(ignored);
+        }
+        if (m_connectTimer) {
+            gateway_error_code ignored;
+            m_connectTimer->cancel(ignored);
         }
         m_reconnectPending = false;
         attemptReconnect();
@@ -463,12 +480,28 @@ void AsioModbusTcpClient::scheduleReconnect() {
 void AsioModbusTcpClient::attemptReconnect() {
     if (state() != transport::ConnectionState::Error) return;  // manual stop / already up
     m_state.store(transport::ConnectionState::Connecting, std::memory_order_release);
+    int const timeoutMs =
+        m_cfg.connectTimeoutMs > 0 ? m_cfg.connectTimeoutMs : 3000;
+    m_connectTimer->expires_after(std::chrono::milliseconds(timeoutMs));
+    m_connectTimer->async_wait([this](gateway_error_code const& ec) {
+        if (ec || state() != transport::ConnectionState::Connecting) return;
+        {
+            std::lock_guard lk(m_socketMtx);
+            closeSocketLocked();
+            m_state.store(
+                transport::ConnectionState::Error,
+                std::memory_order_release);
+        }
+        scheduleReconnect();
+    });
     auto resolver = std::make_shared<gateway_asio::ip::tcp::resolver>(*m_io);
     resolver->async_resolve(m_cfg.host, std::to_string(m_cfg.port),
         [this, resolver](gateway_error_code const& ec,
                          gateway_asio::ip::tcp::resolver::results_type endpoints) {
             if (state() != transport::ConnectionState::Connecting) return;
             if (ec) {
+                gateway_error_code ignored;
+                m_connectTimer->cancel(ignored);
                 m_state.store(transport::ConnectionState::Error, std::memory_order_release);
                 scheduleReconnect();
                 return;
@@ -483,11 +516,14 @@ void AsioModbusTcpClient::attemptReconnect() {
                        gateway_asio::ip::tcp::endpoint const&) {
                     if (state() != transport::ConnectionState::Connecting) return;
                     if (cec) {
+                        gateway_error_code ignored;
+                        m_connectTimer->cancel(ignored);
                         m_state.store(transport::ConnectionState::Error, std::memory_order_release);
                         scheduleReconnect();
                         return;
                     }
                     gateway_error_code ignored;
+                    m_connectTimer->cancel(ignored);
                     m_socket.set_option(gateway_asio::ip::tcp::no_delay(true), ignored);
                     m_state.store(transport::ConnectionState::Connected, std::memory_order_release);
                 });

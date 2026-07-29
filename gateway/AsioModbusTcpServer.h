@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -54,6 +55,8 @@ private:
                     int start,
                     core::RegisterWords const& values,
                     bool publishEvent);
+    bool rangeAllowed(core::RegisterTable table, int start, int count) const;
+    void removeClient(std::shared_ptr<TcpSocket> const& socket);
     void ensureRangeLocked(core::RegisterTable table, int start, int count);
     void closeAllLocked();
 
@@ -61,7 +64,8 @@ private:
     gateway_asio::io_context* m_io = nullptr;
     bus::EventBus* m_bus = nullptr;
     std::unique_ptr<gateway_asio::ip::tcp::acceptor> m_acceptor;
-    std::shared_ptr<TcpSocket> m_client;
+    std::set<std::shared_ptr<TcpSocket>,
+             std::owner_less<std::shared_ptr<TcpSocket>>> m_clients;
     std::unique_ptr<sched::RequestScheduler> m_scheduler;
     std::atomic<transport::ConnectionState> m_state{transport::ConnectionState::Disconnected};
     std::mutex m_mtx;

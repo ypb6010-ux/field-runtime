@@ -1,7 +1,7 @@
 # web_console —— FieldRuntime 网关 Web 管理控制台
 
-> core 的**完整功能示例**:一套工业数据采集网关的 Web 管理控制台。
-> **后端** Drogon(C++17，REST + WebSocket + 内置 ORM）+ SQLite，**内嵌 FieldRuntime 运行时**
+> FieldRuntime 的**完整功能示例**：一套工业数据采集网关的 Web 管理控制台。
+> **后端** Drogon（C++23，REST + WebSocket + SQLite）+ **内嵌 FieldRuntime 运行时**
 > （复用 gateway 的 transports / assembly，无 Qt）；**前端** React + TypeScript + Vite + shadcn/ui；
 > 另含一个**数据仿真服务**，无需真实硬件即可端到端演示。
 >
@@ -13,12 +13,12 @@
 
 ## 1. 它演示了什么
 
-- **多协议南向采集**：Modbus TCP / OPC UA / Modbus RTU / S7（snap7），统一 `transport::Transport` 抽象。
+- **多协议南向采集**：控制台当前支持 Modbus TCP / OPC UA / S7（snap7），统一 `transport::Transport` 抽象。
 - **前端动态协议配置**：协议表单由后端 `GET /transports/kinds` 的 JSON Schema 驱动，新增协议无需改前端。
 - **两种取数方式**：WebSocket 订阅（实时推送）+ REST 主动拉取（最新值 / 历史）。
 - **配置热生效**：改配置 → 校验 → 一键 Apply，运行时**不重启**优雅重载；支持版本与回滚。
 - **协议转换**：源点位 → 变换 → 目标协议，规则可配、活动可观测。
-- **鉴权 + RBAC**：JWT 登录，Viewer / Operator / Admin 三角色，按权限位放行。
+- **鉴权 + RBAC**：服务端 opaque session token、PBKDF2-SHA256 口令哈希、Viewer / Operator / Admin 三角色及权限位校验。
 - **持久化**：SQLite（配置、历史采样、事件 / 审计、用户角色）。
 
 ---
@@ -89,7 +89,7 @@ examples/web_console/
 
 | 层 | 依赖 |
 |---|---|
-| 后端 | `drogon[sqlite3]`、`sqlite3`、`open62541`、`snap7`、`asio`、`tomlplusplus`（均 vcpkg）+ FieldRuntime::Base |
+| 后端 | `drogon[sqlite3]`、`sqlite3`、OpenSSL、`open62541`、`snap7`、`asio`、`tomlplusplus`（均 vcpkg）+ FieldRuntime::Base |
 | 数据仿真 | `open62541`、`snap7`、`asio` + gateway nanomodbus |
 | 前端 | Node ≥ 20；shadcn/radix + Tailwind + recharts + lucide-react + sonner（`npm install`） |
 
@@ -102,7 +102,7 @@ examples/web_console/
 ### 后端 + 数据仿真（随 `CORE_BUILD_GATEWAY` 一起，无 Qt）
 
 ```bash
-cmake -S core -B out/build -G Ninja \
+cmake -S . -B out/build -G Ninja \
   -DCORE_WITH_QT=OFF -DCORE_BUILD_GATEWAY=ON \
   -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake \
   -DVCPKG_TARGET_TRIPLET=x64-windows
@@ -114,7 +114,7 @@ Windows（MSVC）：先导入 `vcvars64.bat` 环境再调 cmake/ninja。
 ### 前端
 
 ```bash
-cd core/examples/web_console/frontend
+cd examples/web_console/frontend
 npm install
 npm run build      # 产物在 dist/
 # 或开发模式：npm run dev
@@ -131,21 +131,21 @@ npm run build      # 产物在 dist/
 field_console_dataservice 1502 127.0.0.1 4840
 
 # 2) 后端(参数:db 路径、端口)
-web_console_backend console.db 8088
+web_console_backend console.db 8080
 
 # 3) 前端开发服务器(vite,代理 /api、/ws 到后端)
 cd frontend && npm run dev
 ```
 
-浏览器打开 vite 提示的地址（默认 `http://localhost:5173`），用默认账号登录：
+浏览器打开 Vite 提示的地址（默认 `http://localhost:5173`）。首次启动空数据库时只创建
+`admin` 账号：
 
-| 账号 | 密码 | 角色 | 权限 |
-|---|---|---|---|
-| `admin` | `admin` | Admin | 全部(配置/发布/控制/用户) |
-| `viewer` | `viewer` | Viewer | 只读 |
+- 设置环境变量 `FIELD_CONSOLE_ADMIN_PASSWORD` 可指定初始密码；
+- 未设置时，后端在标准错误输出中打印一次随机初始密码；
+- 首次登录后应立即在“用户与角色”页重置密码。
 
-> ⚠️ **端口**：后端/前端代理示例用 8080；若本机 8080 被占用（如 Apache），请改后端端口并同步修改
-> `frontend/vite.config.ts` 里 `server.proxy` 的 target（如 8088）。
+开发代理默认连接后端 `127.0.0.1:8080`。若后端使用其他端口，请同步修改
+`frontend/vite.config.ts`。
 
 生产部署：`npm run build` 产物交给后端静态托管（`web_console_backend <db> <port> <www目录>`），单进程交付。
 
@@ -164,10 +164,10 @@ cd frontend && npm run dev
 | 鉴权 | `/auth/login` `/auth/me` `/auth/logout` | 登录 / 当前用户 / 登出 |
 | 协议 | `/transports` `/transports/kinds` | 协议端点 CRUD + 参数 schema |
 | 采集点 | `/datapoints` `/codecs` `/poll_ranges` | 点位 / 编解码 / 轮询 CRUD |
-| 转换 | `/conversions` `/conversions/{id}/stats` | 转换规则 CRUD + 统计 |
-| 数据 | `/data/latest` `/data/history` `/data/write` `/runtime/transports` | 最新值 / 历史 / 控制写 / 连接状态 |
-| 配置 | `/config/validate` `/config/apply` `/config/versions` `/config/versions/{v}/rollback` | 校验 / 发布 / 版本 / 回滚 |
-| 用户 | `/users` `/roles` `/audit` | 用户 / 角色 / 审计 |
+| 转换 | `/conversions` `/conversions/stats` `/conversions/{id}/stats` | 转换规则 CRUD + 批量/单规则统计 |
+| 数据 | `/data/catalog` `/data/latest` `/data/history` `/data/write` `/runtime/transports` | 元数据 / 最新值 / 历史 / 控制写 / 连接状态 |
+| 配置 | `/config/status` `/config/validate` `/config/apply` `/config/versions` `/config/versions/{v}/rollback` | 草稿状态 / 校验 / 发布 / 版本 / 回滚 |
+| 管理 | `/users` `/roles` `/audit` `/system/settings` `/system/maintenance/*` | 用户 / 角色 / 审计 / 设置 / 维护 |
 
 **WebSocket** `/ws/stream`：客户端发 `{op:"subscribe",topics:["dp/*","transport/*"]}` / `{op:"ping"}`；
 服务端每秒推 `{type:"snapshot",datapoints:[{id,value,quality,ts}],transports:[{id,kind,state}]}`，慢客户端 latest-wins。
@@ -178,7 +178,7 @@ cd frontend && npm run dev
 
 | 页面 | 说明 | 数据源 |
 |---|---|---|
-| Dashboard 概览 | 连接墙 + KPI（5s 刷新） | `/runtime/transports` `/datapoints` |
+| Dashboard 概览 | 连接墙 + KPI（5s 刷新） | `/runtime/transports` `/data/catalog` `/data/latest` |
 | Live 实时监控 | 点位实时值/趋势（WS 推送，latest-wins） | `/ws/stream` `/data/latest` |
 | History 历史数据 | 多点位趋势对比 + 表格 + CSV 导出 | `/data/history` |
 | Protocols 协议管理 | 协议 CRUD + 动态表单 + 测试连接 | `/transports` `/transports/kinds` |
@@ -220,21 +220,27 @@ cd frontend && npm run dev
 
 ---
 
-## 11. 实现阶段（W0–W8，均已完成并验证）
+## 11. 当前实现边界
 
-W0 数据仿真 · W1 Drogon 骨架 · W2 配置 CRUD · W3 内嵌 RuntimeHost · W4 数据 API/采样 ·
-W5 WebSocket · W6 配置热生效 · W7 协议转换 · W7.6 鉴权 RBAC · W8 OpenAPI/Swagger。
-前端 12 页均接通真后端 REST/WS。
+- 控制台可配置的南向 transport 为 Modbus TCP、OPC UA、S7；FieldRuntime 网关本身还包含
+  Modbus RTU、MQTT 等 transport，但本控制台尚未暴露这些表单。
+- 协议转换目标当前是 Modbus holding register 写入；规则采用 `on_change` 或
+  `periodic` 触发，支持线性变换、限幅、统计和失败重试。
+- 历史采样周期固定为 2 秒，按点位时间戳去重并批量写入；保留天数和立即清理由
+  Settings 实际控制。
+- session token 保存在服务端内存中，服务重启后失效；多实例部署需将会话和登录限流状态
+  外置。生产部署还应由反向代理提供 HTTPS。
+- WebSocket 浏览器握手当前通过查询参数携带短期 session token；部署时应避免记录完整查询串，
+  或在反向代理层脱敏。
+- Swagger UI 的静态资源从 unpkg 加载；离线部署应将对应资源随应用一起交付。
 
 ---
 
-## 12. 已知限制 / 可继续打磨
+## 12. 验证状态
 
-- 鉴权用 opaque token + MD5（demo）；生产应换 JWT + argon2、HTTPS（反代终结 TLS）。
-- 协议转换 dest 当前走 Modbus；MQTT dest 需外部 broker。
-- Permission Matrix、Settings 维护操作为前端示意，缺对应细粒度后端端点。
-- 历史采样固定 2s；保留与降采样可在 Settings 配置后接调度。
-- 会话/口令为内存态，多实例部署需外置（Redis 等）。
+源代码以仓库根目录的 C++23 构建配置为准。文档中的“已实现”只描述当前代码路径，不替代构建、
+运行时连通、RBAC 和浏览器交互验证；完整验收建议覆盖空数据库首次启动、三角色权限、发布/回滚、
+断线重连、历史保留和真实设备写入。
 
 ---
 
@@ -247,4 +253,6 @@ W5 WebSocket · W6 配置热生效 · W7 协议转换 · W7.6 鉴权 RBAC · W8 
 | 后端链接 `LNK1104 无法打开 .exe` | 旧实例正在运行锁住 exe → 结束进程，或重命名旧 exe 后重链 |
 | drogon 头 `htonll 找不到` | 见 `backend/Platform.h`（已在 drogon 头前提供 htonll，勿用 `/Zc:twoPhase-`，会破坏 asio） |
 | `createDbClient sqlite3` FATAL | drogon 需带 `sqlite3` feature：`vcpkg.json` 写 `{"name":"drogon","features":["sqlite3"]}` |
-| Live/Dashboard 无数据 | 数据仿真未启动，或运行时未连上；看 Dashboard 连接墙状态、后端日志 |
+| Live/Dashboard 无数据 | 数据仿真未启动，或运行时未连上；看 Dashboard 连接状态、后端日志 |
+| 首次启动不知道密码 | 查看后端标准错误输出中的一次性随机密码，或启动前设置 `FIELD_CONSOLE_ADMIN_PASSWORD` |
+| 跨域请求被浏览器拦截 | 同源部署无需 CORS；确需跨域时将 `FIELD_CONSOLE_CORS_ORIGIN` 设置为唯一可信 Origin |

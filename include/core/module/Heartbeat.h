@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <string>
 
 #include "core/base/RegisterTable.h"
@@ -59,6 +60,7 @@ private:
     std::atomic<bool>                       m_started{false};
     std::chrono::steady_clock::time_point   m_lastSentAt;
     std::atomic<bool>                       m_inFlight{false};
+    std::atomic<std::uint64_t>              m_runGeneration{0};
 };
 
 } // namespace core::module

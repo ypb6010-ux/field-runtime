@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { AlertCircle, Loader2, Pause, Pencil, Play, Plus, RefreshCw, RotateCw, Trash2 } from "lucide-react";
-import { apiDelete, apiGet, apiPost, apiPut } from "../api";
+import { AlertCircle, Loader2, Pause, Pencil, Play, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { apiDelete, apiGet, apiPost, apiPut, isValidResourceId } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { PermissionButton } from "../components/PermissionButton";
 import { Button } from "../components/ui/button";
@@ -23,7 +23,7 @@ import {
 import { Label } from "../components/ui/label";
 import { Switch } from "../components/ui/switch";
 
-type PollStatus = "running" | "paused" | "error";
+type PollStatus = "enabled" | "disabled";
 
 interface PollRangeRow {
   id: string;
@@ -52,9 +52,6 @@ interface PollTask {
   regTable: string;
   start: number;
   status: PollStatus;
-  lastRun: string;
-  nextRun: string;
-  lastError: string;
   enabled: boolean;
 }
 
@@ -69,9 +66,8 @@ interface Form {
 }
 
 const STATUS_META: Record<PollStatus, { label: string; cls: string }> = {
-  running: { label: "运行中", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  paused: { label: "暂停", cls: "bg-muted text-muted-foreground border-border" },
-  error: { label: "异常", cls: "bg-red-50 text-red-700 border-red-200" },
+  enabled: { label: "草稿启用", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  disabled: { label: "草稿禁用", cls: "bg-muted text-muted-foreground border-border" },
 };
 
 const EMPTY_FORM: Form = { id: "", transport_id: "", reg_table: "HR", start: 0, count: 1, period_ms: 1000, enabled: true };
@@ -123,10 +119,7 @@ export function Polling({ canWrite = true, onDraftIncrement }: { canWrite?: bool
       window: `${r.reg_table} ${start} - ${start + Math.max(count - 1, 0)}`,
       regTable: r.reg_table,
       start,
-      status: enabled ? "running" : "paused",
-      lastRun: "-",
-      nextRun: enabled ? formatPeriod(periodMs) : "-",
-      lastError: "-",
+      status: enabled ? "enabled" : "disabled",
       enabled,
     };
   }
@@ -153,16 +146,15 @@ export function Polling({ canWrite = true, onDraftIncrement }: { canWrite?: bool
       if (filters.transport !== "all" && r.transportId !== filters.transport) return false;
       if (filters.status !== "all" && r.status !== filters.status) return false;
       if (filters.period !== "all" && String(r.periodMs) !== filters.period) return false;
-      if (kw && !`${r.id} ${r.transport} ${r.regTable} ${r.start} ${r.lastError}`.toLowerCase().includes(kw)) return false;
+      if (kw && !`${r.id} ${r.transport} ${r.regTable} ${r.start}`.toLowerCase().includes(kw)) return false;
       return true;
     });
   }, [rows, filters]);
 
   const periodOptions = useMemo(() => Array.from(new Set(rows.map((r) => r.periodMs))).sort((a, b) => a - b), [rows]);
-  const running = rows.filter((r) => r.status === "running").length;
-  const paused = rows.filter((r) => r.status === "paused").length;
-  const errors = rows.filter((r) => r.status === "error").length;
-  const nextRun = rows.find((r) => r.status === "running")?.nextRun ?? "-";
+  const enabledCount = rows.filter((r) => r.enabled).length;
+  const disabledCount = rows.length - enabledCount;
+  const registerCount = rows.reduce((sum, row) => sum + row.pointCount, 0);
 
   const draft = () => onDraftIncrement?.();
 
@@ -185,6 +177,26 @@ export function Polling({ canWrite = true, onDraftIncrement }: { canWrite?: bool
   }
 
   async function save() {
+    if (!isValidResourceId(form.id)) {
+      toast.error("任务 ID 须为 1–128 字符，且不可含空白或 /\\?#%");
+      return;
+    }
+    if (
+      !Number.isInteger(form.start)
+      || !Number.isInteger(form.count)
+      || form.start < 0
+      || form.start > 65535
+      || form.count < 1
+      || form.count > 125
+      || form.start + form.count > 65536
+    ) {
+      toast.error("轮询范围必须位于 0..65535，且 count 为 1..125");
+      return;
+    }
+    if (!Number.isInteger(form.period_ms) || form.period_ms < 1 || form.period_ms > 86400000) {
+      toast.error("轮询周期必须为 1..86400000 ms");
+      return;
+    }
     try {
       if (drawer.mode === "create") await apiPost("/poll_ranges", toBody(form));
       else await apiPut(`/poll_ranges/${encodeURIComponent(form.id)}`, toBody(form));
@@ -210,7 +222,7 @@ export function Polling({ canWrite = true, onDraftIncrement }: { canWrite?: bool
     try {
       await apiPut(`/poll_ranges/${encodeURIComponent(row.id)}`, toBody(next));
       draft();
-      toast.success(row.enabled ? `已暂停「${row.id}」` : `已恢复「${row.id}」`);
+      toast.success(row.enabled ? `已在草稿中禁用「${row.id}」` : `已在草稿中启用「${row.id}」`);
       load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "操作失败");
@@ -235,14 +247,11 @@ export function Polling({ canWrite = true, onDraftIncrement }: { canWrite?: bool
       <PageHeader
         title="轮询任务"
         en="Polling"
-        description="管理采集点轮询周期、窗口与运行状态。"
+        description="管理轮询范围与周期；列表展示数据库草稿，发布后才影响运行时。"
         actions={
           <>
             <Button variant="ghost" size="sm" className="gap-1.5" onClick={load}>
               <RefreshCw className="size-3.5" />刷新
-            </Button>
-            <Button variant="outline" size="sm" className="gap-1.5" disabled={!canWrite || rows.length === 0} onClick={() => toast.warning("请逐条停用需要暂停的轮询范围")}>
-              <Pause className="size-3.5" />暂停全部
             </Button>
             <PermissionButton allowed={canWrite} onAction={openCreate} size="sm">
               <Plus className="size-3.5" />新增轮询任务
@@ -253,10 +262,10 @@ export function Polling({ canWrite = true, onDraftIncrement }: { canWrite?: bool
 
       <div className="space-y-4 p-6">
         <div className="grid gap-3 md:grid-cols-4">
-          <SummaryCard title="运行中任务" value={`${running}`} note="采集线程正常执行" />
-          <SummaryCard title="暂停任务" value={`${paused}`} note="等待人工恢复" />
-          <SummaryCard title="异常任务" value={`${errors}`} note="需检查连接或超时配置" danger={errors > 0} />
-          <SummaryCard title="下次执行时间" value={nextRun} note={nextRun === "-" ? "无运行中任务" : "按周期调度"} />
+          <SummaryCard title="轮询范围" value={`${rows.length}`} note="数据库草稿总数" />
+          <SummaryCard title="草稿启用" value={`${enabledCount}`} note="发布后进入调度器" />
+          <SummaryCard title="草稿禁用" value={`${disabledCount}`} note="发布后不创建任务" />
+          <SummaryCard title="寄存器总数" value={`${registerCount}`} note="所有范围的 count 合计" />
         </div>
 
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-card p-3">
@@ -267,7 +276,7 @@ export function Polling({ canWrite = true, onDraftIncrement }: { canWrite?: bool
           </Select>
           <Select value={filters.status} onValueChange={(v) => setFilters((f) => ({ ...f, status: v }))}>
             <SelectTrigger className="h-8 w-32"><SelectValue placeholder="状态" /></SelectTrigger>
-            <SelectContent><SelectItem value="all">全部状态</SelectItem><SelectItem value="running">运行中</SelectItem><SelectItem value="paused">暂停</SelectItem><SelectItem value="error">异常</SelectItem></SelectContent>
+            <SelectContent><SelectItem value="all">全部状态</SelectItem><SelectItem value="enabled">草稿启用</SelectItem><SelectItem value="disabled">草稿禁用</SelectItem></SelectContent>
           </Select>
           <Select value={filters.period} onValueChange={(v) => setFilters((f) => ({ ...f, period: v }))}>
             <SelectTrigger className="h-8 w-36"><SelectValue placeholder="周期范围" /></SelectTrigger>
@@ -291,8 +300,7 @@ export function Polling({ canWrite = true, onDraftIncrement }: { canWrite?: bool
               <TableHeader>
                 <TableRow>
                   <TableHead>任务名称</TableHead><TableHead>关联 Transport</TableHead><TableHead>点位数</TableHead>
-                  <TableHead>轮询周期</TableHead><TableHead>时间窗口</TableHead><TableHead>状态</TableHead>
-                  <TableHead>上次执行</TableHead><TableHead>下次执行</TableHead><TableHead>最近错误</TableHead>
+                  <TableHead>轮询周期</TableHead><TableHead>寄存器范围</TableHead><TableHead>草稿状态</TableHead>
                   <TableHead className="text-right">操作</TableHead>
                 </TableRow>
               </TableHeader>
@@ -305,13 +313,9 @@ export function Polling({ canWrite = true, onDraftIncrement }: { canWrite?: bool
                     <TableCell className="font-mono text-xs">{r.period}</TableCell>
                     <TableCell className="text-xs">{r.window}</TableCell>
                     <TableCell><Badge variant="outline" className={STATUS_META[r.status].cls}>{STATUS_META[r.status].label}</Badge></TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{r.lastRun}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{r.nextRun}</TableCell>
-                    <TableCell className={r.lastError === "-" ? "text-xs text-muted-foreground" : "text-xs text-red-600"}>{r.lastError}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" className="size-7" title="立即执行" onClick={() => toast.message("后端未提供立即执行接口")}><RotateCw className="size-3.5" /></Button>
-                        <Button variant="ghost" size="icon" className="size-7" title={r.enabled ? "暂停" : "恢复"} disabled={!canWrite} onClick={() => toggleTask(r)}>{r.enabled ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}</Button>
+                        <Button variant="ghost" size="icon" className="size-7" title={r.enabled ? "在草稿中禁用" : "在草稿中启用"} disabled={!canWrite} onClick={() => toggleTask(r)}>{r.enabled ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}</Button>
                         <Button variant="ghost" size="icon" className="size-7" title="编辑" disabled={!canWrite} onClick={() => openEdit(r)}><Pencil className="size-3.5" /></Button>
                         <Button variant="ghost" size="icon" className="size-7 text-red-600" title="删除" disabled={!canWrite} onClick={() => setDel(r)}><Trash2 className="size-3.5" /></Button>
                       </div>
@@ -319,7 +323,7 @@ export function Polling({ canWrite = true, onDraftIncrement }: { canWrite?: bool
                   </TableRow>
                 ))}
                 {filtered.length === 0 && (
-                  <TableRow><TableCell colSpan={10} className="h-24 text-center text-muted-foreground">没有匹配的轮询任务</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={7} className="h-24 text-center text-muted-foreground">没有匹配的轮询任务</TableCell></TableRow>
                 )}
               </TableBody>
             </Table>
@@ -352,10 +356,10 @@ export function Polling({ canWrite = true, onDraftIncrement }: { canWrite?: bool
                 </Select>
               </Field>
               <Field label="起始地址"><Input type="number" value={form.start} onChange={(e) => setForm((f) => ({ ...f, start: +e.target.value }))} /></Field>
-              <Field label="数量"><Input type="number" min={1} value={form.count} onChange={(e) => setForm((f) => ({ ...f, count: +e.target.value }))} /></Field>
+              <Field label="数量"><Input type="number" min={1} max={125} value={form.count} onChange={(e) => setForm((f) => ({ ...f, count: +e.target.value }))} /></Field>
             </Section>
             <Section title="调度配置">
-              <Field label="轮询周期"><Input type="number" min={1} value={form.period_ms} onChange={(e) => setForm((f) => ({ ...f, period_ms: +e.target.value }))} /></Field>
+              <Field label="轮询周期"><Input type="number" min={1} max={86400000} value={form.period_ms} onChange={(e) => setForm((f) => ({ ...f, period_ms: +e.target.value }))} /></Field>
               <Field label="时间窗口"><Input value="后端按轮询范围持续调度" readOnly /></Field>
               <Field label="超时时间"><Input value="由协议连接配置决定" readOnly /></Field>
               <Field label="重试次数"><Input value="由协议连接配置决定" readOnly /></Field>

@@ -7,7 +7,7 @@
 //   - Modbus TCP server  (default :1502, unit 1, HR)
 //   - S7 server          (snap7, :102, DB1)
 //   - OPC UA server      (open62541, opc.tcp://:4840, ns=2;s=Sim_<addr>)
-// See docs/DATA_SERVICE.md for the data dictionary. MQTT face: TODO (needs broker).
+// See docs/DATA_SERVICE.md for the data dictionary.
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -44,6 +44,51 @@ std::uint16_t getU16(std::span<std::uint8_t const> d, std::size_t pos) {
     return std::uint16_t((std::uint16_t(d[pos]) << 8) | d[pos + 1]);
 }
 
+bool wouldBlock(gateway_error_code const& error) {
+    return error == gateway_asio::error::would_block
+        || error == gateway_asio::error::try_again;
+}
+
+bool readExact(gateway_asio::ip::tcp::socket& socket,
+               std::span<std::uint8_t> destination) {
+    std::size_t used = 0;
+    while (used < destination.size() && g_running.load()) {
+        gateway_error_code error;
+        auto const count = socket.read_some(
+            gateway_asio::buffer(
+                destination.data() + used,
+                destination.size() - used),
+            error);
+        if (wouldBlock(error)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+        if (error || count == 0) return false;
+        used += count;
+    }
+    return used == destination.size();
+}
+
+bool writeExact(gateway_asio::ip::tcp::socket& socket,
+                std::span<std::uint8_t const> source) {
+    std::size_t used = 0;
+    while (used < source.size() && g_running.load()) {
+        gateway_error_code error;
+        auto const count = socket.write_some(
+            gateway_asio::buffer(
+                source.data() + used,
+                source.size() - used),
+            error);
+        if (wouldBlock(error)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+        if (error || count == 0) return false;
+        used += count;
+    }
+    return used == source.size();
+}
+
 // ── Modbus face: blocking accept/serve loop on its own thread, holding[] guarded
 //    by a mutex shared with the SimEngine ticker. ──────────────────────────────
 struct ModbusFace {
@@ -71,8 +116,15 @@ std::vector<std::uint8_t> serveModbus(ModbusFace& face, std::span<std::uint8_t c
     if (fn == 0x10) {
         if (pdu.size() < 6) return nmbs::buildExceptionResponse(h.transactionId, h.unitId, fn, 0x03);
         auto const start = getU16(pdu, 1), count = getU16(pdu, 3);
-        if (count == 0 || std::size_t(start) + count > face.holding.size())
+        auto const byteCount = std::size_t(pdu[5]);
+        if (count == 0 || count > 123
+            || std::size_t(start) + count > face.holding.size())
             return nmbs::buildExceptionResponse(h.transactionId, h.unitId, fn, 0x02);
+        if (byteCount != std::size_t(count) * 2
+            || pdu.size() != 6 + byteCount) {
+            return nmbs::buildExceptionResponse(
+                h.transactionId, h.unitId, fn, 0x03);
+        }
         for (std::uint16_t i = 0; i < count; i++) face.holding[start + i] = getU16(pdu, 6 + i * 2);
         return nmbs::buildWriteMultipleRegistersResponse(h.transactionId, h.unitId, start, count);
     }
@@ -93,21 +145,24 @@ void runModbusFace(ModbusFace& face, unsigned short port) {
             continue;
         }
         if (ec) continue;
-        socket.non_blocking(false);
-        for (;;) {
+        socket.non_blocking(true);
+        while (g_running.load()) {
             std::array<std::uint8_t, 7> hdr{};
-            gateway_asio::read(socket, gateway_asio::buffer(hdr), ec);
-            if (ec) break;
+            if (!readExact(socket, hdr)) break;
             auto const len = getU16(hdr, 4);
             if (len < 2 || len > 260) break;
             std::vector<std::uint8_t> adu(hdr.begin(), hdr.end());
             adu.resize(6 + len);
-            gateway_asio::read(socket, gateway_asio::buffer(adu.data() + 7, len - 1), ec);
-            if (ec) break;
+            if (!readExact(
+                    socket,
+                    std::span<std::uint8_t>(
+                        adu.data() + 7,
+                        std::size_t(len - 1)))) {
+                break;
+            }
             auto resp = serveModbus(face, adu);
             if (resp.empty()) break;
-            gateway_asio::write(socket, gateway_asio::buffer(resp), ec);
-            if (ec) break;
+            if (!writeExact(socket, resp)) break;
         }
     }
 }

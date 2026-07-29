@@ -9,6 +9,7 @@
 
 #include "core/core_global.h"
 #include "core/config/ValidationError.h"
+#include "core/transport/TransportTypes.h"
 
 namespace core::bus      { class EventBus; }
 namespace core::dp       { class DatapointRegistry; }
@@ -33,6 +34,8 @@ public:
 
     virtual std::expected<void, config::ValidationErrors>
             loadConfig(std::string const& tomlPath) = 0;
+    virtual std::expected<void, config::ValidationErrors>
+            reloadConfig(std::string const& tomlPath) = 0;
 
     virtual bus::EventBus&            bus()        = 0;
     virtual dp::DatapointRegistry&    datapoints() = 0;
@@ -43,6 +46,12 @@ public:
 
     virtual transport::Transport*     transport(std::string const& id) const = 0;
     virtual std::vector<std::string>  transportIds() const = 0;
+    virtual transport::TransportStatus
+            transportStatus(std::string const& id) const = 0;
+    virtual std::vector<transport::TransportStatus>
+            transportStatuses() const = 0;
+    virtual std::vector<transport::PeerSession>
+            peerSessions(std::string const& id) const = 0;
 
     virtual void start() = 0;
     virtual void stop()  = 0;

@@ -132,7 +132,7 @@ source = { port = "plc", table = "HR", addr = 20 }
 server = "opbox"; plc = "plc"; offset = 0
 write_start = 20; write_count = 2   # 操作箱写 HR20..21 → 转发到 PLC
 mirror_start = 0; mirror_count = 8  # PLC HR0..7 → 周期镜像回操作箱(操作箱能读到实时数据)
-mirror_period_ms = 200
+mirror_policy = "AfterPoll"          # 每次成功轮询后镜像同一轮原始寄存器
 ```
 
 ---

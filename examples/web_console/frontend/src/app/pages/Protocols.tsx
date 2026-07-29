@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { AlertCircle, DownloadCloud, Loader2, Plus, RefreshCw } from "lucide-react";
-import type { KindSchema, Transport } from "../transports";
+import type { KindSchema, Transport, TransportPayload } from "../transports";
 import {
   createTransport,
   deleteTransport,
   fetchKinds,
   fetchTransports,
-  getKindSchema,
   testConnection,
   updateTransport,
 } from "../transports";
@@ -21,7 +20,7 @@ import { TransportDrawer } from "../components/protocols/TransportDrawer";
 import { TransportDetailDrawer } from "../components/protocols/TransportDetailDrawer";
 import { DangerousConfirmModal } from "../components/protocols/DangerousConfirmModal";
 
-const EMPTY_FILTERS: Filters = { keyword: "", kind: "all", status: "all", tag: "all" };
+const EMPTY_FILTERS: Filters = { keyword: "", kind: "all", status: "all" };
 
 interface ConfirmState {
   open: boolean;
@@ -92,15 +91,13 @@ export function Protocols({
     return rows.filter((r) => {
       if (filters.kind !== "all" && r.kind !== filters.kind) return false;
       if (filters.status !== "all" && r.status !== filters.status) return false;
-      if (filters.tag !== "all" && !r.tags.includes(filters.tag)) return false;
-      if (kw && !`${r.name} ${r.endpoint}`.toLowerCase().includes(kw)) return false;
+      if (kw && !`${r.id} ${r.name} ${r.endpoint}`.toLowerCase().includes(kw)) return false;
       return true;
     });
   }, [rows, filters]);
 
   const isFiltering =
-    filters.keyword !== "" || filters.kind !== "all" || filters.status !== "all" || filters.tag !== "all";
-  const tags = useMemo(() => Array.from(new Set(rows.flatMap((r) => r.tags))).sort(), [rows]);
+    filters.keyword !== "" || filters.kind !== "all" || filters.status !== "all";
 
   function openCreate() {
     setDrawer({ open: true, mode: "create", initial: null });
@@ -144,7 +141,7 @@ export function Protocols({
         kind: t.kind,
         enabled,
         params_json: t.config,
-        scheduler_json: {},
+        scheduler_json: t.scheduler,
       });
       onDraftIncrement();
       toast.success(enabled ? `已启用「${t.name}」，存在未生效配置，请到 Config & Apply 发布` : `已停用「${t.name}」，其关联点位将停止采集`);
@@ -167,7 +164,7 @@ export function Protocols({
           kind: t.kind,
           enabled: false,
           params_json: t.config,
-          scheduler_json: {},
+          scheduler_json: t.scheduler,
         });
       }
       onDraftIncrement();
@@ -179,50 +176,15 @@ export function Protocols({
     }
   }
 
-  async function handleSaved(mode: "create" | "edit") {
-    const name = (document.getElementById("t-name") as HTMLInputElement | null)?.value.trim() ?? "";
-    const initial = drawer.initial;
-    const kindLabel = document.getElementById("kind")?.textContent ?? "";
-    const selectedKind =
-      (mode === "edit" ? initial?.kind : undefined) ??
-      kinds.find((k) => kindLabel.includes(k.label))?.kind ??
-      kinds[0]?.kind ??
-      "";
-    const schema = getKindSchema(selectedKind);
-    const params_json: Record<string, string | number | boolean> = {};
-    schema?.fields.forEach((f) => {
-      const el = document.getElementById(`f-${f.name}`);
-      if (!el) return;
-      if (f.type === "boolean") {
-        params_json[f.name] = el.getAttribute("aria-checked") === "true";
-      } else if (f.type === "number") {
-        const value = (el as HTMLInputElement).value;
-        params_json[f.name] = value === "" ? 0 : Number(value);
-      } else {
-        const value = (el as HTMLInputElement | HTMLTextAreaElement).value ?? el.textContent ?? "";
-        params_json[f.name] = value;
-      }
-    });
-    const id = mode === "edit" && initial ? initial.id : `${selectedKind}-${Date.now()}`;
-    try {
-      const body = {
-        id,
-        name,
-        kind: selectedKind,
-        enabled: (document.getElementById("t-enabled")?.getAttribute("aria-checked") ?? "true") === "true",
-        params_json,
-        scheduler_json: {},
-      };
-      if (mode === "create") await createTransport(body);
-      else await updateTransport(id, body);
-      onDraftIncrement();
-      toast.success("已保存为草稿，需要到 Config & Apply 发布后生效", {
-        description: mode === "create" ? "新增的协议连接已进入未生效配置" : "修改已记录为 draft config diff",
-      });
-      load();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "保存失败");
-    }
+  async function handleSave(
+    mode: "create" | "edit",
+    payload: TransportPayload,
+  ) {
+    if (mode === "create") await createTransport(payload);
+    else await updateTransport(payload.id, payload);
+    await load();
+    await onDraftIncrement();
+    toast.success("已保存为草稿，需要到 Config & Apply 发布后生效");
   }
 
   return (
@@ -259,7 +221,6 @@ export function Protocols({
         <ProtocolFilterBar
           filters={filters}
           kinds={kinds}
-          tags={tags}
           onChange={setFilters}
           onReset={() => setFilters(EMPTY_FILTERS)}
         />
@@ -323,7 +284,7 @@ export function Protocols({
         kindsLoading={kindsLoading}
         kindsError={kindsError}
         onRetryKinds={() => loadKinds()}
-        onSaved={handleSaved}
+        onSave={handleSave}
       />
 
       {/* 详情 Drawer */}
@@ -344,7 +305,7 @@ export function Protocols({
           confirm.kind === "delete" ? (
             <>
               将删除「{confirm.target?.name}」及其配置。该操作不可恢复，关联的 {confirm.target?.pointCount}{" "}
-              个采集点将失去数据源。
+              个关联采集点和轮询任务也会一并删除；若仍被转换规则引用，后端会拒绝删除。
             </>
           ) : (
             <>

@@ -8,15 +8,20 @@
 
 #include "core/sched/SerialScheduler.h"
 
+#include "TransportStatusTracker.h"
+
 namespace core::transport {
 
 class S7ClientTransport::Impl {
 public:
     Impl(Config c, bus::EventBus* b)
-        : cfg(std::move(c)), busPtr(b)
+        : cfg(std::move(c))
+        , statusTracker(cfg.id, TransportKind::S7Client, b, {},
+                        EndpointInfo{
+                            cfg.host, static_cast<std::uint16_t>(cfg.port)})
         , scheduler(sched::makeScheduler(cfg.scheduler)) {}
     Config                              cfg;
-    bus::EventBus*                      busPtr;
+    detail::TransportStatusTracker      statusTracker;
     std::unique_ptr<sched::RequestScheduler> scheduler;
     std::atomic<ConnectionState>        state{ConnectionState::Disconnected};
 };
@@ -29,15 +34,25 @@ S7ClientTransport::~S7ClientTransport() = default;
 std::string           S7ClientTransport::id()    const { return m_impl->cfg.id; }
 TransportKind         S7ClientTransport::kind()  const { return TransportKind::S7Client; }
 ConnectionState       S7ClientTransport::state() const { return m_impl->state.load(); }
+TransportStatus       S7ClientTransport::status() const {
+    return m_impl->statusTracker.snapshot();
+}
 
 sched::RequestScheduler& S7ClientTransport::scheduler() { return *m_impl->scheduler; }
 
 // Stub: real implementation requires `snap7` (http://snap7.sourceforge.net/).
 std::expected<void, std::string> S7ClientTransport::connect() {
-    return std::unexpected(std::string(
-        "S7ClientTransport: snap7 library not yet vendored"));
+    auto const message =
+        std::string("S7ClientTransport: snap7 library not yet vendored");
+    m_impl->state.store(ConnectionState::Error, std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Error, message);
+    return std::unexpected(message);
 }
-void S7ClientTransport::disconnect() {}
+void S7ClientTransport::disconnect() {
+    m_impl->state.store(ConnectionState::Disconnected,
+                        std::memory_order_release);
+    m_impl->statusTracker.update(ConnectionState::Disconnected);
+}
 
 ReadResult S7ClientTransport::read(ReadRequest const&) {
     ReadResult r;

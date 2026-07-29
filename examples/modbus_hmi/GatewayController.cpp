@@ -127,7 +127,7 @@ std::string GatewayController::buildToml() const {
     //  forward opbox HR[20,22) -> PLC       (operator commands reach the PLC)
     o << "[[bridge]]\nserver = \"opbox\"\nplc = \"plc\"\noffset = 0\n"
       << "write_start = " << kSetpointAddr << "\nwrite_count = 2\n"
-      << "mirror_start = 0\nmirror_count = 8\nmirror_period_ms = 200\n";
+      << "mirror_start = 0\nmirror_count = 8\nmirror_policy = \"AfterPoll\"\n";
 
     return o.str();
 }

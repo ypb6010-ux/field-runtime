@@ -30,6 +30,10 @@ void CreditScheduler::stopAsync() {
     m_impl->stopAsync();
 }
 
+void CreditScheduler::startAsync() {
+    m_impl->startAsync();
+}
+
 int CreditScheduler::cancelModule(std::string const& moduleId) {
     return m_impl->cancelModule(moduleId);
 }

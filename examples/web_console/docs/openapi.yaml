@@ -1,99 +1,312 @@
 openapi: 3.0.3
 info:
   title: FieldRuntime Console API
-  version: "0.1"
-  description: >
-    Web console for the FieldRuntime runtime. Unified envelope:
-    `{ "code":0, "message":"ok", "data":... }` (code != 0 on error).
-    Auth: `Authorization: Bearer <token>` from POST /auth/login.
+  version: "2.0.0"
+  description: |
+    Current web console API. Except for Swagger assets, every JSON response uses
+    `{ "code": 0, "message": "ok", "data": ... }`; non-zero code indicates failure.
 servers:
   - url: /api/v1
 tags:
-  - name: system
-  - name: auth
-  - name: transports
-  - name: datapoints
-  - name: conversions
-  - name: data
-  - name: config
+  - { name: system }
+  - { name: auth }
+  - { name: transports }
+  - { name: datapoints }
+  - { name: conversions }
+  - { name: data }
+  - { name: config }
+  - { name: administration }
 components:
   securitySchemes:
-    bearer: { type: http, scheme: bearer }
-security: [{ bearer: [] }]
+    bearer:
+      type: http
+      scheme: bearer
+  schemas:
+    Envelope:
+      type: object
+      required: [code, message, data]
+      properties:
+        code: { type: integer }
+        message: { type: string }
+        data: {}
+    Identifier:
+      type: string
+      minLength: 1
+      maxLength: 128
+    Login:
+      type: object
+      required: [username, password]
+      additionalProperties: false
+      properties:
+        username: { type: string, minLength: 1, maxLength: 64 }
+        password: { type: string, minLength: 1, maxLength: 256, format: password }
+    RegisterWrite:
+      type: object
+      required: [transport, addr, values]
+      additionalProperties: false
+      properties:
+        transport: { $ref: "#/components/schemas/Identifier" }
+        addr: { type: integer, minimum: 0, maximum: 65535 }
+        values:
+          type: array
+          minItems: 1
+          maxItems: 123
+          items: { type: integer, minimum: 0, maximum: 65535 }
+    UserCreate:
+      type: object
+      required: [username, role, password]
+      properties:
+        username: { type: string, minLength: 1, maxLength: 64 }
+        role: { type: string, enum: [viewer, operator, admin] }
+        password: { type: string, minLength: 8, maxLength: 256, format: password }
+        enabled: { type: boolean, default: true }
+    UserUpdate:
+      type: object
+      required: [role, enabled]
+      properties:
+        role: { type: string, enum: [viewer, operator, admin] }
+        enabled: { type: boolean }
+    PasswordUpdate:
+      type: object
+      required: [password]
+      properties:
+        password: { type: string, minLength: 8, maxLength: 256, format: password }
+    Settings:
+      type: object
+      additionalProperties: false
+      properties:
+        sample_retention_days: { type: integer, minimum: 1, maximum: 3650 }
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Identifier" }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 0, maximum: 1000000, default: 0 }
+    Size:
+      name: size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+    Since:
+      name: since
+      in: query
+      description: Epoch milliseconds, inclusive.
+      schema: { type: integer, format: int64, minimum: 0 }
+  responses:
+    Ok: { description: Success, content: { application/json: { schema: { $ref: "#/components/schemas/Envelope" } } } }
+    BadRequest: { description: Invalid body, parameter, or configuration }
+    Unauthorized: { description: Missing, invalid, or expired session }
+    Forbidden: { description: Missing permission }
+    NotFound: { description: Resource not found }
+    Conflict: { description: Resource is still referenced }
+    TooManyRequests: { description: Rate or concurrency limit reached }
+    InternalError: { description: Database, runtime, or file error }
+security:
+  - bearer: []
 paths:
   /system/health:
-    get: { tags: [system], summary: Liveness + db/runtime status, security: [], responses: { "200": { description: ok } } }
+    get:
+      tags: [system]
+      summary: Database/runtime health
+      security: []
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "503": { description: Database unavailable or runtime stopped }
   /system/info:
-    get: { tags: [system], summary: Build info + compiled protocols, responses: { "200": { description: ok } } }
+    get:
+      tags: [system]
+      summary: Build and compiled protocol information
+      responses: { "200": { $ref: "#/components/responses/Ok" } }
   /system/events:
-    get: { tags: [system], summary: Event/audit log (paged), parameters: [ { name: level, in: query, schema: { type: string } }, { name: page, in: query, schema: { type: integer } }, { name: size, in: query, schema: { type: integer } } ], responses: { "200": { description: ok } } }
+    get:
+      tags: [system]
+      summary: Paged system events
+      parameters:
+        - { name: level, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Since" }
+        - { $ref: "#/components/parameters/Page" }
+        - { $ref: "#/components/parameters/Size" }
+      responses: { "200": { $ref: "#/components/responses/Ok" } }
+  /system/settings:
+    get:
+      tags: [administration]
+      summary: Read supported settings
+      responses: { "200": { $ref: "#/components/responses/Ok" } }
+    put:
+      tags: [administration]
+      summary: Update supported settings
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/Settings" } } }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /system/maintenance/cleanup-samples:
+    post:
+      tags: [administration]
+      summary: Delete samples older than the saved retention period
+      responses: { "200": { $ref: "#/components/responses/Ok" } }
   /auth/login:
     post:
       tags: [auth]
-      summary: Login -> bearer token + user{role,permissions}
+      summary: Create an in-memory session
       security: []
-      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { username: {type: string}, password: {type: string} } } } } }
-      responses: { "200": { description: ok }, "401": { description: bad credentials } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/Login" } } }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "401": { description: Invalid credentials }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
   /auth/me:
-    get: { tags: [auth], summary: Current user + permissions, responses: { "200": { description: ok } } }
+    get:
+      tags: [auth]
+      summary: Current user, role, and permissions
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /auth/logout:
-    post: { tags: [auth], summary: Invalidate token, responses: { "200": { description: ok } } }
+    post:
+      tags: [auth]
+      summary: Invalidate the current session
+      responses: { "200": { $ref: "#/components/responses/Ok" } }
   /transports/kinds:
-    get: { tags: [transports], summary: Supported protocol kinds + param JSON schema, responses: { "200": { description: ok } } }
+    get:
+      tags: [transports]
+      summary: Supported transport kinds and dynamic form schema
+      responses: { "200": { $ref: "#/components/responses/Ok" } }
   /transports:
-    get: { tags: [transports], summary: List transports, responses: { "200": { description: ok } } }
-    post: { tags: [transports], summary: Create transport (draft), responses: { "200": { description: ok } } }
+    get:
+      tags: [transports]
+      summary: List draft transports
+      responses: { "200": { $ref: "#/components/responses/Ok" } }
+    post:
+      tags: [transports]
+      summary: Create a draft transport
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /transports/{id}:
-    get: { tags: [transports], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
-    put: { tags: [transports], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
-    delete: { tags: [transports], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { tags: [transports], summary: Read a draft transport, responses: { "200": { $ref: "#/components/responses/Ok" }, "404": { $ref: "#/components/responses/NotFound" } } }
+    put: { tags: [transports], summary: Update a draft transport, requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } } }
+    delete: { tags: [transports], summary: Delete an unreferenced transport, responses: { "200": { $ref: "#/components/responses/Ok" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } } }
+  /transports/{id}/test:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post:
+      tags: [transports]
+      summary: Bounded asynchronous TCP connectivity probe
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
   /datapoints:
-    get: { tags: [datapoints], summary: List datapoints, responses: { "200": { description: ok } } }
-    post: { tags: [datapoints], summary: Create datapoint, responses: { "200": { description: ok } } }
+    get: { tags: [datapoints], summary: List draft datapoints, responses: { "200": { $ref: "#/components/responses/Ok" } } }
+    post: { tags: [datapoints], summary: Create a draft datapoint, requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" } } }
   /datapoints/{id}:
-    put: { tags: [datapoints], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
-    delete: { tags: [datapoints], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { tags: [datapoints], summary: Read a draft datapoint, responses: { "200": { $ref: "#/components/responses/Ok" }, "404": { $ref: "#/components/responses/NotFound" } } }
+    put: { tags: [datapoints], summary: Update a draft datapoint, requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } } }
+    delete: { tags: [datapoints], summary: Delete an unreferenced datapoint, responses: { "200": { $ref: "#/components/responses/Ok" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } } }
   /codecs:
-    get: { tags: [datapoints], responses: { "200": { description: ok } } }
-    post: { tags: [datapoints], responses: { "200": { description: ok } } }
+    get: { tags: [datapoints], summary: List draft codecs, responses: { "200": { $ref: "#/components/responses/Ok" } } }
+    post: { tags: [datapoints], summary: Create a draft codec, requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" } } }
+  /codecs/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { tags: [datapoints], summary: Read a draft codec, responses: { "200": { $ref: "#/components/responses/Ok" }, "404": { $ref: "#/components/responses/NotFound" } } }
+    put: { tags: [datapoints], summary: Update a draft codec, requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } } }
+    delete: { tags: [datapoints], summary: Delete an unreferenced codec, responses: { "200": { $ref: "#/components/responses/Ok" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { $ref: "#/components/responses/Conflict" } } }
   /poll_ranges:
-    get: { tags: [datapoints], responses: { "200": { description: ok } } }
-    post: { tags: [datapoints], responses: { "200": { description: ok } } }
+    get: { tags: [datapoints], summary: List draft poll ranges, responses: { "200": { $ref: "#/components/responses/Ok" } } }
+    post: { tags: [datapoints], summary: Create a draft poll range, requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" } } }
+  /poll_ranges/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { tags: [datapoints], summary: Read a draft poll range, responses: { "200": { $ref: "#/components/responses/Ok" }, "404": { $ref: "#/components/responses/NotFound" } } }
+    put: { tags: [datapoints], summary: Update a draft poll range, requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } } }
+    delete: { tags: [datapoints], summary: Delete a draft poll range, responses: { "200": { $ref: "#/components/responses/Ok" }, "404": { $ref: "#/components/responses/NotFound" } } }
   /conversions:
-    get: { tags: [conversions], summary: List conversion rules, responses: { "200": { description: ok } } }
-    post: { tags: [conversions], summary: Create rule {id,source,dest,transform}, responses: { "200": { description: ok } } }
+    get: { tags: [conversions], summary: List conversion rules, responses: { "200": { $ref: "#/components/responses/Ok" } } }
+    post: { tags: [conversions], summary: Create and immediately activate a rule, requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" } } }
+  /conversions/stats:
+    get: { tags: [conversions], summary: Batch execution statistics, responses: { "200": { $ref: "#/components/responses/Ok" } } }
   /conversions/{id}:
-    delete: { tags: [conversions], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    put: { tags: [conversions], summary: Update and immediately reload a rule, requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } } }
+    delete: { tags: [conversions], summary: Delete a rule, responses: { "200": { $ref: "#/components/responses/Ok" }, "404": { $ref: "#/components/responses/NotFound" } } }
   /conversions/{id}/enable:
-    post: { tags: [conversions], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post: { tags: [conversions], summary: Enable a rule, responses: { "200": { $ref: "#/components/responses/Ok" }, "404": { $ref: "#/components/responses/NotFound" } } }
   /conversions/{id}/disable:
-    post: { tags: [conversions], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post: { tags: [conversions], summary: Disable a rule, responses: { "200": { $ref: "#/components/responses/Ok" }, "404": { $ref: "#/components/responses/NotFound" } } }
   /conversions/{id}/stats:
-    get: { tags: [conversions], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { tags: [conversions], summary: Single-rule execution statistics, responses: { "200": { $ref: "#/components/responses/Ok" } } }
+  /data/catalog:
+    get: { tags: [data], summary: Non-sensitive datapoint metadata for monitoring, responses: { "200": { $ref: "#/components/responses/Ok" } } }
   /data/latest:
-    get: { tags: [data], summary: Latest value of all live datapoints, responses: { "200": { description: ok } } }
+    get: { tags: [data], summary: Latest runtime datapoint snapshot, responses: { "200": { $ref: "#/components/responses/Ok" } } }
   /data/points/{id}:
-    get: { tags: [data], parameters: [ { name: id, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { tags: [data], summary: Latest snapshot of one runtime datapoint, responses: { "200": { $ref: "#/components/responses/Ok" }, "404": { $ref: "#/components/responses/NotFound" } } }
   /data/history:
     get:
       tags: [data]
-      summary: Paged history of a datapoint
+      summary: Paged history for one datapoint
       parameters:
-        - { name: id, in: query, required: true, schema: { type: string } }
-        - { name: from, in: query, schema: { type: integer } }
-        - { name: to, in: query, schema: { type: integer } }
-        - { name: page, in: query, schema: { type: integer } }
-        - { name: size, in: query, schema: { type: integer } }
-      responses: { "200": { description: ok } }
+        - { name: id, in: query, required: true, schema: { $ref: "#/components/schemas/Identifier" } }
+        - { name: from, in: query, schema: { type: integer, format: int64, minimum: 0 } }
+        - { name: to, in: query, schema: { type: integer, format: int64, minimum: 0 } }
+        - { $ref: "#/components/parameters/Page" }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 5000, default: 200 } }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /data/write:
-    post: { tags: [data], summary: "Control write { transport, addr, values[] }", responses: { "200": { description: ok } } }
+    post:
+      tags: [data]
+      summary: Write Modbus holding registers through the runtime
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RegisterWrite" } } } }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /runtime/transports:
-    get: { tags: [data], summary: Runtime transport connection states, responses: { "200": { description: ok } } }
+    get: { tags: [data], summary: Runtime transport states, responses: { "200": { $ref: "#/components/responses/Ok" } } }
+  /config/status:
+    get: { tags: [config], summary: Runtime state, active version, counts, and draft dirty flag, responses: { "200": { $ref: "#/components/responses/Ok" } } }
   /config/validate:
-    post: { tags: [config], summary: Validate DB config (dry-run), responses: { "200": { description: ok } } }
+    post: { tags: [config], summary: Render and validate the current draft without swapping runtime, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" } } }
   /config/apply:
-    post: { tags: [config], summary: Apply DB config to the runtime (hot reload), responses: { "200": { description: ok } } }
+    post: { tags: [config], summary: Transactionally reload the current draft and record a version, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" } } }
   /config/versions:
-    get: { tags: [config], summary: Config version history, responses: { "200": { description: ok } } }
+    get: { tags: [config], summary: Latest 50 configuration versions, responses: { "200": { $ref: "#/components/responses/Ok" } } }
   /config/versions/{v}/rollback:
-    post: { tags: [config], parameters: [ { name: v, in: path, required: true, schema: { type: string } } ], responses: { "200": { description: ok } } }
+    parameters:
+      - { name: v, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    post: { tags: [config], summary: Reload a saved snapshot and record a new active version, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } } }
+  /audit:
+    get:
+      tags: [administration]
+      summary: Paged write audit
+      parameters:
+        - { $ref: "#/components/parameters/Since" }
+        - { $ref: "#/components/parameters/Page" }
+        - { $ref: "#/components/parameters/Size" }
+      responses: { "200": { $ref: "#/components/responses/Ok" } }
+  /users:
+    get: { tags: [administration], summary: List users, responses: { "200": { $ref: "#/components/responses/Ok" } } }
+    post: { tags: [administration], summary: Create a user, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UserCreate" } } } }, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" } } }
+  /users/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    put: { tags: [administration], summary: Change role or enabled state, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UserUpdate" } } } }, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } } }
+    delete: { tags: [administration], summary: Delete a user except the last enabled admin, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } } }
+  /users/{id}/password:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    put: { tags: [administration], summary: Reset password and invalidate the user's sessions, requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PasswordUpdate" } } } }, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } } }
+  /roles:
+    get: { tags: [administration], summary: Fixed roles, permissions, and user counts, responses: { "200": { $ref: "#/components/responses/Ok" } } }
