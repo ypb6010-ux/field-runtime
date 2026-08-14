@@ -20,7 +20,9 @@
 #include <vector>
 
 #include <QHash>
+#ifdef CORE_HAS_QML
 #include <QQmlContext>
+#endif
 #include <QThread>
 #include <QTimer>
 
@@ -40,8 +42,10 @@
 #include "core/dp/ValueQt.h"
 #include "core/log/Logger.h"
 #include "core/log/Sinks.h"
+#ifdef CORE_HAS_QML
 #include "core/qml/CoreQml.h"
 #include "core/qml/LogBridge.h"
+#endif
 #include "core/module/AckWatch.h"
 #include "core/module/Command.h"
 #include "core/module/Heartbeat.h"
@@ -153,13 +157,14 @@ public:
         // QML `log` bridge is opt-in via wireQml() (Qt layer); not wired here.
     }
 
-    // Qt-only: expose the `log` bridge (owned by Core) on a QML context.
-    // Called by core::qml::createWithQml; not part of the Qt-free ICore API.
+#ifdef CORE_HAS_QML
+    // Expose the `log` bridge (owned by Core) on a QML context.
     void wireQml(QQmlContext* qml) {
         if (!qml) return;
         m_logBridge = std::make_unique<qml::LogBridge>(*m_logger);
         qml->setContextProperty(QStringLiteral("log"), m_logBridge.get());
     }
+#endif
 
     ~CoreImpl() override {
         // Async-safe teardown order:
@@ -197,7 +202,9 @@ public:
         m_codecs.reset();
         m_bus.reset();
         // Logger last — subsystems above may log during teardown.
+#ifdef CORE_HAS_QML
         m_logBridge.reset();
+#endif
         if (m_logger) m_logger->stop();
         m_logger.reset();
     }
@@ -1415,7 +1422,9 @@ private:
     QObject                                                     m_pump;
     QString                                                     m_configDir;
     std::unique_ptr<log::Logger>                                m_logger;
+#ifdef CORE_HAS_QML
     std::unique_ptr<qml::LogBridge>                             m_logBridge;
+#endif
     std::unique_ptr<bus::EventBus>                              m_bus;
     std::unique_ptr<codec::CodecRegistry>                       m_codecs;
     std::unique_ptr<dp::DatapointRegistry>                      m_dps;
@@ -1458,6 +1467,7 @@ std::unique_ptr<ICore> ICore::create(bool installDefaultConsole) {
     return std::make_unique<CoreImpl>(installDefaultConsole);
 }
 
+#ifdef CORE_HAS_QML
 namespace qml {
 std::unique_ptr<ICore> createWithQml(QQmlContext* ctx, bool installDefaultConsole) {
     auto impl = std::make_unique<CoreImpl>(installDefaultConsole);
@@ -1465,6 +1475,7 @@ std::unique_ptr<ICore> createWithQml(QQmlContext* ctx, bool installDefaultConsol
     return impl;
 }
 } // namespace qml
+#endif
 
 namespace internal {
 void pollAllOnce(ICore& core) {

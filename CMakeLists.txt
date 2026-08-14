@@ -180,6 +180,7 @@ target_link_libraries(Core
 
 if(CORE_BUILD_QML)
     target_link_libraries(Core PUBLIC Qt6::Qml)
+    target_compile_definitions(Core PRIVATE CORE_HAS_QML=1)
 endif()
 if(CORE_BUILD_OPCUA)
     target_link_libraries(Core PUBLIC Qt6::OpcUa)

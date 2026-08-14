@@ -25,10 +25,9 @@ namespace {
 // CodecRegistry                         lives in CodecRegistry.cpp
 // SerialScheduler / makeScheduler       live in SerialScheduler.cpp
 
-// ---------------------------------------------------------------------------
-// DatapointQmlBridge — thin pass-through; could be promoted to its own file
-// once it grows beyond a single lookup.
-// ---------------------------------------------------------------------------
+#ifdef CORE_HAS_QML
+#include <QQmlEngine>
+
 #include "core/qml/DatapointQmlBridge.h"
 #include "core/qml/QtDatapoint.h"
 #include "core/dp/DatapointRegistry.h"
@@ -48,11 +47,13 @@ QtDatapoint* DatapointQmlBridge::dp(QString const& id) {
     auto model = m_registry.find(key);
     if (!model) return nullptr;
     auto* wrapper = new QtDatapoint(std::move(model), m_bus, this);
+    QQmlEngine::setObjectOwnership(wrapper, QQmlEngine::CppOwnership);
     m_cache.emplace(key, wrapper);
     return wrapper;
 }
 
 } // namespace core::qml
+#endif
 
 // ModuleRegistry lives in ModuleRegistry.cpp.
 

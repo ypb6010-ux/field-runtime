@@ -14,7 +14,6 @@ target_sources(Core PRIVATE
     Datapoint.cpp
     DatapointRegistry.cpp
     DpTypeHelpers.cpp
-    QtDatapoint.cpp
     PollRange.cpp
     SinkWindow.cpp
     Heartbeat.cpp
@@ -35,10 +34,16 @@ target_sources(Core PRIVATE
     LogFilter.cpp
     DedupFilter.cpp
     Sinks.cpp
-    LogBridge.cpp
-    # Headers carrying Q_OBJECT must be listed for AUTOMOC to pick them up
-    # when they live outside the .cpp's directory.
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include/core/qml/DatapointQmlBridge.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include/core/qml/QtDatapoint.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include/core/qml/LogBridge.h
 )
+
+if(CORE_BUILD_QML)
+    target_sources(Core PRIVATE
+        QtDatapoint.cpp
+        LogBridge.cpp
+        # Headers carrying Q_OBJECT must be listed for AUTOMOC to pick them up
+        # when they live outside the .cpp's directory.
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include/core/qml/DatapointQmlBridge.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include/core/qml/QtDatapoint.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include/core/qml/LogBridge.h
+    )
+endif()

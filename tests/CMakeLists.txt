@@ -41,6 +41,10 @@ add_executable(CoreTests
     unit/PluginSystemTests.cpp
 )
 
+if(CORE_BUILD_QML)
+    target_sources(CoreTests PRIVATE unit/QmlBridgeTests.cpp)
+endif()
+
 # Point the Lua codec test at the real shipped script.
 target_compile_definitions(CoreTests PRIVATE
     CORE_LUA_BCD_SCRIPT="${CMAKE_CURRENT_SOURCE_DIR}/../data/codec/bcd_datetime.lua")

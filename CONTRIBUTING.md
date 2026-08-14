@@ -53,6 +53,14 @@ to [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) in the same PR.
 
 ## Workflow
 
+### Long-lived branches
+
+- `main` is the Qt Core runtime and QML integration mainline.
+- `core-base-split` owns the Qt-free `FieldRuntimeBase`, gateway, and Web Console.
+- Keep the two branches functionally independent. Port shared runtime fixes as
+  focused commits with branch-specific tests; do not merge one long-lived branch
+  wholesale into the other.
+
 1. Open an issue describing the change for anything non-trivial.
 2. Fork and create a topic branch.
 3. Keep the build green: `CORE_BUILD_TESTS=ON` and run the test suite.
