@@ -26,6 +26,7 @@ HTTP 状态码和 envelope code 同时有意义：401/403 表示会话或权限�
 | datapoints | `/datapoints` `/codecs` `/poll_ranges` | 草稿点位、编解码、轮询范围 |
 | conversions | `/conversions` `/conversions/stats` | 立即生效的转换规则及统计 |
 | data | `/data/catalog` `/data/latest` `/data/points/{id}` `/data/history` `/data/write` | 监控、历史和控制写 |
+| control | `/control/config` `/control/runtime` `/control/write` `/control/routes/activate` | 设备控制草稿、运行态、目标字节写和活动路由 |
 | runtime | `/runtime/transports` | 当前运行时连接状态 |
 | config | `/config/status` `/config/validate` `/config/apply` `/config/versions` | 草稿状态、发布和回滚 |
 | administration | `/users` `/roles` `/audit` `/system/settings` `/system/maintenance/*` | 用户、权限、审计、保留策略 |
@@ -35,8 +36,8 @@ HTTP 状态码和 envelope code 同时有意义：401/403 表示会话或权限�
 | 权限 | 典型接口 |
 |---|---|
 | `data:read` | latest、history、runtime state、system info |
-| `data:write` | `/data/write` |
-| `config:read` | transport/datapoint/codec/poll/config 查询 |
+| `data:write` | `/data/write` `/control/write` `/control/routes/activate` |
+| `config:read` | transport/datapoint/codec/poll/config/control 查询 |
 | `config:write` | 草稿 CRUD 和 transport test |
 | `config:apply` | apply、rollback |
 | `conversion:manage` | conversion CRUD、启停、统计 |

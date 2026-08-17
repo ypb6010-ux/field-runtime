@@ -23,6 +23,7 @@ struct MqttNorthboundConfig {
     std::string topicPrefix = "field";
     int qos = 0;
     int publishIntervalMs = 0;
+    std::string commandTopicPrefix;
 };
 
 class AsioMqttClient {
@@ -38,6 +39,8 @@ public:
                         int qos,
                         std::function<void(bool)> done);
     void setConnectedCallback(std::function<void()> callback);
+    void setMessageCallback(
+        std::function<void(std::string, std::vector<std::uint8_t>)> callback);
 
     bool connected() const;
     MqttNorthboundConfig const& config() const;
@@ -54,6 +57,8 @@ private:
     std::uint16_t nextPacketId();
     void failInflight();
     void handlePuback(std::vector<std::uint8_t> const& body);
+    void handlePublish(std::uint8_t packetType,
+                       std::vector<std::uint8_t> const& body);
     void readPacketType();
     void readRemainingLength(std::uint8_t packetType,
                              std::uint32_t value = 0,
@@ -88,6 +93,7 @@ private:
     std::deque<PacketWrite> m_writeQueue;
     std::map<std::uint16_t, std::function<void(bool)>> m_inflight;
     std::function<void()> m_connectedCallback;
+    std::function<void(std::string, std::vector<std::uint8_t>)> m_messageCallback;
     bool m_started = false;
     bool m_connected = false;
     bool m_writing = false;

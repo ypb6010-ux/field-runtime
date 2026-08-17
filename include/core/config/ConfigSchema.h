@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "core/core_global.h"
+#include "core/control/ControlTypes.h"
 #include "core/sched/SchedulerTypes.h"
 #include "core/dp/ScalarType.h"
 #include "core/dp/WordOrder.h"
@@ -198,6 +199,57 @@ struct PluginConfig {
     std::string config;
 };
 
+// A driver is a preinstalled in-process adapter. `library` points to the
+// adapter module selected from the deployment whitelist; `config` is opaque to
+// FieldRuntime and is handed to that adapter at creation time.
+struct DriverConfig {
+    std::string id;
+    std::string library;
+    std::string config;
+    bool enabled = true;
+};
+
+struct ActorConfig {
+    std::string id;
+    std::string channel;
+    std::string clientId;
+    std::string sourceAddress;
+    std::string role;
+    int priority = 0;
+    bool enabled = true;
+};
+
+struct DeviceConfig {
+    std::string id;
+    std::string name;
+    std::string driverId;
+};
+
+struct DeviceRouteConfig {
+    std::string id;
+    std::string deviceId;
+    std::string protocol;
+    std::string transportId;
+    std::string driverId;
+    bool writable = true;
+    bool active = false;
+};
+
+struct ControlTargetConfig {
+    std::string id;
+    std::string deviceId;
+    std::string routeId;
+    control::ControlAddress address;
+};
+
+struct ControlPolicyConfig {
+    std::string id;
+    std::string targetId;
+    control::PolicyMode mode = control::PolicyMode::Open;
+    int leaseMs = 0;
+    int minPriority = 0;
+};
+
 enum class BridgeMirrorPolicy {
     AfterPoll,
     Periodic,
@@ -232,6 +284,12 @@ struct ConfigSchema {
     std::vector<RouteConfig>       routes;
     std::vector<BridgeConfig>      bridges;
     std::vector<PluginConfig>      plugins;
+    std::vector<DriverConfig>      drivers;
+    std::vector<ActorConfig>       actors;
+    std::vector<DeviceConfig>      devices;
+    std::vector<DeviceRouteConfig> deviceRoutes;
+    std::vector<ControlTargetConfig> controlTargets;
+    std::vector<ControlPolicyConfig> controlPolicies;
 };
 
 } // namespace core::config

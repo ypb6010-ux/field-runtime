@@ -237,6 +237,10 @@ std::string requiredWritePermission(std::string const& path) {
     if (path.rfind("/api/v1/data", 0) == 0) {
         return "data:write";
     }
+    if (path == "/api/v1/control/write"
+        || path == "/api/v1/control/routes/activate") {
+        return "data:write";
+    }
     return "config:write";
 }
 
@@ -263,6 +267,8 @@ std::string requiredReadPermission(std::string const& path) {
         || path.rfind("/api/v1/config", 0) == 0) {
         return "config:read";
     }
+    if (path == "/api/v1/control/config") return "config:read";
+    if (path == "/api/v1/control/runtime") return "data:read";
     if (path.rfind("/api/v1/conversions", 0) == 0) {
         return "conversion:manage";
     }

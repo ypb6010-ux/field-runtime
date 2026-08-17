@@ -29,6 +29,8 @@ target_sources(Core PRIVATE
     MqttPahoTransport.cpp
     S7ClientTransport.cpp
     ConfigLoader.cpp
+    ControlArbiter.cpp
+    DeviceRouteManager.cpp
     Core.cpp
     Logger.cpp
     LogFilter.cpp

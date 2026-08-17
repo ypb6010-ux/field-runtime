@@ -11,6 +11,7 @@ import {
   BookText,
   ScrollText,
   Users,
+  SlidersHorizontal,
 } from "lucide-react";
 import type { NavGroup, Role, NavItem, PageKey } from "./types";
 
@@ -71,6 +72,14 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "轮询任务",
         en: "Polling",
         icon: Timer,
+        roles: ["operator", "admin"],
+        configScoped: true,
+      },
+      {
+        key: "control",
+        label: "设备与控制",
+        en: "Devices & Control",
+        icon: SlidersHorizontal,
         roles: ["operator", "admin"],
         configScoped: true,
       },

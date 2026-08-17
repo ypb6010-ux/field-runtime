@@ -28,7 +28,7 @@
 ```
 ┌──────────────┐  REST + WebSocket   ┌─────────────────────────────┐
 │  React SPA   │ ◀──────────────────▶│  Drogon 后端                │
-│ (12 个页面)  │   /api  /ws/stream   │  HttpControllers + WsHub    │   线程安全
+│ (13 个页面)  │   /api  /ws/stream   │  HttpControllers + WsHub    │   线程安全
 └──────────────┘   (vite dev 代理)    │  + 内置 ORM(SQLite)        │   SnapshotStore
                                        │  + RuntimeHost(asio 线程)  │ ◀──────┐
                                        └──────────────┬──────────────┘        │
@@ -66,7 +66,8 @@ examples/web_console/
 │   │   ├── AuthControllers   ← 登录 / RBAC 鉴权门 / CORS
 │   │   ├── ConfigControllers ← transports/datapoints/codecs/polls CRUD + kinds
 │   │   ├── ConfigApply       ← 配置热生效(validate/apply/versions/rollback)
-│   │   ├── DataControllers   ← 历史采样 + /data/history + /data/write
+    │   │   ├── DataControllers   ← 历史采样 + /data/history + 目标化写入
+    │   │   ├── ControlControllers← 驱动/设备/路由/Actor/策略配置与运行态
 │   │   ├── ConversionEngine  ← 协议转换 CRUD + 引擎
 │   │   ├── AdminControllers  ← events/audit/settings/users/roles
 │   │   ├── WsControllers     ← /ws/stream 推送
@@ -79,7 +80,7 @@ examples/web_console/
     │   ├── api.ts            ← API 客户端(envelope + token + openStream WS)
     │   ├── auth.ts nav.ts types.ts
     │   ├── components/       ← AppShell/Header/Sidebar/PageHeader/ui(shadcn)
-    │   └── pages/            ← 12 个页面
+    │   └── pages/            ← 13 个页面
     └── vite.config.ts        ← dev 代理 /api、/ws → 后端
 ```
 
@@ -166,6 +167,7 @@ cd frontend && npm run dev
 | 采集点 | `/datapoints` `/codecs` `/poll_ranges` | 点位 / 编解码 / 轮询 CRUD |
 | 转换 | `/conversions` `/conversions/stats` `/conversions/{id}/stats` | 转换规则 CRUD + 批量/单规则统计 |
 | 数据 | `/data/catalog` `/data/latest` `/data/history` `/data/write` `/runtime/transports` | 元数据 / 最新值 / 历史 / 控制写 / 连接状态 |
+| 控制 | `/control/config` `/control/runtime` `/control/write` `/control/routes/activate` | 驱动与设备草稿 / 路由和租约 / 目标写入 / 活动路由切换 |
 | 配置 | `/config/status` `/config/validate` `/config/apply` `/config/versions` `/config/versions/{v}/rollback` | 草稿状态 / 校验 / 发布 / 版本 / 回滚 |
 | 管理 | `/users` `/roles` `/audit` `/system/settings` `/system/maintenance/*` | 用户 / 角色 / 审计 / 设置 / 维护 |
 
@@ -174,7 +176,7 @@ cd frontend && npm run dev
 
 ---
 
-## 8. 前端页面（12 个，均接真后端）
+## 8. 前端页面（13 个，均接真后端）
 
 | 页面 | 说明 | 数据源 |
 |---|---|---|
@@ -185,6 +187,7 @@ cd frontend && npm run dev
 | Datapoints 采集点 | 点位 CRUD（类型/地址/编解码） | `/datapoints` |
 | Polling 轮询任务 | 轮询窗口 CRUD | `/poll_ranges` |
 | Conversion 协议转换 | 规则 CRUD + 启停 + 命中统计 | `/conversions` |
+| Devices & Control 设备与控制 | 驱动、设备、路由、Actor、目标、策略、MQTT 和运行态 | `/control/*` |
 | Config & Apply 配置发布 | 校验 / Apply 热重载 / 版本 / 回滚 | `/config/*` |
 | Logs 事件日志 | 系统事件 + 审计日志（Tabs） | `/system/events` `/audit` |
 | Settings 系统设置 | 日志/保留/WS/维护 | `/system/settings` |
@@ -223,9 +226,10 @@ cd frontend && npm run dev
 ## 11. 当前实现边界
 
 - 控制台可配置的南向 transport 为 Modbus TCP、OPC UA、S7；FieldRuntime 网关本身还包含
-  Modbus RTU、MQTT 等 transport，但本控制台尚未暴露这些表单。
-- 协议转换目标当前是 Modbus holding register 写入；规则采用 `on_change` 或
-  `periodic` 触发，支持线性变换、限幅、统计和失败重试。
+  Modbus RTU 等 transport，但本控制台尚未暴露对应南向表单。MQTT 上送和控制命令入口在
+  “设备与控制”页配置。
+- 协议转换目标当前是 Modbus holding register 写入；实际写入必须由活动设备路由反查到唯一
+  控制目标，否则规则记录失败，不会绕过仲裁。
 - 历史采样周期固定为 2 秒，按点位时间戳去重并批量写入；保留天数和立即清理由
   Settings 实际控制。
 - session token 保存在服务端内存中，服务重启后失效；多实例部署需将会话和登录限流状态

@@ -39,6 +39,7 @@ add_executable(CoreTests
     unit/LoggerTests.cpp
     unit/LuaCodecTests.cpp
     unit/PluginSystemTests.cpp
+    unit/ControlTests.cpp
 )
 
 if(CORE_BUILD_QML)

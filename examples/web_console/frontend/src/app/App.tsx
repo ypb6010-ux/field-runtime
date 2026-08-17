@@ -19,9 +19,10 @@ import { Polling } from "./pages/Polling";
 import { Conversion } from "./pages/Conversion";
 import { Logs } from "./pages/Logs";
 import { Settings } from "./pages/Settings";
+import { ControlCenter } from "./pages/ControlCenter";
 
 /** 受 config 权限影响、且当前存在未生效草稿的页面（侧栏小红点） */
-const DRAFT_SCOPED: PageKey[] = ["protocols", "datapoints", "polling", "config"];
+const DRAFT_SCOPED: PageKey[] = ["protocols", "datapoints", "polling", "control", "config"];
 
 function renderPage(
   page: PageKey,
@@ -54,6 +55,8 @@ function renderPage(
       return <Polling canWrite={ctx.canWriteProtocol} onDraftIncrement={ctx.onDraftIncrement} />;
     case "conversion":
       return <Conversion canWrite={ctx.role !== "viewer"} />;
+    case "control":
+      return <ControlCenter canWrite={ctx.role !== "viewer"} onChanged={ctx.onDraftIncrement} />;
     case "logs":
       return <Logs />;
     case "settings":

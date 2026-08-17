@@ -287,9 +287,17 @@ void RuntimeHost::schedulePump() {
         if (ec || !m_running.load(std::memory_order_acquire) || !m_assembly) return;
         std::vector<core::gateway::GatewayDatapointSnapshot> dps;
         std::vector<core::gateway::GatewayTransportSnapshot> tps;
+        std::vector<core::gateway::DriverSnapshot> drivers;
+        std::vector<core::control::DeviceRoute> routes;
+        std::vector<core::control::LeaseSnapshot> leases;
+        std::vector<core::gateway::GatewayDriverDataSnapshot> driverData;
         try {
             dps = m_assembly->datapointSnapshots();
             tps = m_assembly->transportSnapshots();
+            drivers = m_assembly->driverSnapshots();
+            routes = m_assembly->deviceRoutes();
+            leases = m_assembly->controlLeases();
+            driverData = m_assembly->driverDataSnapshots();
         } catch (std::exception const& exception) {
             std::cerr << "RuntimeHost snapshot failed: "
                       << exception.what() << "\n";
@@ -309,10 +317,34 @@ void RuntimeHost::schedulePump() {
         std::vector<TpSnap> ts;
         ts.reserve(tps.size());
         for (auto const& t : tps) ts.push_back({t.id, kindStr(t.kind), connStr(t.state)});
+        std::vector<DriverSnap> driverSnaps;
+        for (auto const& d : drivers) {
+            driverSnaps.push_back({d.id, d.library, d.state, d.error});
+        }
+        std::vector<RouteSnap> routeSnaps;
+        for (auto const& r : routes) {
+            routeSnaps.push_back({r.id, r.deviceId, r.driverId, r.transportId,
+                                  r.protocol, r.writable, r.active});
+        }
+        std::vector<LeaseSnap> leaseSnaps;
+        for (auto const& l : leases) {
+            leaseSnaps.push_back(
+                {l.targetId, l.actorId, l.priority, l.expiresAtMs});
+        }
+        std::vector<DriverDataSnap> dataSnaps;
+        for (auto& d : driverData) {
+            dataSnaps.push_back({std::move(d.driverId), std::move(d.deviceId),
+                                 std::move(d.targetId), std::move(d.payload),
+                                 d.timestampMs});
+        }
         {
             std::lock_guard lk(m_mtx);
             m_dps = std::move(ds);
             m_tps = std::move(ts);
+            m_drivers = std::move(driverSnaps);
+            m_routes = std::move(routeSnaps);
+            m_leases = std::move(leaseSnaps);
+            m_driverData = std::move(dataSnaps);
         }
         schedulePump();
     });
@@ -326,6 +358,26 @@ std::vector<DpSnap> RuntimeHost::datapoints() const {
 std::vector<TpSnap> RuntimeHost::transports() const {
     std::lock_guard lk(m_mtx);
     return m_tps;
+}
+
+std::vector<DriverSnap> RuntimeHost::drivers() const {
+    std::lock_guard lk(m_mtx);
+    return m_drivers;
+}
+
+std::vector<RouteSnap> RuntimeHost::routes() const {
+    std::lock_guard lk(m_mtx);
+    return m_routes;
+}
+
+std::vector<LeaseSnap> RuntimeHost::leases() const {
+    std::lock_guard lk(m_mtx);
+    return m_leases;
+}
+
+std::vector<DriverDataSnap> RuntimeHost::driverData() const {
+    std::lock_guard lk(m_mtx);
+    return m_driverData;
 }
 
 bool RuntimeHost::write(std::string const& transportId, int startAddress,
@@ -352,21 +404,20 @@ bool RuntimeHost::write(std::string const& transportId, int startAddress,
                     return;
                 }
                 try {
-                    core::transport::WriteBatch b;
-                    b.table = core::RegisterTable::HoldingRegister;
-                    b.startAddress = startAddress;
-                    b.values =
-                        core::RegisterWords(values.begin(), values.end());
-                    bool known = m_assembly->writeTransportAsync(
+                    core::control::ActorContext actor;
+                    actor.id = "conversion-engine";
+                    actor.clientId = "conversion-engine";
+                    actor.channel = "internal";
+                    bool known = m_assembly->writeRegisterControlAsync(
+                        std::move(actor),
                         transportId,
-                        std::move(b),
-                        [completion](core::transport::WriteResult result) {
-                            (*completion)(
-                                result.ok,
-                                std::move(result.errorMessage));
+                        startAddress,
+                        core::RegisterWords(values.begin(), values.end()),
+                        [completion](bool ok, std::string error) {
+                            (*completion)(ok, std::move(error));
                         });
                     if (!known) {
-                        (*completion)(false, "unknown transport");
+                        (*completion)(false, "unknown control target");
                     }
                 } catch (std::exception const& exception) {
                     (*completion)(false, exception.what());
@@ -383,6 +434,63 @@ bool RuntimeHost::write(std::string const& transportId, int startAddress,
         (*completion)(false, "failed to schedule runtime write");
         return false;
     }
+    return true;
+}
+
+bool RuntimeHost::writeControl(
+    std::string actorId, std::string targetId,
+    std::vector<std::uint8_t> payload,
+    std::function<void(bool, std::string)> done) {
+    if (!done || actorId.empty() || targetId.empty() || payload.empty()) {
+        if (done) done(false, "actor, target and payload are required");
+        return false;
+    }
+    if (!m_running.load()) {
+        done(false, "runtime not running");
+        return false;
+    }
+    auto completion = std::make_shared<
+        std::function<void(bool, std::string)>>(std::move(done));
+    gateway_asio::post(m_io,
+        [this, actorId = std::move(actorId), targetId = std::move(targetId),
+         payload = std::move(payload), completion]() mutable {
+            if (!m_assembly) {
+                (*completion)(false, "runtime stopped");
+                return;
+            }
+            core::control::ActorContext actor;
+            actor.id = actorId;
+            actor.clientId = actorId;
+            actor.channel = "web";
+            if (!m_assembly->writeControlAsync(
+                    std::move(actor), targetId, std::move(payload),
+                    [completion](bool ok, std::string error) {
+                        (*completion)(ok, std::move(error));
+                    })) {
+                (*completion)(false, "unknown control target");
+            }
+        });
+    return true;
+}
+
+bool RuntimeHost::activateRoute(
+    std::string deviceId, std::string routeId,
+    std::function<void(bool, std::string)> done) {
+    if (!done || deviceId.empty() || routeId.empty()) return false;
+    if (!m_running.load()) {
+        done(false, "runtime not running");
+        return false;
+    }
+    auto completion = std::make_shared<
+        std::function<void(bool, std::string)>>(std::move(done));
+    gateway_asio::post(m_io,
+        [this, deviceId = std::move(deviceId), routeId = std::move(routeId),
+         completion]() {
+            std::string error;
+            auto const ok = m_assembly
+                && m_assembly->setActiveDeviceRoute(deviceId, routeId, error);
+            (*completion)(ok, std::move(error));
+        });
     return true;
 }
 

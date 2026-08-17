@@ -1,7 +1,7 @@
 # FieldRuntime 产品技术文档
 
 > 工业现场设备运行时(Industrial Field-Device Runtime)
-> 适用版本:`core-base-split`(2.0.x)· 文档最近更新:2026-06-24
+> 适用版本:`core-base-split`(2.0.x)· 文档最近更新:2026-08-17
 
 ---
 
@@ -16,7 +16,8 @@
 7. [扩展图:时序 / 线程 / 状态机 / 部署](#7-扩展图)
 8. [配置参考(TOML)](#8-配置参考toml)
 9. [控制协议参考](#9-控制协议参考)
-10. [术语表](#10-术语表)
+10. [设备控制与厂商驱动更新](#10-设备控制与厂商驱动更新)
+11. [术语表](#11-术语表)
 
 ---
 
@@ -444,6 +445,7 @@ port         = 1883
 client_id    = "field_gateway"
 keepalive_s  = 30
 topic_prefix = "field"           # 上送主题前缀 field/<dp>
+command_topic_prefix = "field/control" # 订阅 <prefix>/<actor>/<target>
 qos          = 1                 # 0 或 1(QoS1 带 PUBACK 确认)
 
 [persistence]
@@ -480,9 +482,57 @@ port  = "mock_plc"
 
 [[bridge]]                       # 操作箱 ↔ PLC 镜像/转发
 # server = "opbox"; target = "mock_plc"; ...
+
+[[driver]]                       # 预安装的厂商 SDK 适配器
+id      = "vendor-sdk"
+library = "libvendor_adapter.so" # 仅文件名;目录由 FIELDRUNTIME_DRIVER_DIR 指定
+config  = '{"device":"eth0"}'
+
+[[device]]
+id     = "vendor-device"
+driver = "vendor-sdk"
+
+[[device_route]]                 # 同一设备最多一个 active 可写路由
+id       = "vendor-main"
+device   = "vendor-device"
+protocol = "vendor"
+driver   = "vendor-sdk"
+writable = true
+active   = true
+
+[[actor]]
+id             = "operation-box"
+channel        = "modbus"
+source_address = "10.0.0.10"
+priority       = 20
+
+[[control_target]]
+id       = "motor.speed"
+device   = "vendor-device"
+route    = "vendor-main"
+protocol = "vendor"
+endpoint = "vendor-device"
+resource = "motor"
+selector = "/speed"
+
+[[control_policy]]
+id           = "motor-speed-owner"
+target       = "motor.speed"
+mode         = "priority_lease" # open/exclusive_lease/priority_lease/last_writer_wins/device_decides/read_only
+lease_ms     = 2000
+min_priority = 1
 ```
 
-> RTU 专用字段:`[[transport]]` 下 `port_name`(串口)、`baud_rate`、`slave_id`。
+> RTU 专用字段:`[[transport]]` 下 `port_name`(串口)、`baud_rate`、`slave_id`。驱动库必须预部署到
+> `FIELDRUNTIME_DRIVER_DIR`（默认 `<配置目录>/drivers`）；Web 只选择库文件名，不上传或执行任意路径。
+
+### 8.1 控制与驱动执行模型
+
+- 所有外部写入先归一化为 `ActorContext + ControlTarget`，再经过策略、设备活动路由和实际 transport/driver。
+- Modbus 冲突按端点、寄存器表、地址区间和位掩码判断；MQTT 按 broker、topic 和 JSON Pointer 判断。
+- `exclusive_lease` 与 `priority_lease` 的租约按实际地址冲突，不只按目标 ID；路由切换会释放该设备租约。
+- 厂商适配器实现 `include/core/driver/DriverApi.h` 的 C ABI。每个驱动在独立串行工作线程调用厂商 SDK，避免阻塞 Asio 线程；SDK 进程崩溃仍会影响整个服务，部署端应由 systemd/服务管理器拉起。
+- MQTT 命令主题为 `<command_topic_prefix>/<actor>/<target>`，payload 为原始字节；broker ACL 必须限制 actor 只能发布自己的主题。MQTT 订阅端无法可靠获得发布者 client ID，不能仅靠 payload 自报身份。
 
 ---
 
@@ -497,7 +547,7 @@ port  = "mock_plc"
 | `help` | 否 | 命令清单 |
 | `auth <token>` | — | 开启本连接写面权限 |
 | `forward <server> on\|off` | 是 | 切换某 server 的转发闸门 |
-| `write <transport> <area> <addr> <value>` | 是 | 写寄存器/数据点 |
+| `write <target> <value> [value...]` | 是 | 按逻辑控制目标写入，值编码为大端 U16 |
 
 **示例**
 
@@ -505,16 +555,86 @@ port  = "mock_plc"
 > live
 {"datapoints":[{"id":"rtu.temperature","value":23,"quality":"Ok","ts":...}, ...]}
 
-> write mock_plc HR 11 1234        # 未鉴权 → unauthorized
+> write motor.speed 1234           # 未鉴权 → unauthorized
 > auth s3cr3t
 ok
-> write mock_plc HR 11 1234         # 鉴权后 → 写入 + 上送
+> write motor.speed 1234            # 鉴权后 → 仲裁 + 活动路由 + 写入
 ok
 ```
 
 ---
 
-## 10. 术语表
+## 10. 设备控制与厂商驱动更新
+
+本节记录 `core-base-split` 分支在 2026-08-17 完成的设备接入与多端控制扩展。目标是在不为
+每个厂家修改 FieldRuntime 内核的前提下，由同一 `field_gateway` 进程加载厂商预安装的
+`.so` / `.dll` 适配器，同时接入操作箱、上位机、MU 和 MQTT 客户端。
+
+### 10.1 已实现能力
+
+| 能力 | 实现状态 | 说明 |
+|------|:--------:|------|
+| 厂商动态库扩展 | 已实现框架 | `DriverApi.h` 定义稳定 C ABI；`DriverRegistry` 负责受限目录加载、ABI/驱动 ID 校验和生命周期管理 |
+| SDK 调用隔离 | 已实现 | 每个驱动使用独立串行 worker，厂商阻塞调用不占用 asio 事件线程 |
+| 控制端身份 | 已实现 | 操作箱、Web 用户、控制口、MQTT 客户端和内部转换引擎统一映射为 `ActorContext` |
+| 控制目标 | 已实现 | 写入统一映射为 `ControlTarget`，业务入口不再直接按 transport 地址绕过仲裁 |
+| 冲突判定 | 已实现 | Modbus 按协议、端点、寄存器表、地址区间和位掩码；MQTT 按 broker、topic 和 JSON Pointer 判定 |
+| 控制策略 | 已实现 | 支持 `open`、`exclusive_lease`、`priority_lease`、`last_writer_wins`、`device_decides`、`read_only` |
+| 设备路由 | 已实现 | 同一设备最多一条 active 可写路由，可在寄存器、MQTT 和厂商驱动路由间切换 |
+| 数据反馈与推送 | 已实现 | 驱动数据进入运行态快照，并可发布到 MQTT，供操作箱、上位机、MU 或其他订阅端读取 |
+| Web 配置与运行态 | 已实现 | 可配置驱动、操作箱服务、桥接、设备、路由、目标、用户、策略和 MQTT，并查看租约、反馈与驱动状态 |
+
+实际厂商适配器仍需根据厂商 SDK 的头文件、库文件和函数约定实现。若厂家只提供 Java API，
+需要另行提供 JNI 适配器或独立 Java sidecar；当前 C ABI 驱动框架面向 C/C++ 动态库。
+
+### 10.2 写入链路与仲裁边界
+
+所有已接入的实际写入口均经过 `ControlArbiter` 和 `DeviceRouteManager`：
+
+1. 操作箱 Modbus 写入由连接会话和来源 IP 识别 actor，授权成功后才更新寄存器并转发。
+2. Web `/api/v1/control/write`、控制 TCP `write` 和内部转换引擎按逻辑 target 写入。
+3. MQTT 订阅 `<command_topic_prefix>/<actor>/<target>`，按 actor、target 和策略执行写入，并发布控制结果。
+4. 路由切换会释放该设备的现有租约，防止旧协议控制权残留到新路由。
+5. 同一设备开放多个协议时，FieldRuntime 只启用一条可写路由；若最终控制权由设备自身处理，可使用 `device_decides`。
+
+MQTT 协议本身不能让订阅端可靠获得发布者 client ID。因此生产部署必须在 broker ACL 中限制
+actor 只能发布自己的命令主题，不能仅信任主题或 payload 中自报的身份。
+
+### 10.3 Web 配置范围
+
+Web Console 的“设备与控制”页面及 `/api/v1/control/*` API 覆盖：
+
+- 厂商驱动目录内的库文件名、驱动配置和运行状态。
+- 操作箱 Modbus TCP Server、寄存器范围及到 PLC 的桥接规则。
+- 设备、候选协议路由、当前 active 路由和在线切换。
+- 控制目标地址、actor 来源匹配、优先级和租约策略。
+- MQTT 发布前缀、控制命令前缀、QoS 和发布周期。
+- 当前租约、设备反馈数据、驱动状态和按字节写入测试。
+
+Web 只保存驱动库文件名，不接受任意路径或上传并执行动态库。驱动必须由部署流程预先放入
+`FIELDRUNTIME_DRIVER_DIR` 或默认的 `<配置目录>/drivers`。
+
+### 10.4 验证状态
+
+| 检查项 | 结果 | 说明 |
+|--------|:----:|------|
+| 控制仲裁与路由 smoke test | 通过 | 独立编译、链接并运行，覆盖冲突别名租约拒绝和单 active 路由切换 |
+| MSVC 语法编译 | 通过 | 覆盖 Core 控制/config、Gateway、驱动注册和 Web 后端新增代码 |
+| Web 前端生产构建 | 通过 | `npm run build` 完成，仅保留既有 bundle 体积提示 |
+| SQLite schema | 通过 | 在内存数据库执行完整 schema，外键与约束创建成功 |
+| OpenAPI YAML | 通过 | 使用 YAML 解析器加载成功 |
+| Git 差异检查 | 通过 | `git diff --check` 无空白错误，仅有 Windows CRLF 转换提示 |
+| 完整 CMake 构建 | 未完成 | 当前机器停在 `Detecting CXX compiler ABI info`，直接 MSVC 编译可用 |
+| 正式 CTest | 未执行 | 因 CMake 配置未完成，新增 `ControlTests.cpp` 和 `ConfigLoaderTests.cpp` 尚未进入正式 CTest 流程 |
+| 厂商真机联调 | 未执行 | 需要厂商 SDK、实际 `.so` / `.dll`、目标设备及协议调用约定 |
+
+因此当前状态是“核心控制链路和新增代码已完成针对性验证”，不能表述为“全量构建、正式测试和
+厂商真机验收全部通过”。Ubuntu arm64 部署前还需使用目标工具链完成交叉编译，并在真实 SDK 和
+设备环境验证驱动启动、写入、断线恢复及长时间稳定性。
+
+---
+
+## 11. 术语表
 
 | 术语 | 含义 |
 |------|------|

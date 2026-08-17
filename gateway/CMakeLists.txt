@@ -86,6 +86,7 @@ set(_gw_core_sources
     AsioModbusTcpServer.cpp
     AsioMqttClient.cpp
     ControlSocket.cpp
+    DriverRegistry.cpp
     GatewayAssembly.cpp
     GatewayJson.cpp
     Persistence.cpp
@@ -106,6 +107,7 @@ target_link_libraries(field_gateway_core PUBLIC
     gateway_nanomodbus
     asio
     SQLite::SQLite3
+    ${CMAKE_DL_LIBS}
 )
 if(GATEWAY_ENABLE_OPCUA)
     target_link_libraries(field_gateway_core PUBLIC open62541::open62541)

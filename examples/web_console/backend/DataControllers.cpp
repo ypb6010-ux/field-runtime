@@ -248,31 +248,29 @@ void registerDataControllers(RuntimeHost& rt) {
             }
         }, {Get});
 
-    // POST /api/v1/data/write  { transport, addr, values:[..] }
+    // POST /api/v1/data/write  { target_id, values:[u16,..] }
+    // All writes use a logical control target so no Web endpoint can bypass
+    // actor resolution, arbitration, or the device's active write route.
     app().registerHandler("/api/v1/data/write",
         [&rt](HttpRequestPtr const& req, std::function<void(HttpResponsePtr const&)>&& cb) {
             auto j = req->getJsonObject();
             if (!j) { cb(fail(1001, "invalid JSON body")); return; }
-            if (!(*j)["transport"].isString()
-                || !(*j)["addr"].isIntegral()
-                || !(*j)["values"].isArray()) {
-                cb(fail(1001, "transport, integer addr and values[] are required"));
+            if (!(*j)["target_id"].isString() || !(*j)["values"].isArray()) {
+                cb(fail(1001, "target_id and values[] are required"));
                 return;
             }
-            std::string const transport = (*j)["transport"].asString();
-            auto const address64 = (*j)["addr"].asInt64();
-            if (transport.empty() || address64 < 0 || address64 > 65535) {
-                cb(fail(1001, "transport is required and addr must be in 0..65535"));
+            std::string const targetId = (*j)["target_id"].asString();
+            if (targetId.empty()) {
+                cb(fail(1001, "target_id is required"));
                 return;
             }
-            std::vector<std::uint16_t> values;
+            std::vector<std::uint8_t> payload;
             auto const& input = (*j)["values"];
-            if (input.empty() || input.size() > 123
-                || address64 + input.size() > 65536) {
-                cb(fail(1001, "values must contain 1..123 registers within address space"));
+            if (input.empty() || input.size() > 123) {
+                cb(fail(1001, "values must contain 1..123 registers"));
                 return;
             }
-            values.reserve(input.size());
+            payload.reserve(input.size() * 2);
             for (auto const& value : input) {
                 if (!value.isIntegral()) {
                     cb(fail(1001, "register values must be integers"));
@@ -283,13 +281,14 @@ void registerDataControllers(RuntimeHost& rt) {
                     cb(fail(1001, "register values must be in 0..65535"));
                     return;
                 }
-                values.push_back(static_cast<std::uint16_t>(parsed));
+                payload.push_back(static_cast<std::uint8_t>(parsed >> 8));
+                payload.push_back(static_cast<std::uint8_t>(parsed & 0xFF));
             }
             auto cbp = std::make_shared<std::function<void(HttpResponsePtr const&)>>(std::move(cb));
-            rt.write(
-                transport,
-                static_cast<int>(address64),
-                std::move(values),
+            rt.writeControl(
+                req->attributes()->get<std::string>("auth_username"),
+                targetId,
+                std::move(payload),
                 [cbp](bool okay, std::string err) {
                 (*cbp)(okay ? ok() : fail(4001, err.empty() ? "write failed" : err));
             });

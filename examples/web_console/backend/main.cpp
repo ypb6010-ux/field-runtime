@@ -9,6 +9,7 @@
 #include "AuthControllers.h"
 #include "ConfigApply.h"
 #include "ConfigControllers.h"
+#include "ControlControllers.h"
 #include "ConversionEngine.h"
 #include "DataControllers.h"
 #include "DocsControllers.h"
@@ -208,6 +209,7 @@ int main(int argc, char** argv) {
     wc::registerDocs(openapi);
     wc::registerAdminControllers();
     wc::registerConfigControllers();
+    wc::registerControlControllers(g_runtime);
 
     // ── E 数据: live values from the embedded RuntimeHost ──
     app().registerHandler("/api/v1/data/latest",

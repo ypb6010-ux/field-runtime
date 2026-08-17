@@ -14,6 +14,7 @@ tags:
   - { name: datapoints }
   - { name: conversions }
   - { name: data }
+  - { name: control }
   - { name: config }
   - { name: administration }
 components:
@@ -42,16 +43,32 @@ components:
         password: { type: string, minLength: 1, maxLength: 256, format: password }
     RegisterWrite:
       type: object
-      required: [transport, addr, values]
+      required: [target_id, values]
       additionalProperties: false
       properties:
-        transport: { $ref: "#/components/schemas/Identifier" }
-        addr: { type: integer, minimum: 0, maximum: 65535 }
+        target_id: { $ref: "#/components/schemas/Identifier" }
         values:
           type: array
           minItems: 1
           maxItems: 123
           items: { type: integer, minimum: 0, maximum: 65535 }
+    ByteWrite:
+      type: object
+      required: [target_id, payload]
+      additionalProperties: false
+      properties:
+        target_id: { $ref: "#/components/schemas/Identifier" }
+        payload:
+          type: array
+          minItems: 1
+          items: { type: integer, minimum: 0, maximum: 255 }
+    RouteActivate:
+      type: object
+      required: [device_id, route_id]
+      additionalProperties: false
+      properties:
+        device_id: { $ref: "#/components/schemas/Identifier" }
+        route_id: { $ref: "#/components/schemas/Identifier" }
     UserCreate:
       type: object
       required: [username, role, password]
@@ -270,11 +287,28 @@ paths:
   /data/write:
     post:
       tags: [data]
-      summary: Write Modbus holding registers through the runtime
+      summary: Write U16 values through a logical control target
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RegisterWrite" } } } }
       responses:
         "200": { $ref: "#/components/responses/Ok" }
         "400": { $ref: "#/components/responses/BadRequest" }
+  /control/config:
+    get: { tags: [control], summary: Read drivers devices routes actors targets policies and MQTT draft, responses: { "200": { $ref: "#/components/responses/Ok" } } }
+    put: { tags: [control], summary: Replace the complete control draft transactionally, responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" } } }
+  /control/runtime:
+    get: { tags: [control], summary: Driver route lease and device feedback snapshots, responses: { "200": { $ref: "#/components/responses/Ok" } } }
+  /control/write:
+    post:
+      tags: [control]
+      summary: Submit an opaque byte payload to a logical control target
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ByteWrite" } } } }
+      responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" } }
+  /control/routes/activate:
+    post:
+      tags: [control]
+      summary: Persist and activate one writable device route
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RouteActivate" } } } }
+      responses: { "200": { $ref: "#/components/responses/Ok" }, "400": { $ref: "#/components/responses/BadRequest" } }
   /runtime/transports:
     get: { tags: [data], summary: Runtime transport states, responses: { "200": { $ref: "#/components/responses/Ok" } } }
   /config/status:

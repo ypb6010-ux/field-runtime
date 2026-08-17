@@ -215,6 +215,17 @@ std::optional<sched::SchedulerKind> parseSchedulerKind(std::string const& s) {
     return std::nullopt;
 }
 
+std::optional<control::PolicyMode> parsePolicyMode(std::string const& s) {
+    using control::PolicyMode;
+    if (s == "open") return PolicyMode::Open;
+    if (s == "exclusive_lease") return PolicyMode::ExclusiveLease;
+    if (s == "priority_lease") return PolicyMode::PriorityLease;
+    if (s == "last_writer_wins") return PolicyMode::LastWriterWins;
+    if (s == "device_decides") return PolicyMode::DeviceDecides;
+    if (s == "read_only") return PolicyMode::ReadOnly;
+    return std::nullopt;
+}
+
 transport::TransportKind parseTransportKind(std::string const& s, bool& ok) {
     ok = true;
     if (s == "modbus_tcp_client") return transport::TransportKind::ModbusTcpClient;
@@ -845,6 +856,146 @@ PluginConfig parsePlugin(toml::table const& t,
     return c;
 }
 
+DriverConfig parseDriver(toml::table const& t, int index,
+                         ValidationErrors& errs) {
+    auto const section = idx("driver", index);
+    rejectUnknownKeys(t, section, {"id", "library", "config", "enabled"}, errs);
+    rejectWrongTypes(t, section,
+                     {{"id", TomlFieldType::String},
+                      {"library", TomlFieldType::String},
+                      {"config", TomlFieldType::String},
+                      {"enabled", TomlFieldType::Boolean}}, errs);
+    DriverConfig c;
+    requireStr(t, "id", section, c.id, errs);
+    requireStr(t, "library", section, c.library, errs);
+    c.config = getStr(t, "config", {});
+    c.enabled = getBool(t, "enabled").value_or(true);
+    return c;
+}
+
+ActorConfig parseActor(toml::table const& t, int index,
+                       ValidationErrors& errs) {
+    auto const section = idx("actor", index);
+    rejectUnknownKeys(t, section,
+                      {"id", "channel", "client_id", "source_address",
+                       "role", "priority", "enabled"}, errs);
+    rejectWrongTypes(t, section,
+                     {{"id", TomlFieldType::String},
+                      {"channel", TomlFieldType::String},
+                      {"client_id", TomlFieldType::String},
+                      {"source_address", TomlFieldType::String},
+                      {"role", TomlFieldType::String},
+                      {"priority", TomlFieldType::Integer},
+                      {"enabled", TomlFieldType::Boolean}}, errs);
+    ActorConfig c;
+    requireStr(t, "id", section, c.id, errs);
+    requireStr(t, "channel", section, c.channel, errs);
+    c.clientId = getStr(t, "client_id", {});
+    c.sourceAddress = getStr(t, "source_address", {});
+    c.role = getStr(t, "role", {});
+    c.priority = getInt(t, "priority", 0);
+    c.enabled = getBool(t, "enabled").value_or(true);
+    return c;
+}
+
+DeviceConfig parseDevice(toml::table const& t, int index,
+                         ValidationErrors& errs) {
+    auto const section = idx("device", index);
+    rejectUnknownKeys(t, section, {"id", "name", "driver"}, errs);
+    rejectWrongTypes(t, section,
+                     {{"id", TomlFieldType::String},
+                      {"name", TomlFieldType::String},
+                      {"driver", TomlFieldType::String}}, errs);
+    DeviceConfig c;
+    requireStr(t, "id", section, c.id, errs);
+    c.name = getStr(t, "name", {});
+    c.driverId = getStr(t, "driver", {});
+    return c;
+}
+
+DeviceRouteConfig parseDeviceRoute(toml::table const& t, int index,
+                                   ValidationErrors& errs) {
+    auto const section = idx("device_route", index);
+    rejectUnknownKeys(t, section,
+                      {"id", "device", "protocol", "transport", "driver",
+                       "writable", "active"}, errs);
+    rejectWrongTypes(t, section,
+                     {{"id", TomlFieldType::String},
+                      {"device", TomlFieldType::String},
+                      {"protocol", TomlFieldType::String},
+                      {"transport", TomlFieldType::String},
+                      {"driver", TomlFieldType::String},
+                      {"writable", TomlFieldType::Boolean},
+                      {"active", TomlFieldType::Boolean}}, errs);
+    DeviceRouteConfig c;
+    requireStr(t, "id", section, c.id, errs);
+    requireStr(t, "device", section, c.deviceId, errs);
+    requireStr(t, "protocol", section, c.protocol, errs);
+    c.transportId = getStr(t, "transport", {});
+    c.driverId = getStr(t, "driver", {});
+    c.writable = getBool(t, "writable").value_or(true);
+    c.active = getBool(t, "active").value_or(false);
+    return c;
+}
+
+ControlTargetConfig parseControlTarget(toml::table const& t, int index,
+                                       ValidationErrors& errs) {
+    auto const section = idx("control_target", index);
+    rejectUnknownKeys(t, section,
+                      {"id", "device", "route", "protocol", "endpoint",
+                       "resource", "selector", "offset", "width", "mask"}, errs);
+    rejectWrongTypes(t, section,
+                     {{"id", TomlFieldType::String},
+                      {"device", TomlFieldType::String},
+                      {"route", TomlFieldType::String},
+                      {"protocol", TomlFieldType::String},
+                      {"endpoint", TomlFieldType::String},
+                      {"resource", TomlFieldType::String},
+                      {"selector", TomlFieldType::String},
+                      {"offset", TomlFieldType::Integer},
+                      {"width", TomlFieldType::Integer},
+                      {"mask", TomlFieldType::Integer}}, errs);
+    ControlTargetConfig c;
+    requireStr(t, "id", section, c.id, errs);
+    requireStr(t, "device", section, c.deviceId, errs);
+    c.routeId = getStr(t, "route", {});
+    requireStr(t, "protocol", section, c.address.protocol, errs);
+    requireStr(t, "endpoint", section, c.address.endpoint, errs);
+    requireStr(t, "resource", section, c.address.resource, errs);
+    c.address.selector = getStr(t, "selector", {});
+    c.address.offset = getInt(t, "offset", 0);
+    c.address.width = getInt(t, "width", 1);
+    if (auto mask = getInt(t, "mask")) c.address.mask = std::uint64_t(*mask);
+    return c;
+}
+
+ControlPolicyConfig parseControlPolicy(toml::table const& t, int index,
+                                       ValidationErrors& errs) {
+    auto const section = idx("control_policy", index);
+    rejectUnknownKeys(t, section,
+                      {"id", "target", "mode", "lease_ms", "min_priority"}, errs);
+    rejectWrongTypes(t, section,
+                     {{"id", TomlFieldType::String},
+                      {"target", TomlFieldType::String},
+                      {"mode", TomlFieldType::String},
+                      {"lease_ms", TomlFieldType::Integer},
+                      {"min_priority", TomlFieldType::Integer}}, errs);
+    ControlPolicyConfig c;
+    requireStr(t, "id", section, c.id, errs);
+    requireStr(t, "target", section, c.targetId, errs);
+    auto const modeName = getStr(t, "mode", "open");
+    auto const mode = parsePolicyMode(modeName);
+    if (!mode) {
+        errs.push_back({section, "mode", "unknown control policy mode '"
+                         + modeName + "'", -1});
+    } else {
+        c.mode = *mode;
+    }
+    c.leaseMs = getInt(t, "lease_ms", 0);
+    c.minPriority = getInt(t, "min_priority", 0);
+    return c;
+}
+
 PortRefConfig parsePortRef(toml::table const& t,
                              std::string const& section,
                              ValidationErrors&   errs) {
@@ -1414,6 +1565,68 @@ void validateValues(ConfigSchema const& schema, ValidationErrors& errs) {
             requireNonEmpty(codec.script, section, "script");
         }
     }
+
+    for (size_t i = 0; i < schema.drivers.size(); ++i) {
+        requireNonEmpty(schema.drivers[i].id, idx("driver", int(i)), "id");
+        requireNonEmpty(schema.drivers[i].library, idx("driver", int(i)), "library");
+        if (schema.drivers[i].library.find_first_of("/\\:")
+            != std::string::npos) {
+            errs.push_back({idx("driver", int(i)), "library",
+                            "must be a preinstalled library filename, not a path", -1});
+        }
+    }
+    for (size_t i = 0; i < schema.actors.size(); ++i) {
+        auto const& actor = schema.actors[i];
+        auto const section = idx("actor", int(i));
+        requireNonEmpty(actor.id, section, "id");
+        requireNonEmpty(actor.channel, section, "channel");
+        if (actor.priority < 0) errs.push_back({section, "priority", "must be >= 0", -1});
+    }
+    for (size_t i = 0; i < schema.devices.size(); ++i) {
+        requireNonEmpty(schema.devices[i].id, idx("device", int(i)), "id");
+    }
+    for (size_t i = 0; i < schema.deviceRoutes.size(); ++i) {
+        auto const& route = schema.deviceRoutes[i];
+        auto const section = idx("device_route", int(i));
+        requireNonEmpty(route.id, section, "id");
+        requireNonEmpty(route.deviceId, section, "device");
+        requireNonEmpty(route.protocol, section, "protocol");
+        if (route.transportId.empty() == route.driverId.empty()) {
+            errs.push_back({section, "endpoint",
+                            "exactly one of transport or driver is required", -1});
+        }
+        if (route.active && !route.writable) {
+            errs.push_back({section, "active", "active route must be writable", -1});
+        }
+    }
+    for (size_t i = 0; i < schema.controlTargets.size(); ++i) {
+        auto const& target = schema.controlTargets[i];
+        auto const section = idx("control_target", int(i));
+        requireNonEmpty(target.id, section, "id");
+        requireNonEmpty(target.deviceId, section, "device");
+        requireNonEmpty(target.address.protocol, section, "protocol");
+        requireNonEmpty(target.address.endpoint, section, "endpoint");
+        requireNonEmpty(target.address.resource, section, "resource");
+        if (target.address.offset < 0) errs.push_back({section, "offset", "must be >= 0", -1});
+        if (target.address.width <= 0) errs.push_back({section, "width", "must be > 0", -1});
+    }
+    for (size_t i = 0; i < schema.controlPolicies.size(); ++i) {
+        auto const& policy = schema.controlPolicies[i];
+        auto const section = idx("control_policy", int(i));
+        requireNonEmpty(policy.id, section, "id");
+        requireNonEmpty(policy.targetId, section, "target");
+        auto const leased = policy.mode == control::PolicyMode::ExclusiveLease
+                         || policy.mode == control::PolicyMode::PriorityLease;
+        if (leased && policy.leaseMs <= 0) {
+            errs.push_back({section, "lease_ms", "must be > 0 for a lease policy", -1});
+        }
+        if (!leased && policy.leaseMs != 0) {
+            errs.push_back({section, "lease_ms", "is only valid for a lease policy", -1});
+        }
+        if (policy.minPriority < 0) {
+            errs.push_back({section, "min_priority", "must be >= 0", -1});
+        }
+    }
 }
 
 void validateRefs(ConfigSchema const& s, ValidationErrors& errs) {
@@ -1791,6 +2004,74 @@ void validateRefs(ConfigSchema const& s, ValidationErrors& errs) {
         }
     }
 
+    std::set<std::string> driverIds;
+    for (auto const& driver : s.drivers) driverIds.insert(driver.id);
+    std::set<std::string> deviceIds;
+    for (auto const& device : s.devices) {
+        deviceIds.insert(device.id);
+        if (!device.driverId.empty() && !driverIds.count(device.driverId)) {
+            errs.push_back({"device", "driver",
+                            "references unknown driver '" + device.driverId + "'", -1});
+        }
+    }
+    std::set<std::string> routeIds;
+    std::map<std::string, DeviceRouteConfig const*> routeById;
+    std::map<std::string, int> activeRouteCount;
+    for (size_t i = 0; i < s.deviceRoutes.size(); ++i) {
+        auto const& route = s.deviceRoutes[i];
+        auto const section = idx("device_route", int(i));
+        routeIds.insert(route.id);
+        routeById.emplace(route.id, &route);
+        if (!deviceIds.count(route.deviceId)) {
+            errs.push_back({section, "device", "references unknown device '"
+                            + route.deviceId + "'", -1});
+        }
+        if (!route.transportId.empty() && !transports.count(route.transportId)) {
+            errs.push_back({section, "transport", "references unknown transport '"
+                            + route.transportId + "'", -1});
+        }
+        if (!route.driverId.empty() && !driverIds.count(route.driverId)) {
+            errs.push_back({section, "driver", "references unknown driver '"
+                            + route.driverId + "'", -1});
+        }
+        if (route.active && ++activeRouteCount[route.deviceId] > 1) {
+            errs.push_back({section, "active",
+                            "device has more than one active write route", -1});
+        }
+    }
+    std::set<std::string> targetIds;
+    for (size_t i = 0; i < s.controlTargets.size(); ++i) {
+        auto const& target = s.controlTargets[i];
+        auto const section = idx("control_target", int(i));
+        targetIds.insert(target.id);
+        if (!deviceIds.count(target.deviceId)) {
+            errs.push_back({section, "device", "references unknown device '"
+                            + target.deviceId + "'", -1});
+        }
+        if (!target.routeId.empty() && !routeIds.count(target.routeId)) {
+            errs.push_back({section, "route", "references unknown device route '"
+                            + target.routeId + "'", -1});
+        } else if (!target.routeId.empty()) {
+            auto const* route = routeById.at(target.routeId);
+            if (route->deviceId != target.deviceId) {
+                errs.push_back({section, "route",
+                                "route belongs to a different device", -1});
+            }
+            if (route->protocol != target.address.protocol) {
+                errs.push_back({section, "protocol",
+                                "must match the referenced route protocol", -1});
+            }
+        }
+    }
+    for (size_t i = 0; i < s.controlPolicies.size(); ++i) {
+        auto const& policy = s.controlPolicies[i];
+        if (!targetIds.count(policy.targetId)) {
+            errs.push_back({idx("control_policy", int(i)), "target",
+                            "references unknown control target '"
+                            + policy.targetId + "'", -1});
+        }
+    }
+
     for (size_t i = 0; i < s.sinkWindows.size(); ++i) {
         auto const& lhs = s.sinkWindows[i];
         for (size_t j = i + 1; j < s.sinkWindows.size(); ++j) {
@@ -1872,7 +2153,8 @@ ConfigLoader::loadFromToml(
     std::set<std::string_view> knownRootKeys{
         "meta", "transport", "codec", "poll_range", "sink_window",
         "heartbeat", "ack_watch", "command", "datapoint", "route",
-        "bridge", "plugin"};
+        "bridge", "plugin", "driver", "actor", "device", "device_route",
+        "control_target", "control_policy"};
     knownRootKeys.insert(
         allowedRootExtensions.begin(), allowedRootExtensions.end());
     for (auto const& [key, node] : root) {
@@ -1894,7 +2176,13 @@ ConfigLoader::loadFromToml(
          {"datapoint", TomlFieldType::Array},
          {"route", TomlFieldType::Array},
          {"bridge", TomlFieldType::Array},
-         {"plugin", TomlFieldType::Array}},
+         {"plugin", TomlFieldType::Array},
+         {"driver", TomlFieldType::Array},
+         {"actor", TomlFieldType::Array},
+         {"device", TomlFieldType::Array},
+         {"device_route", TomlFieldType::Array},
+         {"control_target", TomlFieldType::Array},
+         {"control_policy", TomlFieldType::Array}},
         errs);
     for (auto const extension : allowedRootExtensions) {
         auto const node = root[extension];
@@ -1918,6 +2206,12 @@ ConfigLoader::loadFromToml(
     parseArray(root, "route",       schema.routes,      parseRoute,      errs);
     parseArray(root, "bridge",      schema.bridges,     parseBridge,     errs);
     parseArray(root, "plugin",      schema.plugins,     parsePlugin,     errs);
+    parseArray(root, "driver", schema.drivers, parseDriver, errs);
+    parseArray(root, "actor", schema.actors, parseActor, errs);
+    parseArray(root, "device", schema.devices, parseDevice, errs);
+    parseArray(root, "device_route", schema.deviceRoutes, parseDeviceRoute, errs);
+    parseArray(root, "control_target", schema.controlTargets, parseControlTarget, errs);
+    parseArray(root, "control_policy", schema.controlPolicies, parseControlPolicy, errs);
 
     auto vErrs = validate(schema);
     if (!vErrs.has_value()) {
@@ -1952,6 +2246,28 @@ ConfigLoader::validate(ConfigSchema const& schema) {
     std::vector<std::string> cIds;
     for (auto const& c : schema.codecs) cIds.push_back(c.id);
     checkUnique(cIds, "codec", "id", errs);
+
+    std::vector<std::string> ids;
+    for (auto const& value : schema.drivers) ids.push_back(value.id);
+    checkUnique(ids, "driver", "id", errs);
+    ids.clear();
+    for (auto const& value : schema.actors) ids.push_back(value.id);
+    checkUnique(ids, "actor", "id", errs);
+    ids.clear();
+    for (auto const& value : schema.devices) ids.push_back(value.id);
+    checkUnique(ids, "device", "id", errs);
+    ids.clear();
+    for (auto const& value : schema.deviceRoutes) ids.push_back(value.id);
+    checkUnique(ids, "device_route", "id", errs);
+    ids.clear();
+    for (auto const& value : schema.controlTargets) ids.push_back(value.id);
+    checkUnique(ids, "control_target", "id", errs);
+    ids.clear();
+    for (auto const& value : schema.controlPolicies) ids.push_back(value.id);
+    checkUnique(ids, "control_policy", "id", errs);
+    ids.clear();
+    for (auto const& value : schema.controlPolicies) ids.push_back(value.targetId);
+    checkUnique(ids, "control_policy", "target", errs);
 
     validateValues(schema, errs);
     validateRefs(schema, errs);

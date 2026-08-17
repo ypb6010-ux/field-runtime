@@ -109,6 +109,9 @@ struct ServerWriteEvent {
     core::RegisterTable                table = core::RegisterTable::HoldingRegister;
     int                                startAddress;
     core::RegisterWords                     values;
+    std::string                        sessionId;
+    std::string                        sourceAddress;
+    int                                unitId = 0;
 };
 
 // Periodic snapshot of a Transport's scheduler — published by Core's stats

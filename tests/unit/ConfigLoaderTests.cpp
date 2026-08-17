@@ -182,6 +182,70 @@ port  = 502
     REQUIRE(found);
 }
 
+TEST_CASE("ConfigLoader parses control routes actors and policies",
+          "[config][control]") {
+    QTemporaryFile temp;
+    auto path = writeTomlFile(R"toml(
+[[transport]]
+id = "plc"
+kind = "modbus_tcp_client"
+host = "10.0.0.2"
+
+[[driver]]
+id = "vendor-sdk"
+library = "libvendor_adapter.so"
+
+[[device]]
+id = "vendor-device"
+driver = "vendor-sdk"
+
+[[device_route]]
+id = "sdk-main"
+device = "vendor-device"
+protocol = "vendor"
+driver = "vendor-sdk"
+active = true
+
+[[device_route]]
+id = "modbus-backup"
+device = "vendor-device"
+protocol = "modbus"
+transport = "plc"
+active = false
+
+[[actor]]
+id = "operation-box"
+channel = "modbus"
+source_address = "10.0.0.10"
+priority = 20
+
+[[control_target]]
+id = "motor.speed"
+device = "vendor-device"
+route = "sdk-main"
+protocol = "vendor"
+endpoint = "vendor-device"
+resource = "motor"
+selector = "/speed"
+
+[[control_policy]]
+id = "motor-speed-lease"
+target = "motor.speed"
+mode = "priority_lease"
+lease_ms = 2000
+min_priority = 1
+)toml", temp);
+
+    ConfigLoader loader;
+    auto result = loader.loadFromToml(path);
+    REQUIRE(result.has_value());
+    REQUIRE(result->drivers.size() == 1);
+    REQUIRE(result->deviceRoutes.size() == 2);
+    REQUIRE(result->actors.front().priority == 20);
+    REQUIRE(result->controlPolicies.front().mode
+            == core::control::PolicyMode::PriorityLease);
+}
+
 TEST_CASE("ConfigLoader rejects datapoint referencing unknown transport",
           "[config][validate]") {
     QTemporaryFile temp;

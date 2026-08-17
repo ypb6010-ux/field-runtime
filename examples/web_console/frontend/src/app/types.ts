@@ -16,6 +16,7 @@ export type PageKey =
   | "datapoints"
   | "polling"
   | "conversion"
+  | "control"
   | "live"
   | "history"
   | "config"

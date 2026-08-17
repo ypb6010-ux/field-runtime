@@ -71,6 +71,19 @@ std::vector<std::uint8_t> buildPublish(std::string const& topic,
     return packet;
 }
 
+std::vector<std::uint8_t> buildSubscribe(std::uint16_t packetId,
+                                         std::string const& topic) {
+    if (topic.empty() || topic.size() > 65535) return {};
+    std::vector<std::uint8_t> body;
+    appendU16(body, packetId);
+    appendUtf8(body, topic);
+    body.push_back(1);
+    std::vector<std::uint8_t> packet{0x82};
+    appendRemainingLength(packet, std::uint32_t(body.size()));
+    packet.insert(packet.end(), body.begin(), body.end());
+    return packet;
+}
+
 } // namespace
 
 AsioMqttClient::AsioMqttClient(gateway_asio::io_context& io,
@@ -157,6 +170,11 @@ void AsioMqttClient::setConnectedCallback(std::function<void()> callback) {
     m_connectedCallback = std::move(callback);
 }
 
+void AsioMqttClient::setMessageCallback(
+    std::function<void(std::string, std::vector<std::uint8_t>)> callback) {
+    m_messageCallback = std::move(callback);
+}
+
 bool AsioMqttClient::connected() const {
     return m_connected;
 }
@@ -210,6 +228,11 @@ void AsioMqttClient::onConnected() {
     m_waitingPingResponse = false;
     m_reconnectDelayMs = 500;
     flushPending();
+    if (!m_config.commandTopicPrefix.empty()) {
+        auto prefix = m_config.commandTopicPrefix;
+        while (!prefix.empty() && prefix.back() == '/') prefix.pop_back();
+        (void)writePacket(buildSubscribe(nextPacketId(), prefix + "/+/+"));
+    }
     if (m_connectedCallback) m_connectedCallback();
     schedulePing();
 }
@@ -287,8 +310,33 @@ void AsioMqttClient::handlePacket(std::uint8_t packetType,
         }
     } else if (type == 4) {
         handlePuback(body);
+    } else if (type == 3) {
+        handlePublish(packetType, body);
     } else if (type == 13) {
         m_waitingPingResponse = false;
+    }
+}
+
+void AsioMqttClient::handlePublish(
+    std::uint8_t packetType,
+    std::vector<std::uint8_t> const& body) {
+    if (body.size() < 2) return;
+    auto const topicSize = std::size_t((body[0] << 8) | body[1]);
+    if (topicSize == 0 || 2 + topicSize > body.size()) return;
+    std::size_t pos = 2 + topicSize;
+    auto const qos = (packetType >> 1) & 0x03;
+    std::uint16_t packetId = 0;
+    if (qos > 0) {
+        if (pos + 2 > body.size()) return;
+        packetId = std::uint16_t((body[pos] << 8) | body[pos + 1]);
+        pos += 2;
+    }
+    std::string topic(body.begin() + 2, body.begin() + 2 + topicSize);
+    std::vector<std::uint8_t> payload(body.begin() + pos, body.end());
+    if (m_messageCallback) m_messageCallback(std::move(topic), std::move(payload));
+    if (qos == 1) {
+        (void)writePacket({0x40, 0x02, std::uint8_t(packetId >> 8),
+                           std::uint8_t(packetId & 0xFF)});
     }
 }
 

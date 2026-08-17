@@ -133,6 +133,10 @@ transport::WriteResult AsioModbusTcpServer::writeBatch(transport::WriteBatch con
     return {true, {}};
 }
 
+void AsioModbusTcpServer::setWriteAuthorizer(WriteAuthorizer authorizer) {
+    m_writeAuthorizer = std::move(authorizer);
+}
+
 void AsioModbusTcpServer::startAccept() {
     if (!m_acceptor || state() != transport::ConnectionState::Connected) return;
     auto socket = std::make_shared<TcpSocket>(*m_io);
@@ -144,6 +148,8 @@ void AsioModbusTcpServer::startAccept() {
                 std::lock_guard lk(m_mtx);
                 if (int(m_clients.size()) < std::max(1, m_cfg.maxClients)) {
                     m_clients.insert(socket);
+                    m_sessionIds.emplace(
+                        socket, m_cfg.id + ":" + std::to_string(m_nextSessionId++));
                     accepted = true;
                 }
             }
@@ -187,7 +193,8 @@ void AsioModbusTcpServer::startReadBody(
                 removeClient(socket);
                 return;
             }
-            auto response = std::make_shared<std::vector<std::uint8_t>>(handleRequest(*adu));
+            auto response = std::make_shared<std::vector<std::uint8_t>>(
+                handleRequest(socket, *adu));
             if (response->empty()) {
                 startReadHeader(socket);
                 return;
@@ -204,6 +211,7 @@ void AsioModbusTcpServer::startReadBody(
 }
 
 std::vector<std::uint8_t> AsioModbusTcpServer::handleRequest(
+    std::shared_ptr<TcpSocket> const& socket,
     std::vector<std::uint8_t> const& adu) {
     nmbs::ResponseHeader header;
     std::span<std::uint8_t const> pdu;
@@ -241,9 +249,18 @@ std::vector<std::uint8_t> AsioModbusTcpServer::handleRequest(
         auto const address = getU16(pdu, 1);
         auto const value = getU16(pdu, 3);
         core::RegisterWords values{value};
-        if (!writeLocal(core::RegisterTable::HoldingRegister, address, values, true)) {
+        if (!rangeAllowed(core::RegisterTable::HoldingRegister, address, 1)) {
             return nmbs::buildExceptionResponse(header.transactionId, header.unitId, function, 0x02);
         }
+        auto event = makeWriteEvent(socket, header.unitId, address, values);
+        std::string authorizationError;
+        if (!authorizeAndPublish(event, authorizationError)) {
+            return nmbs::buildExceptionResponse(header.transactionId, header.unitId, function, 0x06);
+        }
+        if (!writeLocal(core::RegisterTable::HoldingRegister, address, values, false)) {
+            return nmbs::buildExceptionResponse(header.transactionId, header.unitId, function, 0x02);
+        }
+        if (m_bus) m_bus->publish(event);
         return nmbs::buildWriteSingleRegisterResponse(
             header.transactionId, header.unitId, address, value);
     }
@@ -266,14 +283,48 @@ std::vector<std::uint8_t> AsioModbusTcpServer::handleRequest(
         for (std::uint16_t i = 0; i < count; i++) {
             values.push_back(getU16(pdu, 6 + i * 2));
         }
-        if (!writeLocal(core::RegisterTable::HoldingRegister, start, values, true)) {
+        if (!rangeAllowed(core::RegisterTable::HoldingRegister, start, count)) {
             return nmbs::buildExceptionResponse(header.transactionId, header.unitId, function, 0x02);
         }
+        auto event = makeWriteEvent(socket, header.unitId, start, values);
+        std::string authorizationError;
+        if (!authorizeAndPublish(event, authorizationError)) {
+            return nmbs::buildExceptionResponse(header.transactionId, header.unitId, function, 0x06);
+        }
+        if (!writeLocal(core::RegisterTable::HoldingRegister, start, values, false)) {
+            return nmbs::buildExceptionResponse(header.transactionId, header.unitId, function, 0x02);
+        }
+        if (m_bus) m_bus->publish(event);
         return nmbs::buildWriteMultipleRegistersResponse(
             header.transactionId, header.unitId, start, count);
     }
 
     return nmbs::buildExceptionResponse(header.transactionId, header.unitId, function, 0x01);
+}
+
+bus::ServerWriteEvent AsioModbusTcpServer::makeWriteEvent(
+    std::shared_ptr<TcpSocket> const& socket,
+    int unitId,
+    int start,
+    core::RegisterWords values) {
+    bus::ServerWriteEvent event{id(), core::RegisterTable::HoldingRegister,
+                                start, std::move(values)};
+    {
+        std::lock_guard lock(m_mtx);
+        auto const it = m_sessionIds.find(socket);
+        if (it != m_sessionIds.end()) event.sessionId = it->second;
+    }
+    gateway_error_code ec;
+    auto const remote = socket->remote_endpoint(ec);
+    if (!ec) event.sourceAddress = remote.address().to_string();
+    event.unitId = unitId;
+    return event;
+}
+
+bool AsioModbusTcpServer::authorizeAndPublish(
+    bus::ServerWriteEvent const& event,
+    std::string& error) {
+    return !m_writeAuthorizer || m_writeAuthorizer(event, error);
 }
 
 core::RegisterWords AsioModbusTcpServer::readLocal(core::RegisterTable table, int start, int count) {
@@ -336,6 +387,7 @@ void AsioModbusTcpServer::removeClient(
     }
     std::lock_guard lk(m_mtx);
     m_clients.erase(socket);
+    m_sessionIds.erase(socket);
 }
 
 void AsioModbusTcpServer::ensureRangeLocked(core::RegisterTable table, int start, int count) {
@@ -354,6 +406,7 @@ void AsioModbusTcpServer::closeAllLocked() {
         client->close(ignored);
     }
     m_clients.clear();
+    m_sessionIds.clear();
     if (m_acceptor && m_acceptor->is_open()) {
         m_acceptor->cancel(ignored);
         m_acceptor->close(ignored);

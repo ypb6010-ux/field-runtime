@@ -47,6 +47,7 @@ add_executable(web_console_backend
     backend/AdminControllers.cpp
     backend/AuthControllers.cpp
     backend/ConfigControllers.cpp
+    backend/ControlControllers.cpp
     backend/ConfigApply.cpp
     backend/ConversionEngine.cpp
     backend/DataControllers.cpp

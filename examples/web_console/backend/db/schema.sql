@@ -66,6 +66,100 @@ CREATE TABLE IF NOT EXISTS conversion_rules (
     period_ms     INTEGER NOT NULL DEFAULT 0
 );
 
+-- Device SDK adapters, active write routes, actors and arbitration targets.
+-- Libraries are provisioned by deployment; the Web API only selects entries
+-- already present in this catalog and never uploads executable modules.
+CREATE TABLE IF NOT EXISTS driver_catalog (
+    id            TEXT PRIMARY KEY,
+    library       TEXT NOT NULL,
+    config        TEXT NOT NULL DEFAULT '',
+    enabled       INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1))
+);
+
+CREATE TABLE IF NOT EXISTS control_actors (
+    id             TEXT PRIMARY KEY,
+    channel        TEXT NOT NULL,
+    client_id      TEXT NOT NULL DEFAULT '',
+    source_address TEXT NOT NULL DEFAULT '',
+    role           TEXT NOT NULL DEFAULT '',
+    priority       INTEGER NOT NULL DEFAULT 0 CHECK(priority >= 0),
+    enabled        INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1))
+);
+
+CREATE TABLE IF NOT EXISTS modbus_servers (
+    id             TEXT PRIMARY KEY,
+    name           TEXT NOT NULL DEFAULT '',
+    listen_address TEXT NOT NULL DEFAULT '0.0.0.0',
+    listen_port    INTEGER NOT NULL CHECK(listen_port BETWEEN 1 AND 65535),
+    max_clients    INTEGER NOT NULL DEFAULT 4 CHECK(max_clients > 0),
+    range_start    INTEGER NOT NULL DEFAULT 0 CHECK(range_start >= 0),
+    range_count    INTEGER NOT NULL DEFAULT 1 CHECK(range_count > 0),
+    enabled        INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+    CHECK(range_start + range_count <= 65536)
+);
+
+CREATE TABLE IF NOT EXISTS control_bridges (
+    id               TEXT PRIMARY KEY,
+    server_id        TEXT NOT NULL REFERENCES modbus_servers(id) ON DELETE CASCADE,
+    plc_transport_id TEXT NOT NULL REFERENCES transports(id) ON DELETE RESTRICT,
+    offset           INTEGER NOT NULL DEFAULT 0,
+    write_start      INTEGER NOT NULL DEFAULT 0,
+    write_count      INTEGER NOT NULL DEFAULT 0 CHECK(write_count >= 0),
+    mirror_start     INTEGER NOT NULL DEFAULT 0,
+    mirror_count     INTEGER NOT NULL DEFAULT 0 CHECK(mirror_count >= 0),
+    mirror_policy    TEXT NOT NULL DEFAULT 'AfterPoll' CHECK(mirror_policy IN ('AfterPoll','Periodic')),
+    mirror_period_ms INTEGER NOT NULL DEFAULT 0 CHECK(mirror_period_ms >= 0),
+    CHECK(write_start >= 0 AND write_start + write_count <= 65536),
+    CHECK(mirror_start >= 0 AND mirror_start + mirror_count <= 65536),
+    CHECK((mirror_policy = 'Periodic' AND mirror_period_ms > 0)
+       OR (mirror_policy = 'AfterPoll' AND mirror_period_ms = 0))
+);
+
+CREATE TABLE IF NOT EXISTS devices (
+    id        TEXT PRIMARY KEY,
+    name      TEXT NOT NULL DEFAULT '',
+    driver_id TEXT REFERENCES driver_catalog(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS device_routes (
+    id           TEXT PRIMARY KEY,
+    device_id    TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    protocol     TEXT NOT NULL,
+    transport_id TEXT REFERENCES transports(id) ON DELETE RESTRICT,
+    driver_id    TEXT REFERENCES driver_catalog(id) ON DELETE RESTRICT,
+    writable     INTEGER NOT NULL DEFAULT 1 CHECK(writable IN (0,1)),
+    active       INTEGER NOT NULL DEFAULT 0 CHECK(active IN (0,1)),
+    CHECK((transport_id IS NULL) != (driver_id IS NULL)),
+    CHECK(active = 0 OR writable = 1)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_device_active_route
+    ON device_routes(device_id) WHERE active = 1;
+
+CREATE TABLE IF NOT EXISTS control_targets (
+    id        TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    route_id  TEXT REFERENCES device_routes(id) ON DELETE SET NULL,
+    protocol  TEXT NOT NULL,
+    endpoint  TEXT NOT NULL,
+    resource  TEXT NOT NULL,
+    selector  TEXT NOT NULL DEFAULT '',
+    offset    INTEGER NOT NULL DEFAULT 0 CHECK(offset >= 0),
+    width     INTEGER NOT NULL DEFAULT 1 CHECK(width > 0),
+    mask      INTEGER NOT NULL DEFAULT -1
+);
+
+CREATE TABLE IF NOT EXISTS control_policies (
+    id           TEXT PRIMARY KEY,
+    target_id    TEXT NOT NULL UNIQUE REFERENCES control_targets(id) ON DELETE CASCADE,
+    mode         TEXT NOT NULL CHECK(mode IN (
+        'open','exclusive_lease','priority_lease','last_writer_wins',
+        'device_decides','read_only')),
+    lease_ms     INTEGER NOT NULL DEFAULT 0 CHECK(lease_ms >= 0),
+    min_priority INTEGER NOT NULL DEFAULT 0 CHECK(min_priority >= 0),
+    CHECK((mode IN ('exclusive_lease','priority_lease') AND lease_ms > 0)
+       OR (mode NOT IN ('exclusive_lease','priority_lease') AND lease_ms = 0))
+);
+
 -- ── Hot-reload versioning ───────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS config_versions (
     version       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,7 +230,8 @@ CREATE INDEX IF NOT EXISTS ix_audit_ts ON audit_log(ts);
 
 -- ── Seed defaults ───────────────────────────────────────────────────────────
 INSERT OR IGNORE INTO settings(key, value_json) VALUES
-    ('sample_retention_days', '30');
+    ('sample_retention_days', '30'),
+    ('northbound_mqtt', '{"enable":false,"host":"127.0.0.1","port":1883,"client_id":"field_gateway","topic_prefix":"field","command_topic_prefix":"field/control","qos":1,"publish_interval_ms":1000}');
 
 INSERT OR IGNORE INTO roles(id, description) VALUES
     ('viewer',   'Read-only monitoring'),

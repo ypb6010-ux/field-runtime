@@ -72,27 +72,6 @@ bool parseU16(std::string const& text, std::uint16_t& out) {
     return true;
 }
 
-bool parseTable(std::string const& text, core::RegisterTable& table) {
-    auto const value = lower(text);
-    if (value == "hr" || value == "holdingregister" || value == "holdingregisters") {
-        table = core::RegisterTable::HoldingRegister;
-        return true;
-    }
-    if (value == "ir" || value == "inputregister" || value == "inputregisters") {
-        table = core::RegisterTable::InputRegister;
-        return true;
-    }
-    if (value == "coil" || value == "coils") {
-        table = core::RegisterTable::Coil;
-        return true;
-    }
-    if (value == "di" || value == "discreteinput" || value == "discreteinputs") {
-        table = core::RegisterTable::DiscreteInput;
-        return true;
-    }
-    return false;
-}
-
 bool constantTimeEqual(std::string const& lhs, std::string const& rhs) {
     std::size_t const size = std::max(lhs.size(), rhs.size());
     unsigned difference =
@@ -295,7 +274,7 @@ void ControlSocket::handleCommand(std::string const& command,
         done("{\"commands\":[\"status\",\"live\",\"help\",\"auth <token>\","
              "\"forward <server> on|off\","
              "\"reconnect <transport>\",\"reset <transport>\","
-             "\"write <transport> <table> <addr> <value> [value...]\"]}");
+             "\"write <target> <value> [value...]\"]}");
     } else if (verb == "auth") {
         done(handleAuth(parts, authenticated));
     } else if (verb == "forward") {
@@ -362,72 +341,50 @@ void ControlSocket::handleWrite(std::vector<std::string> const& parts,
         done(errorJson("unauthorized"));
         return;
     }
-    if (parts.size() < 5) {
-        done(errorJson("usage: write <transport> <table> <addr> <value> [value...]"));
+    if (parts.size() < 3) {
+        done(errorJson("usage: write <target> <value> [value...]"));
         return;
     }
 
-    auto const& transportId = parts[1];
-    if (!m_gateway->hasTransport(transportId)) {
-        done(errorJson("unknown transport"));
-        return;
-    }
-
-    core::RegisterTable table = core::RegisterTable::HoldingRegister;
-    if (!parseTable(parts[2], table)) {
-        done(errorJson("unknown table"));
-        return;
-    }
-
-    int address = 0;
-    if (!parseInt(parts[3], address) || address < 0 || address > 65535) {
-        done(errorJson("invalid address"));
-        return;
-    }
-
-    core::RegisterWords values;
-    values.reserve(parts.size() - 4);
-    for (std::size_t i = 4; i < parts.size(); i++) {
+    auto const& targetId = parts[1];
+    std::vector<std::uint8_t> payload;
+    payload.reserve((parts.size() - 2) * 2);
+    for (std::size_t i = 2; i < parts.size(); i++) {
         std::uint16_t value = 0;
         if (!parseU16(parts[i], value)) {
             done(errorJson("invalid register value"));
             return;
         }
-        values.push_back(value);
+        payload.push_back(std::uint8_t(value >> 8));
+        payload.push_back(std::uint8_t(value & 0xFF));
     }
-    if (values.size() > 123
-        || std::uint64_t(address) + values.size() > 65536u) {
+    if (payload.size() > 246) {
         done(errorJson("write range exceeds protocol limits"));
         return;
     }
 
-    transport::WriteBatch batch;
-    batch.table = table;
-    batch.startAddress = address;
-    batch.values = std::move(values);
-    auto const count = batch.values.size();
-
-    if (!m_gateway->writeTransportAsync(
-            transportId,
-            std::move(batch),
-            [transportId, tableText = parts[2], address, count,
-             done = std::move(done)](transport::WriteResult result) mutable {
-                if (!result.ok) {
-                    done(errorJson(result.errorMessage.empty()
+    auto const count = payload.size() / 2;
+    control::ActorContext actor;
+    actor.id = "control-socket";
+    actor.clientId = "control-socket";
+    actor.channel = "control";
+    if (!m_gateway->writeControlAsync(
+            std::move(actor), targetId, std::move(payload),
+            [targetId, count, done = std::move(done)](
+                bool ok, std::string error) mutable {
+                if (!ok) {
+                    done(errorJson(error.empty()
                         ? "write failed"
-                        : result.errorMessage));
+                        : error));
                     return;
                 }
-                std::string out = "{\"ok\":true,\"transport\":";
-                json::appendString(out, transportId);
-                out += ",\"table\":";
-                json::appendString(out, tableText);
-                out += ",\"addr\":" + std::to_string(address);
+                std::string out = "{\"ok\":true,\"target\":";
+                json::appendString(out, targetId);
                 out += ",\"count\":" + std::to_string(count);
                 out += "}";
                 done(std::move(out));
             })) {
-        done(errorJson("unknown transport"));
+        done(errorJson("unknown control target"));
     }
 }
 

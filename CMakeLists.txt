@@ -77,6 +77,8 @@ set(FIELDRUNTIME_BASE_SOURCES
     src/BuiltinCodecs.cpp
     src/LuaCodec.cpp
     src/ConfigLoader.cpp
+    src/ControlArbiter.cpp
+    src/DeviceRouteManager.cpp
     src/Datapoint.cpp
     src/DatapointRegistry.cpp
     src/DpTypeHelpers.cpp

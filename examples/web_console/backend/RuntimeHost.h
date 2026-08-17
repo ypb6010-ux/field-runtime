@@ -31,6 +31,34 @@ struct TpSnap {
     std::string kind;
     std::string state;
 };
+struct DriverSnap {
+    std::string id;
+    std::string library;
+    std::string state;
+    std::string error;
+};
+struct RouteSnap {
+    std::string id;
+    std::string deviceId;
+    std::string driverId;
+    std::string transportId;
+    std::string protocol;
+    bool writable = false;
+    bool active = false;
+};
+struct LeaseSnap {
+    std::string targetId;
+    std::string actorId;
+    int priority = 0;
+    std::int64_t expiresAtMs = 0;
+};
+struct DriverDataSnap {
+    std::string driverId;
+    std::string deviceId;
+    std::string targetId;
+    std::vector<std::uint8_t> payload;
+    std::int64_t timestampMs = 0;
+};
 
 // Hosts a FieldRuntime runtime (gateway GatewayAssembly) in-process on its own
 // asio io thread, and keeps a thread-safe copy of the latest datapoint /
@@ -56,12 +84,21 @@ public:
 
     std::vector<DpSnap> datapoints() const;
     std::vector<TpSnap> transports() const;
+    std::vector<DriverSnap> drivers() const;
+    std::vector<RouteSnap> routes() const;
+    std::vector<LeaseSnap> leases() const;
+    std::vector<DriverDataSnap> driverData() const;
 
     // Control write to a transport (HoldingRegisters). done() runs on the io
     // thread with {ok,error}.
     bool write(std::string const& transportId, int startAddress,
                std::vector<std::uint16_t> values,
                std::function<void(bool, std::string)> done);
+    bool writeControl(std::string actorId, std::string targetId,
+                      std::vector<std::uint8_t> payload,
+                      std::function<void(bool, std::string)> done);
+    bool activateRoute(std::string deviceId, std::string routeId,
+                       std::function<void(bool, std::string)> done);
 
 private:
     void schedulePump();
@@ -78,6 +115,10 @@ private:
     mutable std::mutex m_mtx;
     std::vector<DpSnap> m_dps;
     std::vector<TpSnap> m_tps;
+    std::vector<DriverSnap> m_drivers;
+    std::vector<RouteSnap> m_routes;
+    std::vector<LeaseSnap> m_leases;
+    std::vector<DriverDataSnap> m_driverData;
 };
 
 } // namespace wc

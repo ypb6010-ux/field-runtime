@@ -249,6 +249,8 @@ std::optional<MqttNorthboundConfig> parseMqttConfig(std::string const& path,
             valid = parseInteger(rawValue, cfg.qos);
         } else if (key == "publish_interval_ms") {
             valid = parseInteger(rawValue, cfg.publishIntervalMs);
+        } else if (key == "command_topic_prefix") {
+            valid = parseQuoted(rawValue, cfg.commandTopicPrefix);
         } else {
             error = "northbound.mqtt." + key + " is an unknown field";
             return std::nullopt;
@@ -282,7 +284,8 @@ std::optional<MqttNorthboundConfig> parseMqttConfig(std::string const& path,
     }
     if (cfg.clientId.empty()) cfg.clientId = "field_gateway";
     if (cfg.topicPrefix.empty()) cfg.topicPrefix = "field";
-    if (cfg.clientId.size() > 65535 || cfg.topicPrefix.size() > 65500) {
+    if (cfg.clientId.size() > 65535 || cfg.topicPrefix.size() > 65500
+        || cfg.commandTopicPrefix.size() > 65500) {
         error = "northbound.mqtt client_id/topic_prefix is too long";
         return std::nullopt;
     }
@@ -440,6 +443,44 @@ bool GatewayAssembly::load(std::string const& tomlPath) {
 
     m_configDir = std::filesystem::path(tomlPath).parent_path().string();
 
+    m_drivers.setLogCallback([this](std::string const& driverId, int level,
+                                    std::string const& message) {
+        auto const mapped = level >= 4 ? log::LogLevel::Error
+                          : level >= 3 ? log::LogLevel::Warn
+                          : level <= 0 ? log::LogLevel::Debug
+                                       : log::LogLevel::Info;
+        m_logger.logf(mapped, "driver", driverId, message);
+    });
+    m_drivers.setDataCallback(
+        [this](std::string const& driverId, std::string const& deviceId,
+               std::string const& targetId, std::vector<std::uint8_t> payload) {
+            auto const now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            {
+                std::lock_guard lock(m_driverDataMtx);
+                m_driverData[deviceId + "\n" + targetId] =
+                    {driverId, deviceId, targetId, payload, now};
+            }
+            if (m_mqtt && m_mqttConfig) {
+                auto topic = m_mqttConfig->topicPrefix + "/device/"
+                           + deviceId + "/" + targetId;
+                auto body = std::string(payload.begin(), payload.end());
+                auto lifetime = m_callbackLifetime;
+                gateway_asio::post(*m_io,
+                    [this, lifetime, topic = std::move(topic),
+                     body = std::move(body)] {
+                        if (!lifetime->load(std::memory_order_acquire)) return;
+                        if (m_mqtt) m_mqtt->publish(topic, body, m_mqttConfig->qos);
+                    });
+            }
+        });
+    std::string driverError;
+    if (!m_drivers.load(loaded->drivers, m_configDir, driverError)) {
+        m_logger.logf(log::LogLevel::Error, "driver", "load", driverError);
+        std::cerr << "driver: " << driverError << '\n';
+        return false;
+    }
+
     std::string controlError;
     m_control = parseControlConfig(tomlPath, controlError);
     if (!controlError.empty()) {
@@ -473,6 +514,42 @@ bool GatewayAssembly::load(std::string const& tomlPath) {
         m_mqtt->setConnectedCallback([this] {
             backfillPersistenceOnce();
         });
+        m_mqtt->setMessageCallback(
+            [this](std::string topic, std::vector<std::uint8_t> payload) {
+                if (!m_mqttConfig || m_mqttConfig->commandTopicPrefix.empty()) return;
+                auto prefix = m_mqttConfig->commandTopicPrefix;
+                while (!prefix.empty() && prefix.back() == '/') prefix.pop_back();
+                prefix += '/';
+                if (topic.rfind(prefix, 0) != 0) return;
+                auto const suffix = topic.substr(prefix.size());
+                auto const slash = suffix.find('/');
+                if (slash == std::string::npos
+                    || suffix.find('/', slash + 1) != std::string::npos) return;
+                auto actorId = suffix.substr(0, slash);
+                auto targetId = suffix.substr(slash + 1);
+                if (actorId.empty() || targetId.empty()) return;
+                control::ActorContext actor;
+                actor.id = actorId;
+                actor.clientId = actorId;
+                actor.channel = "mqtt";
+                auto ackTopic = m_mqttConfig->topicPrefix + "/control_ack/"
+                              + actorId + "/" + targetId;
+                if (!writeControlAsync(
+                        std::move(actor), targetId, std::move(payload),
+                        [this, lifetime = m_callbackLifetime, ackTopic](
+                            bool ok, std::string error) mutable {
+                            gateway_asio::post(*m_io,
+                                [this, lifetime, ackTopic = std::move(ackTopic), ok,
+                                 error = std::move(error)] {
+                                    if (!lifetime->load(
+                                            std::memory_order_acquire)) return;
+                                    if (m_mqtt) m_mqtt->publish(
+                                        ackTopic, ok ? "ok" : "error:" + error, 1);
+                                });
+                        })) {
+                    m_mqtt->publish(ackTopic, "error:unknown control target", 1);
+                }
+            });
     }
     if (m_persistenceConfig) {
         auto persistencePath =
@@ -508,8 +585,10 @@ bool GatewayAssembly::load(std::string const& tomlPath) {
 
 void GatewayAssembly::start() {
     if (m_started) return;
+    m_callbackLifetime->store(true, std::memory_order_release);
     m_started = true;
     installEventWiring();
+    m_drivers.start();
 
     if (m_mqtt) {
         m_mqtt->start();
@@ -587,6 +666,8 @@ void GatewayAssembly::start() {
 void GatewayAssembly::stop() {
     if (!m_started) return;
     m_started = false;
+    m_callbackLifetime->store(false, std::memory_order_release);
+    m_drivers.stop();
 
     for (auto& timer : m_pollTimers) {
         if (timer.timer) timer.timer->cancel();
@@ -738,12 +819,40 @@ void GatewayAssembly::printSnapshot(std::size_t limit) const {
 }
 
 void GatewayAssembly::wireFromSchema(config::ConfigSchema const& schema) {
+    configureControl(schema);
     registerCodecs(schema);
     buildTransports(schema);
     auto byId = buildDatapoints(schema);
     buildPollRanges(schema, byId);
     buildSinkWindows(schema);
     buildBridges(schema);
+}
+
+void GatewayAssembly::configureControl(config::ConfigSchema const& schema) {
+    m_actors = schema.actors;
+    m_deviceRouteConfigs = schema.deviceRoutes;
+    m_controlTargets = schema.controlTargets;
+    m_controlArbiter.clearPolicies();
+    m_controlArbiter.clearLeases();
+    m_controlArbiter.setDefaultPolicy(
+        {"default", control::PolicyMode::Open, 0, 0});
+    for (auto const& policy : schema.controlPolicies) {
+        m_controlArbiter.setPolicy(
+            policy.targetId,
+            {policy.id, policy.mode, policy.leaseMs, policy.minPriority});
+    }
+
+    std::vector<control::DeviceRoute> routes;
+    routes.reserve(schema.deviceRoutes.size());
+    for (auto const& route : schema.deviceRoutes) {
+        routes.push_back({route.id, route.deviceId, route.driverId,
+                          route.transportId, route.protocol,
+                          route.writable, route.active});
+    }
+    std::string error;
+    if (!m_deviceRoutes.configure(std::move(routes), error)) {
+        throw std::logic_error("invalid device routes: " + error);
+    }
 }
 
 // Register the schema's `[[codec]]` entries (enum_u16 / lua) into m_codecs
@@ -796,7 +905,12 @@ void GatewayAssembly::buildTransports(config::ConfigSchema const& schema) {
         if (tc.kind == transport::TransportKind::ModbusTcpClient) {
             transport = std::make_unique<AsioModbusTcpClient>(tc, *m_io);
         } else if (tc.kind == transport::TransportKind::ModbusTcpServer) {
-            transport = std::make_unique<AsioModbusTcpServer>(tc, *m_io, m_bus);
+            auto server = std::make_unique<AsioModbusTcpServer>(tc, *m_io, m_bus);
+            server->setWriteAuthorizer(
+                [this](bus::ServerWriteEvent const& event, std::string& error) {
+                    return authorizeServerWrite(event, error);
+                });
+            transport = std::move(server);
         } else if (tc.kind == transport::TransportKind::ModbusRtu) {
             transport = std::make_unique<AsioModbusRtuClient>(tc, *m_io);
 #ifdef FIELDRUNTIME_GATEWAY_HAS_OPCUA
@@ -813,6 +927,250 @@ void GatewayAssembly::buildTransports(config::ConfigSchema const& schema) {
         }
         m_transports.emplace(tc.id, std::move(transport));
     }
+}
+
+std::vector<control::DeviceRoute> GatewayAssembly::deviceRoutes() const {
+    return m_deviceRoutes.routes();
+}
+
+std::vector<DriverSnapshot> GatewayAssembly::driverSnapshots() const {
+    return m_drivers.snapshots();
+}
+
+std::vector<GatewayDriverDataSnapshot>
+GatewayAssembly::driverDataSnapshots() const {
+    std::lock_guard lock(m_driverDataMtx);
+    std::vector<GatewayDriverDataSnapshot> out;
+    out.reserve(m_driverData.size());
+    for (auto const& [key, value] : m_driverData) {
+        (void)key;
+        out.push_back(value);
+    }
+    return out;
+}
+
+bool GatewayAssembly::writeControlAsync(
+    control::ActorContext actor,
+    std::string const& targetId,
+    std::vector<std::uint8_t> payload,
+    std::function<void(bool, std::string)> done) {
+    for (auto const& configured : m_actors) {
+        if (!configured.enabled || configured.channel != actor.channel) continue;
+        if (!configured.clientId.empty()
+            && configured.clientId != actor.clientId) continue;
+        if (!configured.sourceAddress.empty()
+            && configured.sourceAddress != actor.sourceAddress) continue;
+        actor.id = configured.id;
+        actor.role = configured.role;
+        actor.priority = configured.priority;
+        break;
+    }
+    auto const targetConfig = std::find_if(
+        m_controlTargets.begin(), m_controlTargets.end(),
+        [&](auto const& target) { return target.id == targetId; });
+    if (targetConfig == m_controlTargets.end()) return false;
+    auto const active = m_deviceRoutes.activeRoute(targetConfig->deviceId);
+    if (!active) {
+        if (done) done(false, "device has no active write route");
+        return true;
+    }
+    if (!targetConfig->routeId.empty() && targetConfig->routeId != active->id) {
+        if (done) done(false, "target is not on the active device route");
+        return true;
+    }
+    auto const now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    control::ControlTarget target{targetConfig->id, targetConfig->deviceId,
+                                  active->id, targetConfig->address};
+    auto decision = m_controlArbiter.authorize(
+        {"", std::move(actor), std::move(target), now, 0}, now);
+    if (!decision.allowed) {
+        if (done) done(false, decision.reason);
+        return true;
+    }
+
+    if (!active->driverId.empty()) {
+        auto completion = std::make_shared<
+            std::function<void(bool, std::string)>>(std::move(done));
+        if (!m_drivers.write(active->driverId, active->deviceId, targetId,
+                             std::move(payload),
+                             [completion](bool ok, std::string error) {
+                                 if (*completion) (*completion)(ok, std::move(error));
+                             })) {
+            if (*completion) (*completion)(false, "driver is not loaded");
+        }
+        return true;
+    }
+    if (active->protocol == "mqtt") {
+        if (!m_mqtt || !m_mqttConfig) {
+            if (done) done(false, "MQTT northbound is not configured");
+            return true;
+        }
+        m_mqtt->publish(targetConfig->address.resource,
+                        std::string(payload.begin(), payload.end()),
+                        m_mqttConfig->qos);
+        if (done) done(true, {});
+        return true;
+    }
+    if (payload.empty() || payload.size() % 2 != 0) {
+        if (done) done(false, "register target payload must contain big-endian words");
+        return true;
+    }
+    if (payload.size() / 2
+        > std::size_t(std::max<std::int64_t>(1, targetConfig->address.width))) {
+        if (done) done(false, "register payload exceeds control target width");
+        return true;
+    }
+    transport::WriteBatch batch;
+    batch.table = core::RegisterTable::HoldingRegister;
+    batch.startAddress = int(targetConfig->address.offset);
+    for (std::size_t i = 0; i < payload.size(); i += 2) {
+        batch.values.push_back(std::uint16_t(
+            (std::uint16_t(payload[i]) << 8) | payload[i + 1]));
+    }
+    auto completion = std::make_shared<
+        std::function<void(bool, std::string)>>(std::move(done));
+    if (!writeTransportAsync(active->transportId, std::move(batch),
+        [completion](transport::WriteResult result) {
+            if (*completion) {
+                (*completion)(result.ok, std::move(result.errorMessage));
+            }
+        })) {
+        if (*completion) (*completion)(false, "active transport is unavailable");
+    }
+    return true;
+}
+
+bool GatewayAssembly::writeRegisterControlAsync(
+    control::ActorContext actor,
+    std::string const& transportId,
+    int startAddress,
+    core::RegisterWords values,
+    std::function<void(bool, std::string)> done) {
+    std::vector<std::string> candidates;
+    for (auto const& route : m_deviceRouteConfigs) {
+        if (route.transportId != transportId
+            || !m_deviceRoutes.isActive(route.deviceId, route.id)) continue;
+        for (auto const& target : m_controlTargets) {
+            if (target.deviceId != route.deviceId
+                || (!target.routeId.empty() && target.routeId != route.id)
+                || target.address.protocol != route.protocol
+                || (target.address.resource != "HR"
+                    && target.address.resource != "HoldingRegisters")
+                || target.address.offset != startAddress
+                || target.address.width < std::int64_t(values.size())) continue;
+            candidates.push_back(target.id);
+        }
+    }
+    if (candidates.size() != 1) {
+        if (done) done(false, candidates.empty()
+            ? "no active control target covers the register write"
+            : "register write matches multiple control targets");
+        return true;
+    }
+    std::vector<std::uint8_t> payload;
+    payload.reserve(values.size() * 2);
+    for (auto value : values) {
+        payload.push_back(std::uint8_t(value >> 8));
+        payload.push_back(std::uint8_t(value & 0xFF));
+    }
+    return writeControlAsync(std::move(actor), candidates.front(),
+                             std::move(payload), std::move(done));
+}
+
+std::vector<control::LeaseSnapshot> GatewayAssembly::controlLeases() const {
+    auto const now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    return m_controlArbiter.leases(now);
+}
+
+bool GatewayAssembly::setActiveDeviceRoute(std::string const& deviceId,
+                                           std::string const& routeId,
+                                           std::string& error) {
+    if (!m_deviceRoutes.setActive(deviceId, routeId, error)) return false;
+    for (auto const& target : m_controlTargets) {
+        if (target.deviceId == deviceId) m_controlArbiter.releaseTarget(target.id);
+    }
+    m_logger.logf(log::LogLevel::Info, "control", deviceId,
+                  "active write route changed to " + routeId);
+    return true;
+}
+
+bool GatewayAssembly::authorizeServerWrite(
+    bus::ServerWriteEvent const& event,
+    std::string& error) {
+    control::ActorContext actor;
+    actor.id = event.sessionId.empty()
+        ? "modbus:" + event.sourceAddress : event.sessionId;
+    actor.sessionId = event.sessionId;
+    actor.sourceAddress = event.sourceAddress;
+    actor.clientId = event.transportId;
+    actor.channel = "modbus";
+    for (auto const& configured : m_actors) {
+        if (!configured.enabled || configured.channel != "modbus") continue;
+        if (!configured.clientId.empty()
+            && configured.clientId != event.transportId) continue;
+        if (!configured.sourceAddress.empty()
+            && configured.sourceAddress != event.sourceAddress) continue;
+        actor.id = configured.id;
+        actor.role = configured.role;
+        actor.priority = configured.priority;
+        break;
+    }
+
+    auto const eventEnd = event.startAddress + int(event.values.size());
+    for (auto const& bridge : m_bridges) {
+        if (bridge.server != event.transportId) continue;
+        auto const overlapStart = std::max(event.startAddress, bridge.writeStart);
+        auto const overlapEnd = std::min(eventEnd,
+                                         bridge.writeStart + bridge.writeCount);
+        if (overlapStart >= overlapEnd) continue;
+        auto const mappedStart = overlapStart - bridge.offset;
+        auto const mappedWidth = overlapEnd - overlapStart;
+
+        for (auto const& route : m_deviceRouteConfigs) {
+            if (route.transportId != bridge.plc) continue;
+            bool routeTargetMatched = false;
+            for (auto const& configured : m_controlTargets) {
+                if (configured.deviceId != route.deviceId) continue;
+                if (!configured.routeId.empty()
+                    && configured.routeId != route.id) continue;
+                if (configured.address.protocol != "modbus") continue;
+                if (configured.address.resource != "HR"
+                    && configured.address.resource != "HoldingRegisters") continue;
+                control::ControlAddress incoming = configured.address;
+                incoming.offset = mappedStart;
+                incoming.width = mappedWidth;
+                incoming.mask = ~std::uint64_t{0};
+                if (!configured.address.conflictsWith(incoming)) continue;
+                routeTargetMatched = true;
+                if (!m_deviceRoutes.isActive(route.deviceId, route.id)) {
+                    error = "device route '" + route.id + "' is not active";
+                    return false;
+                }
+
+                control::ControlTarget target{
+                    configured.id, configured.deviceId, route.id,
+                    configured.address};
+                auto const now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                auto decision = m_controlArbiter.authorize(
+                    {event.sessionId, actor, std::move(target), now, 0}, now);
+                if (!decision.allowed) {
+                    error = decision.reason;
+                    m_logger.logf(log::LogLevel::Warn, "control", configured.id,
+                                  "write denied for actor " + actor.id + ": "
+                                      + decision.reason);
+                    return false;
+                }
+            }
+            if (!routeTargetMatched) {
+                error = "no control target covers the device write";
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 namespace {

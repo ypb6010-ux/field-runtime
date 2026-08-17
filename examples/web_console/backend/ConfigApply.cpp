@@ -169,6 +169,23 @@ std::string buildRuntimeToml(DbClientPtr const& db) {
     std::ostringstream o;
     o << "[meta]\nproject = \"web_console_runtime\"\nlog_level = \"warn\"\n\n";
 
+    auto mqttRows = db->execSqlSync(
+        "SELECT value_json FROM settings WHERE key='northbound_mqtt'");
+    if (!mqttRows.empty()) {
+        auto mqtt = parseObject(mqttRows[0]["value_json"].as<std::string>(),
+                                "northbound_mqtt setting");
+        if (mqtt.get("enable", false).asBool()) {
+            o << "[northbound.mqtt]\nenable = true\n"
+              << "host = " << tomlQuoted(mqtt.get("host", "127.0.0.1").asString()) << "\n"
+              << "port = " << mqtt.get("port", 1883).asInt() << "\n"
+              << "client_id = " << tomlQuoted(mqtt.get("client_id", "field_gateway").asString()) << "\n"
+              << "topic_prefix = " << tomlQuoted(mqtt.get("topic_prefix", "field").asString()) << "\n"
+              << "command_topic_prefix = " << tomlQuoted(mqtt.get("command_topic_prefix", "field/control").asString()) << "\n"
+              << "qos = " << mqtt.get("qos", 1).asInt() << "\n"
+              << "publish_interval_ms = " << mqtt.get("publish_interval_ms", 1000).asInt() << "\n\n";
+        }
+    }
+
     for (auto const& r : db->execSqlSync("SELECT id,kind,params_json FROM codecs")) {
         auto const id = r["id"].as<std::string>();
         auto const kind = r["kind"].as<std::string>();
@@ -289,6 +306,106 @@ std::string buildRuntimeToml(DbClientPtr const& db) {
         }
         o << "\n";
     }
+
+    for (auto const& r : db->execSqlSync(
+             "SELECT id,listen_address,listen_port,max_clients,range_start,range_count "
+             "FROM modbus_servers WHERE enabled=1 ORDER BY id")) {
+        o << "[[transport]]\nid = " << tomlQuoted(r["id"].as<std::string>())
+          << "\nkind = \"modbus_tcp_server\""
+          << "\nlisten_address = " << tomlQuoted(r["listen_address"].as<std::string>())
+          << "\nlisten_port = " << r["listen_port"].as<int>()
+          << "\nmax_clients = " << r["max_clients"].as<int>()
+          << "\n[[transport.listen_ranges]]\ntable = \"HR\"\nrange = ["
+          << r["range_start"].as<int>() << ", " << r["range_count"].as<int>()
+          << "]\n\n";
+    }
+
+    for (auto const& r : db->execSqlSync(
+             "SELECT id,library,config FROM driver_catalog WHERE enabled=1 ORDER BY id")) {
+        o << "[[driver]]\nid = " << tomlQuoted(r["id"].as<std::string>())
+          << "\nlibrary = " << tomlQuoted(r["library"].as<std::string>())
+          << "\nconfig = " << tomlQuoted(r["config"].as<std::string>())
+          << "\n\n";
+    }
+
+    for (auto const& r : db->execSqlSync(
+             "SELECT id,channel,client_id,source_address,role,priority "
+             "FROM control_actors WHERE enabled=1 ORDER BY id")) {
+        o << "[[actor]]\nid = " << tomlQuoted(r["id"].as<std::string>())
+          << "\nchannel = " << tomlQuoted(r["channel"].as<std::string>())
+          << "\nclient_id = " << tomlQuoted(r["client_id"].as<std::string>())
+          << "\nsource_address = " << tomlQuoted(r["source_address"].as<std::string>())
+          << "\nrole = " << tomlQuoted(r["role"].as<std::string>())
+          << "\npriority = " << r["priority"].as<int>() << "\n\n";
+    }
+
+    for (auto const& r : db->execSqlSync(
+             "SELECT id,name,driver_id FROM devices ORDER BY id")) {
+        o << "[[device]]\nid = " << tomlQuoted(r["id"].as<std::string>())
+          << "\nname = " << tomlQuoted(r["name"].as<std::string>()) << "\n";
+        if (!r["driver_id"].isNull()) {
+            o << "driver = " << tomlQuoted(r["driver_id"].as<std::string>()) << "\n";
+        }
+        o << "\n";
+    }
+
+    for (auto const& r : db->execSqlSync(
+             "SELECT id,device_id,protocol,transport_id,driver_id,writable,active "
+             "FROM device_routes ORDER BY device_id,id")) {
+        o << "[[device_route]]\nid = " << tomlQuoted(r["id"].as<std::string>())
+          << "\ndevice = " << tomlQuoted(r["device_id"].as<std::string>())
+          << "\nprotocol = " << tomlQuoted(r["protocol"].as<std::string>()) << "\n";
+        if (!r["transport_id"].isNull()) {
+            o << "transport = " << tomlQuoted(r["transport_id"].as<std::string>()) << "\n";
+        }
+        if (!r["driver_id"].isNull()) {
+            o << "driver = " << tomlQuoted(r["driver_id"].as<std::string>()) << "\n";
+        }
+        o << "writable = " << (r["writable"].as<int>() ? "true" : "false")
+          << "\nactive = " << (r["active"].as<int>() ? "true" : "false") << "\n\n";
+    }
+
+    for (auto const& r : db->execSqlSync(
+             "SELECT id,device_id,route_id,protocol,endpoint,resource,selector,"
+             "offset,width,mask FROM control_targets ORDER BY device_id,id")) {
+        o << "[[control_target]]\nid = " << tomlQuoted(r["id"].as<std::string>())
+          << "\ndevice = " << tomlQuoted(r["device_id"].as<std::string>()) << "\n";
+        if (!r["route_id"].isNull()) {
+            o << "route = " << tomlQuoted(r["route_id"].as<std::string>()) << "\n";
+        }
+        o << "protocol = " << tomlQuoted(r["protocol"].as<std::string>())
+          << "\nendpoint = " << tomlQuoted(r["endpoint"].as<std::string>())
+          << "\nresource = " << tomlQuoted(r["resource"].as<std::string>())
+          << "\nselector = " << tomlQuoted(r["selector"].as<std::string>())
+          << "\noffset = " << r["offset"].as<std::int64_t>()
+          << "\nwidth = " << r["width"].as<std::int64_t>()
+          << "\nmask = " << r["mask"].as<std::int64_t>() << "\n\n";
+    }
+
+    for (auto const& r : db->execSqlSync(
+             "SELECT id,target_id,mode,lease_ms,min_priority "
+             "FROM control_policies ORDER BY target_id")) {
+        o << "[[control_policy]]\nid = " << tomlQuoted(r["id"].as<std::string>())
+          << "\ntarget = " << tomlQuoted(r["target_id"].as<std::string>())
+          << "\nmode = " << tomlQuoted(r["mode"].as<std::string>())
+          << "\nlease_ms = " << r["lease_ms"].as<int>()
+          << "\nmin_priority = " << r["min_priority"].as<int>() << "\n\n";
+    }
+    for (auto const& r : db->execSqlSync(
+             "SELECT server_id,plc_transport_id,offset,write_start,write_count,"
+             "mirror_start,mirror_count,mirror_policy,mirror_period_ms "
+             "FROM control_bridges ORDER BY id")) {
+        o << "[[bridge]]\nserver = " << tomlQuoted(r["server_id"].as<std::string>())
+          << "\nplc = " << tomlQuoted(r["plc_transport_id"].as<std::string>())
+          << "\noffset = " << r["offset"].as<int>()
+          << "\nwrite_start = " << r["write_start"].as<int>()
+          << "\nwrite_count = " << r["write_count"].as<int>()
+          << "\nmirror_start = " << r["mirror_start"].as<int>()
+          << "\nmirror_count = " << r["mirror_count"].as<int>()
+          << "\nmirror_policy = " << tomlQuoted(r["mirror_policy"].as<std::string>())
+          << "\nmirror_period_ms = " << r["mirror_period_ms"].as<int>()
+          << "\n\n";
+    }
     return o.str();
 }
 
@@ -339,7 +456,9 @@ void registerConfigApply(RuntimeHost& rt, std::string genPath) {
                 Json::Value counts;
                 for (auto const* table :
                      {"transports", "datapoints", "poll_ranges", "codecs",
-                      "conversion_rules"}) {
+                      "conversion_rules", "driver_catalog", "control_actors",
+                      "devices", "device_routes", "control_targets",
+                      "control_policies", "modbus_servers", "control_bridges"}) {
                     counts[table] = database->execSqlSync(
                         std::string("SELECT COUNT(*) AS c FROM ") + table)[0]
                                             ["c"].as<int>();
