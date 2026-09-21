@@ -1248,8 +1248,8 @@ void validateValues(ConfigSchema const& schema, ValidationErrors& errs) {
             errs.push_back(
                 {section, "listen_port", "must be in [1, 65535]", -1});
         }
-        if (transportConfig.slaveId < 0 || transportConfig.slaveId > 247) {
-            errs.push_back({section, "slave_id", "must be in [0, 247]", -1});
+        if (transportConfig.slaveId < 0 || transportConfig.slaveId > 255) {
+            errs.push_back({section, "slave_id", "must be in [0, 255]", -1});
         }
         requirePositive(transportConfig.connectTimeoutMs,
                         section, "connect_timeout_ms");

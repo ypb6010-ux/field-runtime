@@ -830,3 +830,33 @@ writes = [{ table="HR", address=42, value=1 }]
     REQUIRE(retryRejected);
     REQUIRE(triggerRejected);
 }
+
+TEST_CASE("ConfigLoader accepts full byte slave IDs and rejects overflow",
+          "[config][validate][slave-id]") {
+    for(int slaveId : {-1, 0, 1, 2, 247, 248, 255, 256}){
+        CAPTURE(slaveId);
+        QTemporaryFile temp;
+        auto path = writeTomlFile(QStringLiteral(R"toml(
+[meta]
+project = "slave-id-boundary"
+[[transport]]
+id = "plc"
+kind = "modbus_tcp_client"
+host = "127.0.0.1"
+slave_id = %1
+)toml").arg(slaveId), temp);
+        ConfigLoader loader;
+        auto schema = loader.loadFromToml(path);
+        if(slaveId >= 0 && slaveId <= 255){
+            REQUIRE(schema.has_value());
+            REQUIRE(schema->transports.at(0).slaveId == slaveId);
+        } else {
+            REQUIRE_FALSE(schema.has_value());
+            bool found = false;
+            for(auto const& error : schema.error()){
+                found |= error.field == "slave_id";
+            }
+            REQUIRE(found);
+        }
+    }
+}
