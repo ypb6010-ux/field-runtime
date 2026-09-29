@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #include "core/module/Command.h"
 
@@ -50,27 +50,41 @@ sched::SubmitResult Command::execute() {
 
 void Command::executeAsync() {
     for (auto const& e : m_cfg.writes) {
-        transport::WriteBatch batch;
-        batch.table        = e.table;
-        batch.startAddress = e.address;
-        batch.values       = core::RegisterWords{e.value};
-
+        auto result = std::make_shared<bus::WriteCompleted>();
+        result->moduleId = m_id;
+        result->transportId = m_transportId;
+        result->batch = {e.table, e.address, {e.value}};
         sched::RequestTag tag;
-        tag.moduleId      = m_id;
-        tag.priority      = m_priority;
+        tag.moduleId = m_id;
+        tag.priority = m_priority;
         tag.interruptable = m_cfg.interruptable;
-
-        // Fire-and-forget: the scheduler serialises the writes in submission
-        // order. Capture the transport pointer by value; module teardown keeps
-        // transports alive until their scheduler callbacks have drained.
+        // The scheduler belongs to one transport. Different command modules
+        // targeting the same table/address replace each other's queued value.
+        tag.coalesceKey = "register:" + std::to_string(int(e.table))
+            + ":" + std::to_string(e.address);
+        auto callback = m_cfg.onResult;
+        tag.onFinished = [result, callback](sched::ResultKind kind) {
+            result->kind = kind;
+            if (kind == sched::ResultKind::Cancelled && result->errorMessage.empty()) {
+                result->errorMessage = "write cancelled before dispatch";
+            }
+            if (kind == sched::ResultKind::Error && result->errorMessage.empty()) result->errorMessage = "write failed";
+            if (callback) callback(*result);
+        };
+        auto finish = tag.onFinished;
         auto* transport = m_transport;
-        m_transport->scheduler().submitAsync(tag,
-            [transport, batch](sched::AsyncDone done) {
-                transport->writeAsync(batch,
-                    [done = std::move(done)](transport::WriteResult w) mutable {
+        auto submission = transport->scheduler().submitAsync(std::move(tag),
+            [transport, result](sched::AsyncDone done) {
+                transport->writeAsync(result->batch,
+                    [result, done = std::move(done)](transport::WriteResult w) mutable {
+                        result->errorMessage = std::move(w.errorMessage);
                         done(w.ok);
                     });
             });
+        if (submission.kind != sched::ResultKind::Ok) {
+            result->errorMessage = submission.errorMessage;
+            finish(submission.kind);
+        }
     }
 }
 

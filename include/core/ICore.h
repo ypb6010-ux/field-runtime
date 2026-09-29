@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
@@ -57,8 +57,9 @@ public:
     virtual void stop()  = 0;
 
     // 操作箱(modbus server)→ PLC 的写转发开关,按 server 透传 id 控制,运行时可调
-    // (默认开启)。关闭(true→false)时立即把该 server 对应桥接的转发区在程序内置 0,
-    // 取消尚未写入 PLC 的指令;PLC→操作箱的回显镜像不受影响。由业务逻辑(如按模式位)调用。
+    // (默认开启)。关闭后阻止后续操作箱写事件进入转发链路；true→false时将桥接
+    // SinkWindow缓存置0并请求后续下发。合并窗口在发送时取最新缓存，已发送批次仍可完成，
+    // 不保证立即停机或撤回旧指令。PLC→操作箱镜像不受影响。由业务逻辑按模式等控制。
     virtual void setServerForwardEnabled(std::string const& serverTransportId, bool enabled) = 0;
     virtual bool serverForwardEnabled(std::string const& serverTransportId) const = 0;
 };

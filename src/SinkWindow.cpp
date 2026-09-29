@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #include "core/module/SinkWindow.h"
 
@@ -187,24 +187,43 @@ void SinkWindow::driveTick() {
     auto const runGeneration =
         m_runGeneration.load(std::memory_order_acquire);
 
-    auto const submission = m_transport->scheduler().submitAsync(tag,
-        [this, batch, gen, runGeneration](sched::AsyncDone done) {
-            m_transport->writeAsync(batch,
-                [this, gen, runGeneration,
-                 done = std::move(done)](transport::WriteResult w) mutable {
-                    if (m_runGeneration.load(std::memory_order_acquire)
-                        == runGeneration) {
-                        markFlushed(w.ok, gen);
-                        m_inFlight.store(false, std::memory_order_release);
-                    }
+    auto result = std::make_shared<bus::WriteCompleted>();
+    result->moduleId = m_id;
+    result->transportId = m_transportId;
+    result->batch = std::move(batch);
+    auto generation = std::make_shared<std::uint64_t>(gen);
+    auto callback = m_cfg.onResult;
+    tag.onFinished = [this, result, generation, runGeneration, callback](sched::ResultKind kind) {
+        if (m_runGeneration.load(std::memory_order_acquire) == runGeneration) {
+            markFlushed(kind == sched::ResultKind::Ok, *generation);
+            m_inFlight.store(false, std::memory_order_release);
+        }
+        result->kind = kind;
+        if (kind == sched::ResultKind::Cancelled && result->errorMessage.empty()) {
+            result->errorMessage = "write cancelled before dispatch";
+        }
+        if (kind == sched::ResultKind::Error && result->errorMessage.empty()) result->errorMessage = "write failed";
+        if (callback) callback(*result);
+    };
+    auto finish = tag.onFinished;
+    auto const submission = m_transport->scheduler().submitAsync(std::move(tag),
+        [this, result, generation](sched::AsyncDone done) {
+            // Snapshot at dispatch, not at enqueue: staged values replace
+            // unsent values by register index. In-flight bytes stay unchanged.
+            if (m_cfg.coalesceWrites) {
+                std::lock_guard lk(m_mtx);
+                result->batch.values = m_snapshot;
+                *generation = m_generation;
+            }
+            m_transport->writeAsync(result->batch,
+                [result, done = std::move(done)](transport::WriteResult w) mutable {
+                    result->errorMessage = std::move(w.errorMessage);
                     done(w.ok);
                 });
         });
-
-    if (submission.kind != sched::ResultKind::Ok
-        && m_runGeneration.load(std::memory_order_acquire)
-            == runGeneration) {
-        m_inFlight.store(false, std::memory_order_release);
+    if (submission.kind != sched::ResultKind::Ok) {
+        result->errorMessage = submission.errorMessage;
+        finish(submission.kind);
     }
 }
 

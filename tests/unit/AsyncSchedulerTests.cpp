@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #include <catch2/catch_test_macros.hpp>
 
@@ -208,4 +208,54 @@ TEST_CASE("stopAsync halts pumping of queued work (teardown safety)",
     REQUIRE(h.submit(2).kind == ResultKind::Ok);
     REQUIRE(h.started == std::vector<int>{0, 2});
     h.done[2](true);
+}
+
+
+TEST_CASE("Async replacement works at capacity and finishes outside the lock", "[sched][async][feedback]") {
+    SchedulerConfig cfg;
+    cfg.maxQueueDepth = 2;
+    auto scheduler = makeScheduler(cfg);
+    AsyncDone release;
+    scheduler->submitAsync({}, [&](auto done) { release = std::move(done); });
+    std::vector<ResultKind> results;
+    RequestTag tag;
+    tag.coalesceKey = "register:1:7";
+    tag.onFinished = [&](auto kind) {
+        scheduler->stats(); // callback must be able to re-enter scheduler
+        results.push_back(kind);
+    };
+    int sent = 0;
+    REQUIRE(scheduler->submitAsync(tag, [&](auto done) { sent = 1; done(true); }).kind == ResultKind::Ok);
+    REQUIRE(scheduler->submitAsync(tag, [&](auto done) { sent = 2; done(true); }).kind == ResultKind::Ok);
+    REQUIRE(results == std::vector<ResultKind>{ResultKind::Superseded});
+    release(true);
+    REQUIRE(sent == 2);
+    REQUIRE(results == std::vector<ResultKind>{ResultKind::Superseded, ResultKind::Ok});
+}
+
+TEST_CASE("Async feedback covers preemption stop and throwing work exactly once", "[sched][async][feedback]") {
+    auto scheduler = makeScheduler({});
+    AsyncDone release;
+    scheduler->submitAsync({}, [&](auto done) { release = std::move(done); });
+    std::vector<ResultKind> results;
+    RequestTag low;
+    low.priority = Priority::Low;
+    low.interruptable = true;
+    low.onFinished = [&](auto r) { results.push_back(r); };
+    scheduler->submitAsync(low, [](auto done) { done(true); });
+    RequestTag high;
+    high.priority = Priority::High;
+    high.onFinished = low.onFinished;
+    scheduler->submitAsync(high, [](auto done) { done(true); });
+    REQUIRE(results == std::vector<ResultKind>{ResultKind::Cancelled});
+    scheduler->stopAsync();
+    REQUIRE(results == std::vector<ResultKind>{ResultKind::Cancelled, ResultKind::Cancelled});
+    release(true);
+    scheduler->startAsync();
+    scheduler->submitAsync(high, [](auto) { throw std::runtime_error("write exception"); });
+    REQUIRE(results.back() == ResultKind::Error);
+    REQUIRE(results.size() == 3);
+    scheduler->submitAsync(high, [](auto done) { done(true); done(false); });
+    REQUIRE(results.back() == ResultKind::Ok);
+    REQUIRE(results.size() == 4);
 }

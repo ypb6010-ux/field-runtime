@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
@@ -21,6 +21,16 @@ namespace core::bus {
 // carry no QtCore types. The Qt layer (attribute adapters, QML bridges) marshals
 // them back to QString / QVariant / QDateTime via dp::ValueQt.h / dp::TimeQt.h.
 // ---------------------------------------------------------------------------
+
+// Communication completion, not device-state confirmation. Normal successful
+// writes and superseded pending values are observable but are not error logs.
+struct WriteCompleted {
+    std::string moduleId;
+    std::string transportId;
+    transport::WriteBatch batch;
+    sched::ResultKind kind = sched::ResultKind::Ok;
+    std::string errorMessage;
+};
 
 struct DpChanged {
     std::string    id;

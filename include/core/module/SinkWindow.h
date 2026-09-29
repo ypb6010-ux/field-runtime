@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
@@ -10,6 +10,7 @@
 #include <string>
 
 #include "core/base/RegisterTable.h"
+#include "core/bus/BusEvents.h"
 #include "core/core_global.h"
 #include "core/module/FunctionalModule.h"
 #include "core/sched/RequestScheduler.h"
@@ -39,6 +40,8 @@ public:
         int                           keepAlivePeriodMs = 0;   // 0 = disabled
         bool                          coalesceWrites    = true;
         core::RegisterWords                initial;
+        // Called on the completing/submitting thread; marshal UI work yourself.
+        std::function<void(bus::WriteCompleted const&)> onResult;
     };
 
     SinkWindow(Config cfg, transport::Transport& transport);

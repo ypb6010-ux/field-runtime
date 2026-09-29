@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -358,4 +358,20 @@ TEST_CASE("PollRange.driveTick marks Stale and frees the guard when rejected",
     poll.driveTick();
     REQUIRE(dpt->state() == dp::DpState::Stale);
     REQUIRE(mock.readCount() == 0);   // no I/O while circuit open; guard released
+}
+
+
+TEST_CASE("PollRange merges both words before one value notification", "[poll][merge]") {
+    test::MockTransport mock;
+    module::PollRange poll("pair", mock, readRange(0, 2), 100);
+    auto point = std::make_shared<dp::Datapoint>(dpSpec("counter", dp::ScalarType::U32, 0));
+    poll.bind(point, std::make_shared<codec::BuiltinScalarCodec>(dp::ScalarType::U32), 0);
+    std::vector<std::uint64_t> changed;
+    point->setOnValueChanged([&] { changed.push_back(dp::toUInt64(point->value())); });
+    for (auto words : {RegisterWords{0, 65535}, RegisterWords{1, 0},
+                       RegisterWords{1, 0}, RegisterWords{1, 1}, RegisterWords{2, 1}}) {
+        mock.enqueueReadValues(words);
+        REQUIRE(poll.pollOnce().kind == sched::ResultKind::Ok);
+    }
+    REQUIRE(changed == std::vector<std::uint64_t>{65535, 65536, 65537, 131073});
 }

@@ -308,7 +308,7 @@ cmake -S . -B build-lean -DCORE_WITH_QT=OFF -DCORE_BUILD_GATEWAY=ON \
 ### 6.5 桥接 Bridge
 
 - **镜像**:PLC ↔ 操作箱**原始寄存器字**双向拷贝(保留 scale/多寄存器语义,历史 F3 修复点)。
-- **转发闸门**:`setServerForwardEnabled(server, bool)` 控制操作箱写入是否真正下发到 PLC。
+- **转发闸门**:`setServerForwardEnabled(server, bool)` 控制后续操作箱写事件是否进入转发链路。关闭边沿将桥接写缓存置0并请求后续下发；启用写合并的待发送窗口在调度发送时取得最新缓存；已经调度发送的旧批次仍可完成，不承诺撤回已发送指令或立即停机。PLC到操作箱的镜像不受影响。
 
 ### 6.6 北向 MQTT
 

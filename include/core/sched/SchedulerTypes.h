@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <string>
 
 #include "core/core_global.h"
@@ -25,6 +26,7 @@ enum class ResultKind {
     Cancelled,
     CircuitOpen,
     Error,
+    Superseded, // Replaced before dispatch; normal latest-value behaviour.
 };
 
 enum class BackoffKind {
@@ -52,6 +54,12 @@ struct RequestTag {
     int         retryBackoffMs = 100;
     bool        coalesce       = false;
     bool        interruptable  = false;
+    // Async only: nonempty key identifies a replaceable target within this
+    // transport scheduler. Selected/in-flight requests are never replaced.
+    std::string coalesceKey;
+    // Exactly once for accepted async work, outside the scheduler lock.
+    // Submission rejection is returned directly, not delivered here.
+    std::function<void(ResultKind)> onFinished;
 };
 
 struct SchedulerConfig {

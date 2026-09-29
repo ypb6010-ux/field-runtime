@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #include "core/ICore.h"
 #include "core/internal/Testing.h"
@@ -397,8 +397,8 @@ public:
             wasEnabled = (it != m_forwardEnabled.end()) ? it->second : true;
             m_forwardEnabled[serverTransportId] = enabled;
         }
-        // 关闭瞬间(true→false):把该 server 桥接的转发区在程序内置 0,取消尚未写入
-        // PLC 的操作箱指令(中性/停机)。只在边沿触发,避免每次调用重复 stage。
+        // 关闭边沿(true→false)：将桥接写缓存置0并请求后续下发。
+        // 待发送窗口取最新缓存，已发送批次不撤回；只在边沿触发，避免重复stage。
         if (wasEnabled && !enabled) {
             zeroBridgeForward(serverTransportId);
         }
@@ -817,6 +817,7 @@ private:
             if (b.writeCount > 0) {
                 if (auto* plc = transport(b.plc)) {
                     module::SinkWindow::Config cfg;
+                    cfg.onResult = writeFeedback();
                     cfg.moduleId       = "bridge.fwd." + b.server;
                     cfg.table          = core::RegisterTable::HoldingRegister;
                     cfg.startAddress   = b.writeStart - b.offset;
@@ -854,7 +855,7 @@ private:
     }
 
     // 关闭转发瞬间:把该 server 桥接的整个转发写区在 PLC 侧 SinkWindow 内置 0,
-    // 由 TickDriver 下发 —— 取消尚未写入 PLC 的操作箱指令。
+    // 由TickDriver后续下发；合并窗口发送时取最新缓存，已发送批次不撤回。
     void zeroBridgeForward(std::string const& server) {
         for (int i = 0; i < int(m_bridges.size()); ++i) {
             auto const& b = m_bridges[size_t(i)];
@@ -1210,11 +1211,30 @@ private:
 
     using DpById = std::map<std::string, std::shared_ptr<dp::Datapoint>>;
 
+    std::function<void(bus::WriteCompleted const&)> writeFeedback() {
+        return [this](bus::WriteCompleted const& result) {
+            if (result.kind != sched::ResultKind::Ok
+                && result.kind != sched::ResultKind::Superseded) {
+                m_logger->logf(log::LogLevel::Warn, "command", result.moduleId,
+                    result.errorMessage,
+                    {{"transport", result.transportId},
+                     {"table", std::int64_t(result.batch.table)},
+                     {"address", std::int64_t(result.batch.startAddress)},
+                     {"count", std::int64_t(result.batch.values.size())},
+                     {"result", std::int64_t(result.kind)}});
+            }
+            QMetaObject::invokeMethod(&m_pump, [this, result] {
+                m_bus->publish(result);
+            }, Qt::QueuedConnection);
+        };
+    }
+
     void buildSinkWindows(config::ConfigSchema const& schema) {
         for (auto const& sc : schema.sinkWindows) {
             auto* t = transport(sc.transport);
             if (!t) continue;
             module::SinkWindow::Config cfg;
+            cfg.onResult = writeFeedback();
             cfg.moduleId          = sc.moduleId;
             cfg.table             = tableFromString(qs(sc.table));
             cfg.startAddress      = sc.startAddress;
@@ -1264,6 +1284,7 @@ private:
             auto* t = transport(cc.transport);
             if (!t) continue;
             module::Command::Config cfg;
+            cfg.onResult = writeFeedback();
             cfg.moduleId      = cc.moduleId;
             cfg.priority      = cc.priority;
             cfg.interruptable = cc.interruptable;

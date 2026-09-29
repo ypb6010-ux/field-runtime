@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #include <catch2/catch_test_macros.hpp>
 
@@ -261,4 +261,53 @@ TEST_CASE("SinkWindow uses moduleId and priority on the scheduler tag",
     // we just confirm the module exposes the right metadata.
     REQUIRE(w.id() == "win.PLC1.control");
     REQUIRE(w.priority() == sched::Priority::High);
+}
+
+
+TEST_CASE("SinkWindow uses latest staged register values when queued work is dispatched", "[sink][async][coalesce]") {
+    test::MockTransport mock;
+    sched::AsyncDone release;
+    mock.scheduler().submitAsync({}, [&](auto done) { release = std::move(done); });
+    std::vector<bus::WriteCompleted> results;
+    auto cfg = baseCfg();
+    cfg.debounceMs = 0;
+    cfg.onResult = [&](auto const& r) { results.push_back(r); };
+    module::SinkWindow w(cfg, mock);
+    w.start();
+    w.stageRegister(0, 1);
+    w.stageRegister(1, 9);
+    w.driveTick();
+    w.stageRegister(0, 2);
+    w.stageRegister(1, 0x100, 0xff00); // independent masked write survives
+    REQUIRE(mock.capturedWrites().isEmpty());
+    release(true);
+    REQUIRE(mock.capturedWrites().size() == 1);
+    REQUIRE(mock.capturedWrites()[0].values[0] == 2);
+    REQUIRE(mock.capturedWrites()[0].values[1] == 0x109);
+    REQUIRE_FALSE(w.dirty());
+    REQUIRE(results.size() == 1);
+    REQUIRE(results[0].batch.values[0] == 2);
+    REQUIRE(results[0].kind == sched::ResultKind::Ok);
+}
+
+TEST_CASE("SinkWindow cancelled queue entry releases pending state and can retry", "[sink][async][feedback]") {
+    test::MockTransport mock;
+    sched::AsyncDone release;
+    mock.scheduler().submitAsync({}, [&](auto done) { release = std::move(done); });
+    std::vector<bus::WriteCompleted> results;
+    auto cfg = baseCfg();
+    cfg.debounceMs = 0;
+    cfg.onResult = [&](auto const& r) { results.push_back(r); };
+    module::SinkWindow w(cfg, mock);
+    w.start();
+    w.stageRegister(0, 2);
+    w.driveTick();
+    REQUIRE(mock.scheduler().cancelModule(w.id()) == 1);
+    REQUIRE(results.size() == 1);
+    REQUIRE(results[0].kind == sched::ResultKind::Cancelled);
+    REQUIRE(w.dirty());
+    w.driveTick();
+    release(true);
+    REQUIRE(mock.capturedWrites().size() == 1);
+    REQUIRE_FALSE(w.dirty());
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #include "core/sched/SerialScheduler.h"
 
@@ -35,6 +35,13 @@ struct PendingEntry {
     std::chrono::steady_clock::time_point   startAt;   // when the work was invoked
     bool                                    completed = false;  // idempotent guard
 };
+
+void notifyFinished(RequestTag const& tag, ResultKind kind) {
+    if (tag.onFinished) {
+        // Consumer exceptions must not stall the request pump or teardown.
+        try { tag.onFinished(kind); } catch (...) {}
+    }
+}
 
 constexpr int laneIndex(Priority p) noexcept { return static_cast<int>(p); }
 
@@ -200,7 +207,8 @@ public:
     // When a higher-priority request lands, any lower-priority queued entry
     // tagged `interruptable=true` is preemptively cancelled so the high-pri
     // path runs sooner. Returns the number of entries cancelled.
-    int preemptLowerInterruptablesLocked(Priority high) {
+    int preemptLowerInterruptablesLocked(Priority high,
+        std::vector<std::shared_ptr<PendingEntry>>* discarded = nullptr) {
         int n = 0;
         for (int p = 0; p < laneIndex(high); ++p) {
             auto& lane = lanes[p];
@@ -208,6 +216,7 @@ public:
                 if (e->state == PendingState::Queued
                  && e->tag.interruptable) {
                     e->state = PendingState::Cancelled;
+                    if (discarded) discarded->push_back(e);
                     ++n;
                     ++totalCancelled;
                 }
@@ -340,6 +349,7 @@ public:
             if (ok) recordSuccessLocked();
             else    recordFailureLocked();
         }
+        notifyFinished(entry->tag, ok ? ResultKind::Ok : ResultKind::Error);
         pump(false);
     }
 };
@@ -443,6 +453,8 @@ SubmitResult SerialScheduler::submit(RequestTag tag,
 }
 
 SubmitResult SerialScheduler::submitAsync(RequestTag tag, AsyncWork work) {
+    std::vector<std::shared_ptr<PendingEntry>> superseded;
+    std::vector<std::shared_ptr<PendingEntry>> cancelled;
     {
         std::lock_guard lk(m_impl->mtx);
         if (m_impl->stopped) {
@@ -457,9 +469,28 @@ SubmitResult SerialScheduler::submitAsync(RequestTag tag, AsyncWork work) {
         if (m_impl->circuitState == CircuitState::Open) {
             return {ResultKind::CircuitOpen, "circuit open", 0};
         }
+        if (!tag.coalesceKey.empty()) {
+            for (auto& lane : m_impl->lanes) {
+                for (auto const& old : lane) {
+                    if (old->state == PendingState::Queued
+                        && old->tag.coalesceKey == tag.coalesceKey) {
+                        superseded.push_back(old);
+                    }
+                }
+            }
+        }
         int const depth = m_impl->totalQueueDepthLocked() + m_impl->inflightCount;
-        if (depth >= m_impl->cfg.maxQueueDepth) {
+        if (depth - int(superseded.size()) >= m_impl->cfg.maxQueueDepth) {
             return {ResultKind::Error, "queue full", 0};
+        }
+        for (auto const& old : superseded) {
+            old->state = PendingState::Cancelled;
+            ++m_impl->totalCancelled;
+        }
+        for (auto& lane : m_impl->lanes) {
+            std::erase_if(lane, [](auto const& old) {
+                return old->state == PendingState::Cancelled;
+            });
         }
         auto entry       = std::make_shared<PendingEntry>();
         entry->tag       = std::move(tag);
@@ -467,8 +498,10 @@ SubmitResult SerialScheduler::submitAsync(RequestTag tag, AsyncWork work) {
         entry->asyncWork = std::move(work);
         m_impl->lanes[laneIndex(entry->tag.priority)].push_back(entry);
         ++m_impl->totalSubmitted;
-        m_impl->preemptLowerInterruptablesLocked(entry->tag.priority);
+        m_impl->preemptLowerInterruptablesLocked(entry->tag.priority, &cancelled);
     }
+    for (auto const& old : superseded) notifyFinished(old->tag, ResultKind::Superseded);
+    for (auto const& old : cancelled) notifyFinished(old->tag, ResultKind::Cancelled);
     // Pump outside the lock — the selected work runs (and may complete) without
     // the scheduler mutex held, so completion can re-enter the pump safely.
     m_impl->pump(false);
@@ -481,18 +514,23 @@ void SerialScheduler::setDelayFn(DelayFn fn) {
 }
 
 void SerialScheduler::stopAsync() {
-    std::lock_guard lk(m_impl->mtx);
-    m_impl->stopped = true;
-    for (auto& lane : m_impl->lanes) {
-        for (auto& entry : lane) {
-            if (entry->state == PendingState::Queued) {
-                entry->state = PendingState::Cancelled;
-                ++m_impl->totalCancelled;
+    std::vector<std::shared_ptr<PendingEntry>> discarded;
+    {
+        std::lock_guard lk(m_impl->mtx);
+        m_impl->stopped = true;
+        for (auto& lane : m_impl->lanes) {
+            for (auto& entry : lane) {
+                if (entry->state == PendingState::Queued) {
+                    entry->state = PendingState::Cancelled;
+                    ++m_impl->totalCancelled;
+                    discarded.push_back(entry);
+                }
             }
+            lane.clear();
         }
-        lane.clear();
+        m_impl->delayScheduled = false;
     }
-    m_impl->delayScheduled = false;
+    for (auto const& entry : discarded) notifyFinished(entry->tag, ResultKind::Cancelled);
 }
 
 void SerialScheduler::startAsync() {
@@ -504,6 +542,7 @@ void SerialScheduler::startAsync() {
 }
 
 int SerialScheduler::cancelModule(std::string const& moduleId) {
+    std::vector<std::shared_ptr<PendingEntry>> discarded;
     int n = 0;
     {
         std::lock_guard lk(m_impl->mtx);
@@ -514,6 +553,7 @@ int SerialScheduler::cancelModule(std::string const& moduleId) {
                     entry->state = PendingState::Cancelled;
                     ++n;
                     ++m_impl->totalCancelled;
+                    discarded.push_back(entry);
                 }
             }
             std::erase_if(lane, [](auto const& e) {
@@ -522,6 +562,7 @@ int SerialScheduler::cancelModule(std::string const& moduleId) {
         }
         if (n > 0) m_impl->cv.notify_all();
     }
+    for (auto const& entry : discarded) notifyFinished(entry->tag, ResultKind::Cancelled);
     return n;
 }
 

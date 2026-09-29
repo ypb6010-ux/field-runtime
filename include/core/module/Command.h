@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/base/RegisterTable.h"
+#include "core/bus/BusEvents.h"
 #include "core/core_global.h"
 #include "core/module/FunctionalModule.h"
 #include "core/sched/RequestScheduler.h"
@@ -16,8 +17,8 @@ namespace core::transport { class Transport; }
 namespace core::module {
 
 // Command — one-shot trigger that writes a predefined sequence of values
-// through the scheduler. Used for UI-driven actions (emergency stop, manual
-// reset) where the operator's intent translates to a fixed write payload.
+// through the scheduler. Async writes represent the latest requested register
+// value, not a lossless sequence of pulses. The PLC owns event latching.
 //
 // Each write is submitted independently so the scheduler's priority lanes
 // can preempt any pending Poll / SinkWindow flush.
@@ -33,6 +34,8 @@ public:
         sched::Priority  priority      = sched::Priority::High;
         bool             interruptable = false;
         std::vector<Entry> writes;
+        // Called on the completing/submitting thread; marshal UI work yourself.
+        std::function<void(bus::WriteCompleted const&)> onResult;
     };
 
     Command(Config cfg, transport::Transport& transport);
@@ -46,7 +49,7 @@ public:
     sched::SubmitResult execute();
 
     // Event-driven, non-blocking equivalent: each write is handed to the
-    // scheduler's async path (it serialises them in order) and the call
+    // scheduler's async path (queued same-target writes are replaced) and the call
     // returns immediately. This is the production entry point on a transport
     // whose scheduler is in async mode (i.e. also driven by PollRange etc.) —
     // a synchronous execute() would be rejected there.

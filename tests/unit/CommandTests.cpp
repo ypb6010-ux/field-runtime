@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #include <catch2/catch_test_macros.hpp>
 
@@ -86,4 +86,60 @@ TEST_CASE("Command exposes its configured priority", "[command][priority]") {
     cfg.priority = sched::Priority::Critical;
     module::Command cmd(cfg, mock);
     REQUIRE(cmd.priority() == sched::Priority::Critical);
+}
+
+
+TEST_CASE("Command async feedback preserves errors and reports rejection", "[command][async][feedback]") {
+    test::MockTransport mock;
+    std::vector<bus::WriteCompleted> results;
+    module::Command::Config cfg;
+    cfg.moduleId = "cmd.feedback";
+    cfg.writes = {{RegisterTable::HoldingRegister, 7, 42}};
+    cfg.onResult = [&](auto const& result) { results.push_back(result); };
+    module::Command cmd(cfg, mock);
+    mock.enqueueWriteResult({false, "peer write timeout"});
+    cmd.executeAsync();
+    REQUIRE(results.size() == 1);
+    REQUIRE(results[0].kind == sched::ResultKind::Error);
+    REQUIRE(results[0].errorMessage == "peer write timeout");
+    REQUIRE(results[0].batch.startAddress == 7);
+    cmd.executeAsync();
+    REQUIRE(results.size() == 2);
+    REQUIRE(results[1].kind == sched::ResultKind::Ok);
+    mock.scheduler().stopAsync();
+    cmd.executeAsync();
+    REQUIRE(results.size() == 3);
+    REQUIRE(results[2].kind == sched::ResultKind::Cancelled);
+    REQUIRE(mock.capturedWrites().size() == 2);
+}
+
+TEST_CASE("Command replaces only queued writes to the same target across modules", "[command][async][coalesce]") {
+    test::MockTransport mock;
+    mock.setDeferAsync(true);
+    std::vector<bus::WriteCompleted> results;
+    module::Command::Config cfg;
+    cfg.moduleId = "first";
+    cfg.writes = {{RegisterTable::HoldingRegister, 7, 1}};
+    cfg.onResult = [&](auto const& r) { results.push_back(r); };
+    module::Command first(cfg, mock);
+    first.executeAsync(); // already dispatched: cannot be replaced
+    cfg.moduleId = "old";
+    cfg.writes[0].value = 2;
+    module::Command old(cfg, mock);
+    old.executeAsync();
+    cfg.moduleId = "latest";
+    cfg.writes[0].value = 3;
+    module::Command latest(cfg, mock);
+    latest.executeAsync();
+    REQUIRE(results.size() == 1);
+    REQUIRE(results[0].moduleId == "old");
+    REQUIRE(results[0].kind == sched::ResultKind::Superseded);
+    REQUIRE(mock.capturedWrites().size() == 1);
+    REQUIRE(mock.completeNextWrite());
+    REQUIRE(mock.capturedWrites().size() == 2);
+    REQUIRE(mock.capturedWrites()[1].values[0] == 3);
+    REQUIRE(mock.completeNextWrite());
+    REQUIRE(results.size() == 3);
+    REQUIRE(results[1].moduleId == "first");
+    REQUIRE(results[2].moduleId == "latest");
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
@@ -45,8 +45,10 @@ public:
                                 std::function<void()> work) = 0;
 
     // Event-driven submit. Returns immediately: kind == Ok means the work was
-    // accepted and its AsyncDone will run when the I/O completes; CircuitOpen /
-    // Error(queue full) mean it was rejected and the work will NOT run.
+    // accepted. RequestTag::onFinished reports completion, cancellation or
+    // replacement outside the scheduler lock. Rejection is returned here only;
+    // rejected work and its onFinished callback will NOT run. A nonempty
+    // coalesceKey replaces queued work with the same key, never selected work.
     // Non-blocking — no caller thread is parked.
     virtual SubmitResult submitAsync(RequestTag tag, AsyncWork work) = 0;
 
