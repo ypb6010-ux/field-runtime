@@ -16,6 +16,7 @@
 #include <QThread>
 #include <QTimer>
 #include <QUuid>
+#include <QtEndian>
 #include <QtSerialBus/QModbusDataUnitMap>
 #include <QtSerialBus/QModbusTcpConnectionObserver>
 #include <QtSerialBus/QModbusTcpServer>
@@ -54,6 +55,51 @@ private:
     std::function<bool(QTcpSocket*)> m_callback;
 };
 
+// Observe accepted network requests rather than dataWritten: setData() emits
+// that signal for local mirrors too, while unchanged network writes omit it.
+class ObservedTcpServer final : public QModbusTcpServer {
+public:
+    std::function<void(QModbusDataUnit::RegisterType, int, int)> clientWrote;
+protected:
+    QModbusResponse processRequest(const QModbusPdu& request) override {
+        auto response = QModbusTcpServer::processRequest(request);
+        if (!response.isValid() || response.isException() || !clientWrote)
+            return response;
+        QModbusDataUnit::RegisterType table = QModbusDataUnit::HoldingRegisters;
+        int addressOffset = 0;
+        bool multiple = false;
+        switch (request.functionCode()) {
+        case QModbusPdu::WriteSingleCoil:
+            table = QModbusDataUnit::Coils;
+            break;
+        case QModbusPdu::WriteMultipleCoils:
+            table = QModbusDataUnit::Coils;
+            multiple = true;
+            break;
+        case QModbusPdu::WriteMultipleRegisters:
+            multiple = true;
+            break;
+        case QModbusPdu::ReadWriteMultipleRegisters:
+            addressOffset = 4;
+            multiple = true;
+            break;
+        case QModbusPdu::WriteSingleRegister:
+        case QModbusPdu::MaskWriteRegister:
+            break;
+        default:
+            return response;
+        }
+        const auto payload = request.data();
+        const int requiredSize = addressOffset + (multiple ? 4 : 2);
+        if (payload.size() < requiredSize) return response;
+        const int address = qFromBigEndian<quint16>(payload.constData() + addressOffset);
+        const int count = multiple
+            ? qFromBigEndian<quint16>(payload.constData() + addressOffset + 2) : 1;
+        clientWrote(table, address, count);
+        return response;
+    }
+};
+
 } // namespace
 
 class ModbusTcpServerTransport::Impl {
@@ -65,7 +111,7 @@ public:
                         EndpointInfo{cfg.listenAddress, cfg.listenPort}, {})
         , scheduler(sched::makeScheduler(cfg.scheduler))
         , thread(new QThread)
-        , server(new QModbusTcpServer) {
+        , server(new ObservedTcpServer) {
 
         server->moveToThread(thread);
         thread->start();
@@ -105,9 +151,8 @@ public:
             state.store(ConnectionState::Error, std::memory_order_release);
             statusTracker.update(ConnectionState::Error, message);
         });
-        QObject::connect(server, &QModbusTcpServer::dataWritten,
-                         server, [this](QModbusDataUnit::RegisterType table,
-                                         int address, int size) {
+        server->clientWrote = [this](QModbusDataUnit::RegisterType table,
+                                    int address, int size) {
             QList<quint16> values;
             values.reserve(size);
             for (int i = 0; i < size; ++i) {
@@ -117,7 +162,7 @@ public:
             }
             busPtr->publish(bus::ServerWriteEvent{
                 cfg.id, table, address, std::move(values)});
-        });
+        };
     }
 
     ~Impl() {
@@ -226,7 +271,7 @@ public:
     detail::TransportStatusTracker                    statusTracker;
     std::unique_ptr<sched::RequestScheduler>           scheduler;
     QThread*                                           thread = nullptr;
-    QModbusTcpServer*                                  server = nullptr;
+    ObservedTcpServer*                                 server = nullptr;
     QTimer*                                            reconnectTimer = nullptr;
     std::atomic<bool>                                  autoReconnect{false};
     std::atomic<ConnectionState>                       state{ConnectionState::Disconnected};

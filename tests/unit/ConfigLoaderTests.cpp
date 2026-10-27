@@ -25,6 +25,30 @@ QString writeTomlFile(QString const& contents, QTemporaryFile& f) {
 
 } // namespace
 
+TEST_CASE("ConfigLoader accepts byte-wide TCP Unit IDs and preserves RTU limits",
+          "[config][modbus][validation]") {
+    using core::transport::TransportKind;
+    for (auto kind : {TransportKind::ModbusTcpClient, TransportKind::ModbusTcpServer,
+                      TransportKind::ModbusRtu}) {
+        for (int unit : {-1, 0, 1, 247, 248, 255, 256}) {
+            CAPTURE(static_cast<int>(kind), unit);
+            ConfigSchema schema;
+            TransportConfig transport;
+            transport.id = "test";
+            transport.kind = kind;
+            transport.host = "127.0.0.1";
+            transport.listenAddress = "127.0.0.1";
+            transport.portName = "COM1";
+            transport.slaveId = unit;
+            if (kind == TransportKind::ModbusTcpServer)
+                transport.listenRanges = {{QModbusDataUnit::HoldingRegisters, 0, 1}};
+            schema.transports.append(transport);
+            const int maximum = kind == TransportKind::ModbusRtu ? 247 : 255;
+            REQUIRE(ConfigLoader{}.validate(schema).has_value() == (unit >= 0 && unit <= maximum));
+        }
+    }
+}
+
 TEST_CASE("ConfigLoader rejects misspelled fields instead of using defaults",
           "[config][usability]") {
     QTemporaryFile temp;

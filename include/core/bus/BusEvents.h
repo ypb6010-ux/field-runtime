@@ -94,8 +94,9 @@ struct DatapointModelRebuilt {
 struct CoreReady {};
 struct CoreStopping {};
 
-// Published by ModbusTcpServerTransport when an operator-box client writes
-// to one of its watched register ranges. Subscribers (router / sink window
+// Published once per accepted external Modbus write request, including writes
+// that leave values unchanged. Local writeBatch/writeAsync mirrors do not
+// publish command events. Subscribers (router / sink window
 // staging) use it to mirror operator intent into PLC-bound Transports.
 struct ServerWriteEvent {
     QString                            transportId;   // the server's id

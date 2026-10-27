@@ -1269,9 +1269,10 @@ void validateValues(ConfigSchema const& s, ValidationErrors& errs) {
         if (t.kind == transport::TransportKind::ModbusTcpClient
          || t.kind == transport::TransportKind::ModbusTcpServer
          || t.kind == transport::TransportKind::ModbusRtu) {
-            if (t.slaveId < 0 || t.slaveId > 247) {
+            const int maxSlaveId = t.kind == transport::TransportKind::ModbusRtu ? 247 : 255;
+            if (t.slaveId < 0 || t.slaveId > maxSlaveId) {
                 errs.push_back({sec, "slave_id",
-                    QStringLiteral("must be in [0, 247]"), -1});
+                    QStringLiteral("must be in [0, %1]").arg(maxSlaveId), -1});
             }
         }
         for (int j = 0; j < t.listenRanges.size(); ++j) {
