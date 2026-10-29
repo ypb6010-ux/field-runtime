@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
@@ -33,7 +33,7 @@ namespace core::codec {
 // library is built without Lua (CORE_BUILD_LUA=OFF), `fromFile` returns nullptr.
 class CORE_EXPORT LuaCodec : public Codec {
 public:
-    // Load `scriptPath` and bind its decode/encode. `arg` is an opaque selector
+    // Load the UTF-8 `scriptPath` and bind its decode/encode. `arg` is an opaque selector
     // surfaced to the script as `ctx.arg` (lets one script serve several codec
     // variants, e.g. high/low fault tables). Returns nullptr on failure (Lua
     // disabled, file missing, script error, or no decode/encode); when `error`

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
@@ -32,7 +32,7 @@ private:
 };
 
 // Appends to a file, rotating to file.1, file.2 … when it exceeds maxBytes,
-// keeping at most maxFiles rotated copies.
+// keeping at most maxFiles rotated copies. filePath is encoded as UTF-8.
 class CORE_EXPORT RollingFileSink : public ILogSink {
 public:
     RollingFileSink(std::string  filePath,

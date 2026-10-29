@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
@@ -15,7 +15,7 @@ namespace core::config {
 
 class CORE_EXPORT ConfigLoader {
 public:
-    // Parse a TOML file and run the full schema validation. On failure
+    // Parse a TOML file at a UTF-8 path and run the full schema validation. On failure
     // returns the full list of validation errors.
     std::expected<ConfigSchema, ValidationErrors>
         loadFromToml(

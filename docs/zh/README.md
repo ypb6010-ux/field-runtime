@@ -48,6 +48,14 @@ cmake --build core/build
 ctest --test-dir core/build --output-on-failure
 ```
 
+文件路径约定：`ConfigLoader::loadFromToml`、`RollingFileSink`、
+`LuaCodec::fromFile`接收的`std::string`路径使用UTF-8。基础库会将路径转换为原生文件系统路径，
+支持GBK或UTF-8系统环境中的中文目录、文件名及日志滚动归档；不要求宿主程序修改系统区域设置。
+基础库不负责设置宿主控制台编码，也不依赖Qt。TOML内容仍使用UTF-8。
+
+`CORE_BUILD_TESTS=ON`时，可运行`fieldruntime_utf8_path_selftest`验证这些路径行为；
+`CORE_BUILD_LUA=ON`时还会验证Lua脚本的BOM、首行`#`、字节码、编解码与错误行号。
+
 ### 2.2 三个最小示例
 
 ```bash

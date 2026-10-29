@@ -65,6 +65,25 @@ cmake --build build --config Release
 For vcpkg-based builds, install the dependencies declared in `vcpkg.json` and
 configure with your vcpkg toolchain file.
 
+### File paths and encoding
+
+File paths passed as `std::string` to `ConfigLoader::loadFromToml`,
+`RollingFileSink`, and `LuaCodec::fromFile` are UTF-8. The base library converts
+them to native filesystem paths before reading, writing, or rotating files.
+Chinese directories and filenames therefore do not depend on the Windows ANSI
+code page or on the host application enabling a UTF-8 process manifest. This
+does not change the host's console code page or add a Qt dependency to the base.
+
+With `CORE_BUILD_TESTS=ON`, run the Qt-free path regression test:
+
+```powershell
+ctest --test-dir build -R fieldruntime_utf8_path_selftest --output-on-failure
+```
+
+The test covers UTF-8 configuration paths, nested log directories, rotation and
+append behavior, and (with `CORE_BUILD_LUA=ON`) Lua loading including BOM,
+shebang, bytecode, encode/decode, and error line numbers.
+
 ## Example Configuration
 
 ```toml

@@ -135,6 +135,18 @@ if(CORE_BUILD_TESTS)
     add_test(
         NAME fieldruntime_base_selftest
         COMMAND fieldruntime_base_selftest)
+    add_executable(fieldruntime_utf8_path_selftest tests/freestanding/utf8_paths.cpp)
+    set_target_properties(fieldruntime_utf8_path_selftest PROPERTIES AUTOMOC OFF)
+    target_link_libraries(fieldruntime_utf8_path_selftest PRIVATE FieldRuntimeBase)
+    if(CORE_BUILD_LUA)
+        target_compile_definitions(fieldruntime_utf8_path_selftest PRIVATE CORE_TEST_HAS_LUA=1)
+    endif()
+    if(MSVC)
+        target_compile_options(fieldruntime_utf8_path_selftest PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(
+        NAME fieldruntime_utf8_path_selftest
+        COMMAND fieldruntime_utf8_path_selftest)
 endif()
 
 if(CORE_BUILD_GATEWAY)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #include "core/config/ConfigLoader.h"
 
@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cmath>
 #include <initializer_list>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -2135,7 +2136,8 @@ ConfigLoader::loadFromToml(
 
     toml::table root;
     try {
-        std::ifstream in(path, std::ios::binary);
+        std::filesystem::path const filePath(std::u8string(path.begin(), path.end()));
+        std::ifstream in(filePath, std::ios::binary);
         if (!in) {
             errs.push_back({"meta", "path", "cannot open '" + path + "'", -1});
             return std::unexpected(std::move(errs));
@@ -2143,6 +2145,9 @@ ConfigLoader::loadFromToml(
         std::string content((std::istreambuf_iterator<char>(in)),
                             std::istreambuf_iterator<char>());
         root = toml::parse(content);
+    } catch (std::filesystem::filesystem_error const&) {
+        errs.push_back({"meta", "path", "invalid UTF-8 file path '" + path + "'", -1});
+        return std::unexpected(std::move(errs));
     } catch (toml::parse_error const& e) {
         errs.push_back({"meta", "toml",
                         std::string(e.description()),

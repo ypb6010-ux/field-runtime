@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #include "core/codec/LuaCodec.h"
 
@@ -9,6 +9,8 @@
 #ifdef CORE_HAS_LUA
 
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <mutex>
 
 // sol2 pulls in the Lua C headers; keep it strictly out of the public header.
@@ -87,8 +89,30 @@ std::shared_ptr<LuaCodec> LuaCodec::fromFile(std::string const& id,
         if (error) *error = msg;
         return nullptr;
     };
-    if (!std::filesystem::exists(scriptPath))
-        return fail("lua script not found: " + scriptPath);
+    std::ifstream script;
+    try {
+        std::filesystem::path const nativePath(std::u8string(scriptPath.begin(), scriptPath.end()));
+        std::error_code ec;
+        if (!std::filesystem::exists(nativePath, ec))
+            return fail("lua script not found or inaccessible: " + scriptPath);
+        script.open(nativePath, std::ios::binary);
+    } catch (std::filesystem::filesystem_error const&) {
+        return fail("invalid UTF-8 lua script path: " + scriptPath);
+    }
+    if (!script)
+        return fail("lua script cannot be opened: " + scriptPath);
+    std::string source((std::istreambuf_iterator<char>(script)), std::istreambuf_iterator<char>());
+    if (script.bad())
+        return fail("lua script cannot be read: " + scriptPath);
+
+    // Match luaL_loadfile's BOM/shebang handling while opening the file through
+    // a native Unicode path instead of Lua's narrow fopen() on Windows.
+    if (source.starts_with("\xEF\xBB\xBF")) source.erase(0, 3);
+    if (!source.empty() && source.front() == '#') {
+        auto const newline = source.find('\n');
+        source.erase(0, newline == std::string::npos ? source.size() : newline + 1);
+        if (source.empty() || source.front() != LUA_SIGNATURE[0]) source.insert(0, 1, '\n');
+    }
 
     auto impl = std::make_unique<Impl>();
     impl->id  = id;
@@ -102,7 +126,7 @@ std::shared_ptr<LuaCodec> LuaCodec::fromFile(std::string const& id,
         impl->lua[g] = sol::nil;
 
     sol::protected_function_result res =
-        impl->lua.safe_script_file(scriptPath, sol::script_pass_on_error);
+        impl->lua.safe_script(source, sol::script_pass_on_error, "@" + scriptPath);
     if (!res.valid()) {
         sol::error e = res;
         return fail("lua load error in " + scriptPath + ": " + e.what());

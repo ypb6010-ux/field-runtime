@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 ypb6010-ux
+﻿// SPDX-FileCopyrightText: 2026 ypb6010-ux
 // SPDX-License-Identifier: MPL-2.0
 #include "core/log/Sinks.h"
 
@@ -133,10 +133,9 @@ void ConsoleSink::write(OperationRecord const& rec) {
 class RollingFileSink::Impl {
 public:
     Impl(std::string p, std::int64_t maxBytes, int maxFiles)
-        : path(std::move(p)), maxBytes(maxBytes), maxFiles(maxFiles) {
+        : path(std::u8string(p.begin(), p.end())), maxBytes(maxBytes), maxFiles(maxFiles) {
         std::error_code ec;
-        std::filesystem::path const fp(path);
-        if (fp.has_parent_path()) std::filesystem::create_directories(fp.parent_path(), ec);
+        if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path(), ec);
         open();
     }
 
@@ -149,6 +148,12 @@ public:
         file.open(path, std::ios::out | std::ios::app | std::ios::binary);
     }
 
+    std::filesystem::path rotatedPath(int index) const {
+        auto rotated = path;
+        rotated += "." + std::to_string(index);
+        return rotated;
+    }
+
     void rotateIfNeeded() {
         if (maxBytes <= 0) return;
         std::error_code ec;
@@ -156,14 +161,14 @@ public:
         if (ec || std::int64_t(sz) < maxBytes) return;
         file.close();
         // path.<maxFiles> is dropped; shift the rest up by one.
-        std::filesystem::remove(path + "." + std::to_string(maxFiles), ec);
+        std::filesystem::remove(rotatedPath(maxFiles), ec);
         for (int i = maxFiles - 1; i >= 1; --i) {
-            auto const from = path + "." + std::to_string(i);
-            auto const to   = path + "." + std::to_string(i + 1);
+            auto const from = rotatedPath(i);
+            auto const to   = rotatedPath(i + 1);
             if (std::filesystem::exists(from, ec))
                 std::filesystem::rename(from, to, ec);
         }
-        std::filesystem::rename(path, path + ".1", ec);
+        std::filesystem::rename(path, rotatedPath(1), ec);
         open();
     }
 
@@ -180,7 +185,7 @@ public:
         if (file.is_open()) file.flush();
     }
 
-    std::string   path;
+    std::filesystem::path path;
     std::int64_t  maxBytes;
     int           maxFiles;
     std::ofstream file;
